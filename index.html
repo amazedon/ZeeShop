@@ -358,7 +358,7 @@ const BUSINESS_TYPES = [
   "Restaurant / Food Vendor", "Bar / Drinks", "Bakery", "Butchery / Meat Seller", "Fishmonger",
   "Farm Produce / Agro Dealer", "Furniture", "Plumbing Supplies", "Paint & Chemicals",
   "Stationery & Books", "Jewelry & Accessories", "Tailoring / Fabric", "Gas & Fuel Station",
-  "Mechanic Workshop", "Event Rentals", "Laundry / Dry Cleaning"
+  "Mechanic Workshop", "Event Rentals", "Laundry / Dry Cleaning", "Hotel / Lodging"
 ];
 const BUSINESS_TYPE_ICONS = {
   "General Store / Provisions": "🛍️", "Supermarket": "🛒", "Spare Parts / Auto Parts": "🔧",
@@ -369,7 +369,7 @@ const BUSINESS_TYPE_ICONS = {
   "Fishmonger": "🐟", "Farm Produce / Agro Dealer": "🌾", "Furniture": "🪑", "Plumbing Supplies": "🚰",
   "Paint & Chemicals": "🎨", "Stationery & Books": "📚", "Jewelry & Accessories": "💍",
   "Tailoring / Fabric": "🧵", "Gas & Fuel Station": "⛽", "Mechanic Workshop": "🔩",
-  "Event Rentals": "🎪", "Laundry / Dry Cleaning": "🧺"
+  "Event Rentals": "🎪", "Laundry / Dry Cleaning": "🧺", "Hotel / Lodging": "🏨"
 };
 // Which "Add Goods" form a shop sees is driven by its Business Type, so the fields
 // shown are actually relevant to what they sell — not one giant form with every
@@ -416,7 +416,8 @@ const GOODS_NAME_EXAMPLES = {
   "Gas & Fuel Station": "Cooking Gas Refill 5kg",
   "Mechanic Workshop": "Engine Oil (4L)",
   "Event Rentals": "Plastic Chair (Set of 10)",
-  "Laundry / Dry Cleaning": "Shirt Dry Clean"
+  "Laundry / Dry Cleaning": "Shirt Dry Clean",
+  "Hotel / Lodging": "Bottled Water (Room)"
 };
 const SPEC_EXAMPLES = {
   "Spare Parts / Auto Parts": "Toyota Corolla 2015",
@@ -443,6 +444,13 @@ function businessTypeIsSet(){
   return BUSINESS_TYPES.some(t=>t.toLowerCase()===lower);
 }
 function goodsFormProfile(){ return findBizTypeMapping(BUSINESS_TYPE_FORM_PROFILE) || 'perishable'; }
+// Hotels get an extra "Lodging" module (rooms + guest bookings) on top of the normal
+// Goods inventory, which already covers their food, drinks and meat stock records.
+function isHotelBiz(){
+  const bt = business()?.businessType;
+  if(!bt) return false;
+  return bt.trim().toLowerCase()==='hotel / lodging';
+}
 function countryOptionsHTML(selected){
   return COUNTRIES.map(([name])=>`<option value="${name}" ${name===selected?'selected':''}>${name}</option>`).join('');
 }
@@ -527,6 +535,8 @@ if(!state.supplierPurchases) state.supplierPurchases = [];
 if(!state.employmentRecords) state.employmentRecords = [];
 if(!state.salaryPayments) state.salaryPayments = [];
 if(!state.recordOnlyStaff) state.recordOnlyStaff = [];
+if(!state.rooms) state.rooms = [];
+if(!state.lodgingBookings) state.lodgingBookings = [];
 migratePhoneNumbers();
 function load(){
   const raw = localStorage.getItem(DB_KEY);
@@ -535,7 +545,8 @@ function load(){
     sessionUserId:null, /* who is actually logged in on this device right now */
     goods:[], customerGroups:[], customers:[], sales:[], dayClosures:[],
     auditLog:[], communicationLog:[], shopNotes:[], expenses:[], suppliers:[], supplierPurchases:[],
-    employmentRecords:[], salaryPayments:[], recordOnlyStaff:[], joinCode:null, marketMode:false, pinAttempts:{} };
+    employmentRecords:[], salaryPayments:[], recordOnlyStaff:[], rooms:[], lodgingBookings:[],
+    joinCode:null, marketMode:false, pinAttempts:{} };
 }
 function save(){ localStorage.setItem(DB_KEY, JSON.stringify(state)); }
 function business(){ return state.business; }
@@ -611,6 +622,7 @@ function render(){
   if(!state.business){
     app.innerHTML = renderAuthScreen();
     bindAuthEvents();
+    if(authMode==='signup-verify') bindSignupVerifyEvents();
     return;
   }
   if(!state.sessionUserId){
@@ -643,10 +655,14 @@ function render(){
    ============================================================ */
 let authMode = 'login'; // 'login' | 'signup'
 let authError = '';
+let pendingSignupData = null; // holds the form fields between "Create My Shop" and OTP entry
+let signupOtpSending = false;
+let signupOtpError = '';
 let pendingRecoveryCodeDisplay = null; // holds the plaintext code right after signup/regeneration, shown once
 
 function renderAuthScreen(){
   if(authMode==='signup') return renderSignup();
+  if(authMode==='signup-verify') return renderSignupVerify();
   return renderLogin();
 }
 
@@ -796,6 +812,25 @@ function renderSignup(){
     </div>
   </div>`;
 }
+function renderSignupVerify(){
+  const email = pendingSignupData ? pendingSignupData.email : '';
+  return `
+  <div class="center-screen">
+    <div class="auth-card">
+      <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">Zed</div></div>
+      <div class="tagline">Verify your email to finish creating your shop.</div>
+      ${signupOtpError ? `<div class="err">${signupOtpError}</div>` : ''}
+      <p class="subtle" style="margin-bottom:16px;">We sent a 6-digit code to <b>${escapeHtml(email)}</b>. Enter it below — it expires in 5 minutes.</p>
+      <div class="field"><label>Verification Code</label><input id="su-otp-code" inputmode="numeric" maxlength="6" placeholder="123456"></div>
+      <button class="btn btn-primary" id="btn-verify-otp" style="margin-bottom:10px;">Verify & Create My Shop</button>
+      <div class="link-row">
+        <a href="#" id="resend-otp" style="color:var(--marigold-dark);font-weight:800;">Resend code</a>
+        &nbsp;·&nbsp;
+        <a href="#" id="back-to-signup" style="color:var(--text-dim);">Back</a>
+      </div>
+    </div>
+  </div>`;
+}
 
 function bindAuthEvents(){
   const go = (id,fn)=>{ const e=document.getElementById(id); if(e) e.addEventListener('click', fn); };
@@ -815,7 +850,7 @@ function bindAuthEvents(){
     render();
   });
 
-  go('btn-signup', ()=>{
+  go('btn-signup', async ()=>{
     const biz = document.getElementById('su-biz').value.trim();
     const country = document.getElementById('su-country').value;
     const ccy = document.getElementById('su-ccy').value;
@@ -830,24 +865,89 @@ function bindAuthEvents(){
     if(pass.length<6){ authError='Password must be at least 6 characters.'; render(); return; }
     if(!consent){ authError='Please accept the data consent checkbox to continue.'; render(); return; }
 
-    const bizId = uid('biz');
-    const userId = uid('user');
-    const shopId = uid('shop');
-    const recoveryCode = genRecoveryCode();
-    state.business = { id:bizId, name:biz, businessType:'', country, currency:ccy, timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,
-      language:'en', taxName:'VAT', taxPercent:0, subscriptionPlan:'free', createdAt:new Date().toISOString() };
-    state.users.push({ id:userId, businessId:bizId, username, email, emailVerified:true, phone, firstName:fn, lastName:ln,
-      passwordHash: hash(pass), recoveryCodeHash: hash(recoveryCode),
-      role:'master', isActive:true, canAddGoods:true });
-    state.shops.push({ id:shopId, businessId:bizId, name: biz+" — Main Shop", address:'', phone, email,
-      receiptFooter:'Thank you for your business!', receiptTerms:'Goods sold in good condition. No refund after payment.', auctionDiscountDefault:30 });
-    state.customerGroups.push({id:uid('grp'),businessId:bizId,name:'Retail'},{id:uid('grp'),businessId:bizId,name:'Wholesale'},{id:uid('grp'),businessId:bizId,name:'VIP'});
-    state.currentShopId = shopId;
-    state.sessionUserId = userId;
-    logAudit('signup','Business created: '+biz);
-    pendingRecoveryCodeDisplay = recoveryCode;
+    if(signupOtpSending) return;
+    signupOtpSending = true;
+    const btn = document.getElementById('btn-signup');
+    if(btn){ btn.disabled = true; btn.textContent = 'Sending code…'; }
+    try{
+      await sendSignupOtp(email);
+      pendingSignupData = { biz, country, ccy, fn, ln, username, phone, email, pass };
+      signupOtpError = '';
+      authMode = 'signup-verify';
+      authError = '';
+    }catch(err){
+      authError = err.message || "Couldn't send the verification code. Check your internet connection and try again.";
+    }
+    signupOtpSending = false;
     render();
   });
+}
+
+/* ---- signup email verification, via Termii (Edge Functions do the actual send/verify) ---- */
+async function sendSignupOtp(email){
+  const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/send-signup-otp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+SITE_CONTENT_ANON_KEY },
+    body: JSON.stringify({ email })
+  });
+  const data = await res.json();
+  if(!res.ok || data.error) throw new Error(data.error || 'Could not send the verification code.');
+  return data;
+}
+async function verifySignupOtp(email, code){
+  const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/verify-signup-otp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+SITE_CONTENT_ANON_KEY },
+    body: JSON.stringify({ email, code })
+  });
+  const data = await res.json();
+  if(!res.ok && !data) throw new Error('Could not verify the code right now.');
+  return data; // { verified: true } or { verified: false, error }
+}
+function bindSignupVerifyEvents(){
+  const go = (id,fn)=>{ const e=document.getElementById(id); if(e) e.addEventListener('click', fn); };
+  go('back-to-signup', e=>{ e.preventDefault(); authMode='signup'; signupOtpError=''; render(); });
+  go('resend-otp', async e=>{
+    e.preventDefault();
+    if(!pendingSignupData) return;
+    try{ await sendSignupOtp(pendingSignupData.email); toast('New code sent ✅'); }
+    catch(err){ signupOtpError = err.message; render(); }
+  });
+  go('btn-verify-otp', async ()=>{
+    const code = document.getElementById('su-otp-code').value.trim();
+    if(!code){ signupOtpError = 'Enter the 6-digit code.'; render(); return; }
+    const btn = document.getElementById('btn-verify-otp');
+    if(btn){ btn.disabled = true; btn.textContent = 'Verifying…'; }
+    try{
+      const result = await verifySignupOtp(pendingSignupData.email, code);
+      if(!result.verified){ signupOtpError = result.error || 'Incorrect code.'; render(); return; }
+      completeSignupAccount(pendingSignupData);
+    }catch(err){
+      signupOtpError = err.message || "Couldn't verify right now. Check your internet connection.";
+      render();
+    }
+  });
+}
+function completeSignupAccount(data){
+  const { biz, country, ccy, fn, ln, username, phone, email, pass } = data;
+  const bizId = uid('biz');
+  const userId = uid('user');
+  const shopId = uid('shop');
+  const recoveryCode = genRecoveryCode();
+  state.business = { id:bizId, name:biz, businessType:'', registrationNumber:'', country, currency:ccy, timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,
+    language:'en', taxName:'VAT', taxPercent:0, subscriptionPlan:'free', createdAt:new Date().toISOString() };
+  state.users.push({ id:userId, businessId:bizId, username, email, emailVerified:true, phone, firstName:fn, lastName:ln,
+    passwordHash: hash(pass), recoveryCodeHash: hash(recoveryCode),
+    role:'master', isActive:true, canAddGoods:true });
+  state.shops.push({ id:shopId, businessId:bizId, name: biz+" — Main Shop", address:'', phone, email,
+    receiptFooter:'Thank you for your business!', receiptTerms:'Goods sold in good condition. No refund after payment.', auctionDiscountDefault:30 });
+  state.customerGroups.push({id:uid('grp'),businessId:bizId,name:'Retail'},{id:uid('grp'),businessId:bizId,name:'Wholesale'},{id:uid('grp'),businessId:bizId,name:'VIP'});
+  state.currentShopId = shopId;
+  state.sessionUserId = userId;
+  logAudit('signup','Business created: '+biz);
+  pendingSignupData = null;
+  pendingRecoveryCodeDisplay = recoveryCode;
+  render();
 }
 function hash(s){ let h=0; for(let i=0;i<s.length;i++){h=(h*31 + s.charCodeAt(i))|0;} return 'h'+h; }
 // Generates a readable one-time recovery code like "K4P9-X2QW-7RTN".
@@ -1134,6 +1234,10 @@ function renderRoute(){
     case 'history': return screenHistory();
     case 'expenses': return screenExpenses();
     case 'suppliers': return screenSuppliers();
+    case 'lodging': return screenLodging();
+    case 'faq': return screenFAQ();
+    case 'about-us': return screenAboutUs();
+    case 'contact-us': return screenContactUs();
     case 'profile': return screenProfile();
     default: return screenDashboard();
   }
@@ -1525,6 +1629,10 @@ function bindRouteEvents(){
   if(route==='history') bindHistoryEvents();
   if(route==='expenses') bindExpensesEvents();
   if(route==='suppliers') bindSuppliersEvents();
+  if(route==='lodging') bindLodgingEvents();
+  if(route==='faq') bindFAQEvents();
+  if(route==='about-us') bindAboutUsEvents();
+  if(route==='contact-us') bindContactUsEvents();
   if(route==='reports') bindReportsEvents();
   if(route==='profile') bindProfileEvents();
   if(route==='settings') bindSettingsEvents();
@@ -1738,6 +1846,7 @@ function layoutAndDrawReceipt(s, shop, cust, seller, ctx, logoImg){
   T(shop.address, W/2, 'center', '400 11px Arial,Helvetica,sans-serif', '#6B7280');
   if(shop.address) y += 14;
   if(shop.phone || shop.email){ T([shop.phone,shop.email].filter(Boolean).join('  ·  '), W/2, 'center'); y += 14; }
+  if(business().registrationNumber){ T('Reg. No: '+business().registrationNumber, W/2, 'center', '400 10px Arial,Helvetica,sans-serif', '#9AA0AB'); y += 13; }
   y += 8;
   L(PAD, y, W-PAD, y); y += 20;
 
@@ -1751,20 +1860,14 @@ function layoutAndDrawReceipt(s, shop, cust, seller, ctx, logoImg){
   y += 14;
   L(PAD, y, W-PAD, y); y += 18;
 
-  T('S/N', PAD, 'left', '700 9.5px Arial,Helvetica,sans-serif', '#9AA0AB');
-  T('ITEM', PAD+SN_W, 'left');
-  T('AMOUNT', W-PAD, 'right');
-  y += 16;
-
   s.items.forEach((it,idx)=>{
     const g = state.goods.find(x=>x.id===it.goodId);
     const itemLabel = it.variantLabel ? `${g.name} (${it.variantLabel})` : g.name;
-    T(String(idx+1), PAD, 'left', '400 11px Arial,Helvetica,sans-serif', '#9AA0AB');
-    T(`${itemLabel} × ${it.qty}`, PAD+SN_W, 'left', '400 12.5px Arial,Helvetica,sans-serif', '#242B38');
+    T(`${itemLabel} × ${it.qty}`, PAD, 'left', '400 12.5px Arial,Helvetica,sans-serif', '#242B38');
     T(fmtMoneyCanvas(it.priceUsed*it.qty), W-PAD, 'right');
     y += LINE_H;
     if(itemNoteLines[idx].length){
-      itemNoteLines[idx].forEach(line=>{ T(line, PAD+SN_W, 'left', 'italic 400 10.5px Arial,Helvetica,sans-serif', '#8A8F99'); y += 13; });
+      itemNoteLines[idx].forEach(line=>{ T(line, PAD, 'left', 'italic 400 10.5px Arial,Helvetica,sans-serif', '#8A8F99'); y += 13; });
     }
   });
   L(PAD, y, W-PAD, y); y += 22;
@@ -1823,7 +1926,7 @@ async function drawReceiptToCanvas(canvas, s, shop, cust, seller){
   layoutAndDrawReceipt(s, shop, cust, seller, ctx, logoImg); // real draw pass, now sized correctly
 }
 function receiptText(s,shop,cust){
-  let t = `${shop.name}${business().businessType?' ('+business().businessType+')':''}\n${shop.address?shop.address+'\n':''}Receipt #${s.id.slice(-6).toUpperCase()} — ${fmtDate(s.date)}\nTxn ID: ${s.id}\nBuyer: ${cust?cust.fullName:(s.walkInName||'Walk-in customer')}\n`;
+  let t = `${shop.name}${business().businessType?' ('+business().businessType+')':''}\n${shop.address?shop.address+'\n':''}${business().registrationNumber?'Reg. No: '+business().registrationNumber+'\n':''}Receipt #${s.id.slice(-6).toUpperCase()} — ${fmtDate(s.date)}\nTxn ID: ${s.id}\nBuyer: ${cust?cust.fullName:(s.walkInName||'Walk-in customer')}\n`;
   s.items.forEach((it,idx)=>{ const g=state.goods.find(x=>x.id===it.goodId); const itemLabel = it.variantLabel ? `${g.name} (${it.variantLabel})` : g.name; t+=`${idx+1}. ${itemLabel} x${it.qty} — ${fmtMoney(it.priceUsed*it.qty)}\n`; if(it.note) t+=`   (${it.note})\n`; });
   if(s.note) t += `${s.note}\n`;
   if((s.discount>0) || (s.taxAmount>0)){
@@ -2487,12 +2590,16 @@ function screenMore(){
     {id:'credit', ic:'💳', label:'Credit Ledger', show:!isViewer()},
     {id:'closeday', ic:'🔒', label:'Close Day', show:!isViewer() && canDo('canRecordCash')},
     {id:'expenses', ic:'💸', label:'Expenses', show:!isViewer()},
+    {id:'lodging', ic:'🛏️', label:'Lodging', show:!isViewer() && isHotelBiz()},
     {id:'suppliers', ic:'🚚', label:'Suppliers', show:!isViewer()},
     {id:'notes', ic:'🗒️', label:'Notes', show:true},
     {id:'reports', ic:'📊', label:'Profit Reports', show:isMaster()},
     {id:'staff', ic:'🧑‍🤝‍🧑', label:'Staff', show:canManageStaff(), badge:pendingNameReqs},
     {id:'audit', ic:'📜', label:'Audit Log', show:isMaster()},
     {id:'profile', ic:'👤', label:'My Profile', show:true},
+    {id:'faq', ic:'❓', label:'Help / FAQ', show:true},
+    {id:'about-us', ic:'📄', label:'About Us', show:true},
+    {id:'contact-us', ic:'📞', label:'Contact Us', show:true},
     {id:'settings', ic:'⚙️', label:'Settings', show:true},
   ].filter(i=>i.show);
   return `
@@ -3564,6 +3671,14 @@ function screenSettings(){
     </div>` : ''}
     ${isMaster()?`
     <div class="card">
+      <div class="t1" style="margin-bottom:6px;">Business Registration Number <span class="subtle" style="font-weight:400;">(shows on your receipts)</span></div>
+      <p class="t2" style="margin-bottom:10px;">Your CAC number or other official registration/tax ID — lets customers verify your business is real through official records, not just this app.</p>
+      <input id="set-regnumber" value="${escAttr(b.registrationNumber||'')}" placeholder="e.g. RC1234567">
+      <div style="height:10px;"></div>
+      <button class="btn btn-outline btn-sm" id="save-regnumber">Save</button>
+    </div>` : ''}
+    ${isMaster()?`
+    <div class="card">
       <div class="t1" style="margin-bottom:10px;">Tax <span class="subtle" style="font-weight:400;">(applied automatically at checkout)</span></div>
       <div class="row2">
         <div class="field"><label>Tax Name</label><input id="set-taxname" value="${escAttr(b.taxName||'VAT')}"></div>
@@ -3628,6 +3743,12 @@ function bindSettingsEvents(){
   if(saveBT) saveBT.addEventListener('click', ()=>{
     business().businessType = readBizTypeValue('set-biztype');
     toast('Business type saved ✅'); render();
+  });
+  const saveRegNum = document.getElementById('save-regnumber');
+  if(saveRegNum) saveRegNum.addEventListener('click', ()=>{
+    business().registrationNumber = document.getElementById('set-regnumber').value.trim();
+    logAudit('registration_number_updated', 'Updated business registration number');
+    toast('Registration number saved ✅'); render();
   });
   const saveTax = document.getElementById('save-tax');
   if(saveTax) saveTax.addEventListener('click', ()=>{
@@ -4363,6 +4484,479 @@ function openAddExpenseModal(){
    ============================================================ */
 function supplierBalance(supplierId){
   return state.supplierPurchases.filter(p=>p.supplierId===supplierId).reduce((a,p)=>a+p.balance,0);
+}
+/* ============================================================
+   LODGING — rooms & guest bookings (Hotel / Lodging business type)
+   Food, drinks and meat stock are tracked through the normal Goods
+   module (batches + expiry dates), same as Restaurant/Bar/Butchery shops.
+   This module adds the one thing Goods can't: rooms and who's in them.
+   ============================================================ */
+/* ---- lodging receipt: same canvas-receipt style as sales, security details left out ---- */
+function layoutAndDrawLodgingReceipt(b, r, shop, seller, ctx, logoImg){
+  const W = 380, PAD = 22;
+  let y = 30;
+  const T = (text, x, align, font, color) => {
+    if(!ctx) return;
+    ctx.textAlign = align;
+    if(font) ctx.font = font;
+    if(color) ctx.fillStyle = color;
+    ctx.fillText(text, x, y);
+  };
+  const L = (x1,y1,x2,y2) => { if(ctx) drawDashedLine(ctx,x1,y1,x2,y2); };
+
+  if(logoImg){
+    const logoSize = 50;
+    if(ctx) ctx.drawImage(logoImg, PAD, y-20, logoSize, logoSize);
+  }
+  T(shop.name, W/2, 'center', '800 17px Arial,Helvetica,sans-serif', '#12213B'); y += 18;
+  T('LODGING RECEIPT', W/2, 'center', '700 10.5px Arial,Helvetica,sans-serif', '#F2A93B'); y += 15;
+  T(shop.address, W/2, 'center', '400 11px Arial,Helvetica,sans-serif', '#6B7280');
+  if(shop.address) y += 14;
+  if(shop.phone || shop.email){ T([shop.phone,shop.email].filter(Boolean).join('  ·  '), W/2, 'center'); y += 14; }
+  y += 8;
+  L(PAD, y, W-PAD, y); y += 20;
+
+  T('Receipt #'+b.id.slice(-6).toUpperCase(), PAD, 'left', '700 12px Arial,Helvetica,sans-serif', '#242B38');
+  T(fmtDate(todayISO()), W-PAD, 'right', '400 12px Arial,Helvetica,sans-serif'); y += 17;
+  T('Checked in by: '+seller.firstName+' '+seller.lastName, PAD, 'left', '400 12px Arial,Helvetica,sans-serif', '#6B7280'); y += 16;
+  T('Booking ID: '+b.id, PAD, 'left', '400 9px Arial,Helvetica,sans-serif', '#B0B5BD'); y += 13;
+  T('Guest: '+b.guestName, PAD, 'left', '700 12.5px Arial,Helvetica,sans-serif', '#12213B');
+  if(b.guestPhone){ y += 15; T(b.guestPhone, PAD, 'left', '400 11.5px Arial,Helvetica,sans-serif', '#6B7280'); }
+  y += 14;
+  L(PAD, y, W-PAD, y); y += 20;
+
+  T('Room', PAD, 'left', '700 9.5px Arial,Helvetica,sans-serif', '#9AA0AB');
+  T('DETAILS', W-PAD, 'right', '700 9.5px Arial,Helvetica,sans-serif', '#9AA0AB');
+  y += 16;
+  T(r.name+(r.roomType?' ('+r.roomType+')':''), PAD, 'left', '400 12.5px Arial,Helvetica,sans-serif', '#242B38');
+  T(fmtMoneyCanvas(b.ratePerNight)+'/night', W-PAD, 'right'); y += 20;
+  T('Check-in', PAD, 'left', '400 11.5px Arial,Helvetica,sans-serif', '#6B7280');
+  T(fmtDate(b.checkIn), W-PAD, 'right'); y += 16;
+  T(b.status==='active'?'Expected Check-out':'Check-out', PAD, 'left', '400 11.5px Arial,Helvetica,sans-serif', '#6B7280');
+  T(fmtDate(b.checkOut), W-PAD, 'right'); y += 16;
+  T('Nights', PAD, 'left', '400 11.5px Arial,Helvetica,sans-serif', '#6B7280');
+  T(String(b.nights), W-PAD, 'right'); y += 18;
+  L(PAD, y, W-PAD, y); y += 22;
+
+  T('TOTAL', PAD, 'left', '800 15px Arial,Helvetica,sans-serif', '#12213B');
+  T(fmtMoneyCanvas(b.totalAmount), W-PAD, 'right'); y += 20;
+  T('PAID', PAD, 'left', '700 12px Arial,Helvetica,sans-serif', '#2E7D32');
+  T(fmtMoneyCanvas(b.paidAmount), W-PAD, 'right'); y += 18;
+  if(b.balance>0){
+    T('BALANCE DUE', PAD, 'left', '800 12.5px Arial,Helvetica,sans-serif', '#C0392B');
+    T(fmtMoneyCanvas(b.balance), W-PAD, 'right'); y += 18;
+  } else {
+    T('PAID IN FULL', PAD, 'left', '800 12.5px Arial,Helvetica,sans-serif', '#2E7D32'); y += 18;
+  }
+  y += 8;
+  L(PAD, y, W-PAD, y); y += 20;
+
+  T(shop.receiptFooter||'Thank you for staying with us!', W/2, 'center', '400 11.5px Arial,Helvetica,sans-serif', '#6B7280');
+  y += 16;
+  y += 12; // bottom padding
+  return y;
+}
+async function drawLodgingReceiptToCanvas(canvas, b, r, shop, seller){
+  const logoImg = await getLogoImage();
+  const W = 380, scale = 2;
+  const h = layoutAndDrawLodgingReceipt(b, r, shop, seller, null, logoImg);
+  canvas.width = W*scale; canvas.height = h*scale;
+  canvas.style.width = W+'px'; canvas.style.height = h+'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(scale,scale);
+  ctx.fillStyle = '#FFF7EA'; ctx.fillRect(0,0,W,h);
+  drawSecurityTint(ctx, W, h, shop.name.toUpperCase());
+  layoutAndDrawLodgingReceipt(b, r, shop, seller, ctx, logoImg);
+}
+function openLodgingReceiptSheet(bookingId){
+  const b = state.lodgingBookings.find(x=>x.id===bookingId);
+  const r = state.rooms.find(x=>x.id===b.roomId);
+  const shop = state.shops.find(x=>x.id===b.shopId);
+  const seller = state.users.find(u=>u.id===b.createdByUserId) || currentUser();
+  openSheet(`
+    <div class="sheet-head"><h3>Lodging Receipt</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;justify-content:center;margin-bottom:14px;">
+      <canvas id="lodging-receipt-canvas" style="max-width:100%;height:auto;display:block;"></canvas>
+    </div>
+    <div style="display:flex;gap:10px;margin-bottom:6px;">
+      <button class="btn btn-primary" id="share-lodging-receipt" style="flex:1;">📤 Share Receipt</button>
+      <button class="btn btn-outline" id="download-lodging-receipt" style="flex:1;">⬇️ Download</button>
+    </div>
+    <p class="subtle" style="margin-bottom:14px;">Share opens your phone's share sheet with the receipt image attached — pick WhatsApp, Email, or any app there. ID, next-of-kin and plate number are kept internal and are not shown on this receipt.</p>
+  `);
+  const canvas = document.getElementById('lodging-receipt-canvas');
+  drawLodgingReceiptToCanvas(canvas, b, r, shop, seller);
+  document.getElementById('share-lodging-receipt').addEventListener('click', ()=>{
+    canvas.toBlob(async blob=>{
+      if(!blob){ toast('Could not generate the receipt image.'); return; }
+      const file = new File([blob], `lodging-receipt-${b.id.slice(-6)}.png`, {type:'image/png'});
+      if(navigator.canShare && navigator.canShare({files:[file]})){
+        try{ await navigator.share({files:[file], title:'Lodging Receipt from '+shop.name}); logAudit('lodging_receipt_shared', `Shared receipt for ${b.guestName}`); }
+        catch(e){ /* user cancelled the share sheet — not an error */ }
+      } else {
+        toast("This browser can't share images directly — tap Download, then attach the file manually.");
+      }
+    }, 'image/png');
+  });
+  document.getElementById('download-lodging-receipt').addEventListener('click', ()=>{
+    canvas.toBlob(blob=>{
+      if(!blob) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href=url; a.download=`lodging-receipt-${b.id.slice(-6)}.png`; a.click();
+      URL.revokeObjectURL(url);
+      logAudit('lodging_receipt_downloaded', `Downloaded receipt for ${b.guestName}`);
+    }, 'image/png');
+  });
+}
+function roomsForShop(){ return state.rooms.filter(r=>r.shopId===state.currentShopId); }
+function activeBookingForRoom(roomId){ return state.lodgingBookings.find(b=>b.roomId===roomId && b.status==='active'); }
+function lodgingNights(checkIn, checkOut){
+  const a = new Date(checkIn), b = new Date(checkOut);
+  return Math.max(1, Math.round((b-a)/(1000*60*60*24)));
+}
+function screenLodging(){
+  const rooms = roomsForShop();
+  const bookings = state.lodgingBookings.filter(b=>b.shopId===state.currentShopId);
+  const activeBookings = bookings.filter(b=>b.status==='active');
+  const occupied = activeBookings.length;
+  const owed = activeBookings.reduce((a,b)=>a+Math.max(0,b.totalAmount-b.paidAmount),0);
+  return `
+    ${subHeader("Lodging")}
+    <div class="stat-grid" style="margin-bottom:14px;">
+      <div class="stat-box"><div class="lbl">Rooms Occupied</div><div class="val">${occupied} / ${rooms.length}</div></div>
+      <div class="stat-box accent"><div class="lbl">Owed by Guests</div><div class="val">${fmtMoney(owed)}</div></div>
+    </div>
+    <button class="btn btn-primary" id="add-room-btn" style="width:100%;margin-bottom:14px;">＋ Add Room</button>
+    ${rooms.length===0?`<div class="empty"><div class="ic">🛏️</div><b>No rooms yet</b>Add each room so you can check guests in and out.</div>`:
+    rooms.map(r=>{
+      const b = activeBookingForRoom(r.id);
+      return `<div class="card" data-room-detail="${r.id}" style="cursor:pointer;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+          <div>
+            <div class="t1">${escapeHtml(r.name)}</div>
+            <div class="t2">${escapeHtml(r.roomType||'Room')} · ${fmtMoney(r.ratePerNight)}/night</div>
+            ${b?`<div class="t2">Guest: ${escapeHtml(b.guestName)} · out ${fmtDate(b.checkOut)}</div>`:''}
+          </div>
+          ${b?(b.balance>0?`<span class="pill pill-red">Owes ${fmtMoney(b.balance)}</span>`:`<span class="pill pill-amber">Occupied</span>`):`<span class="pill pill-green">Available</span>`}
+        </div>
+      </div>`;
+    }).join('')}
+  `;
+}
+function bindLodgingEvents(){
+  const addBtn = document.getElementById('add-room-btn');
+  if(addBtn) addBtn.addEventListener('click', openAddRoomModal);
+  document.querySelectorAll('[data-room-detail]').forEach(el=>el.addEventListener('click', ()=>openRoomDetail(el.dataset.roomDetail)));
+}
+function openAddRoomModal(){
+  openSheet(`
+    <div class="sheet-head"><h3>Add Room</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="field"><label>Room Name / Number</label><input id="rm-name" placeholder="e.g. Room 101"></div>
+    <div class="field"><label>Room Type</label><input id="rm-type" placeholder="e.g. Single, Double, Suite"></div>
+    <div class="field"><label>Rate Per Night</label><input id="rm-rate" type="number" min="0"></div>
+    <button class="btn btn-primary" id="save-room-btn">Save Room</button>
+  `);
+  document.getElementById('save-room-btn').addEventListener('click', ()=>{
+    const name = document.getElementById('rm-name').value.trim();
+    const roomType = document.getElementById('rm-type').value.trim();
+    const rate = Number(document.getElementById('rm-rate').value||0);
+    if(!name || rate<=0){ toast('Enter a room name and a rate per night.'); return; }
+    state.rooms.push({ id: uid('room'), businessId: business().id, shopId: state.currentShopId,
+      name, roomType, ratePerNight: rate, createdAt: new Date().toISOString() });
+    logAudit('room_added', `Added room ${name} (${fmtMoney(rate)}/night)`);
+    toast('Room added ✅'); closeSheet(); render();
+  });
+}
+function openRoomDetail(roomId){
+  const r = state.rooms.find(x=>x.id===roomId);
+  const b = activeBookingForRoom(roomId);
+  const history = state.lodgingBookings.filter(x=>x.roomId===roomId && x.status!=='active').sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+  openSheet(`
+    <div class="sheet-head"><h3>${escapeHtml(r.name)}</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <p class="subtle" style="margin-bottom:14px;">${escapeHtml(r.roomType||'Room')} · ${fmtMoney(r.ratePerNight)}/night</p>
+    ${b?`
+      <div class="stat-box accent" style="margin-bottom:14px;"><div class="lbl">Guest Balance</div><div class="val">${fmtMoney(b.balance)}</div></div>
+      <div class="card" style="margin-bottom:14px;">
+        <div class="t1">${escapeHtml(b.guestName)}</div>
+        <div class="t2">${escapeHtml(b.guestPhone||'')}</div>
+        <div class="t2">In ${fmtDate(b.checkIn)} · Expected out ${fmtDate(b.checkOut)} · ${b.nights} night(s)</div>
+        <div class="t2">Total ${fmtMoney(b.totalAmount)} · Paid ${fmtMoney(b.paidAmount)}</div>
+        ${(b.idType||b.idNumber||b.address||b.comingFrom||b.kinName||b.plateNumber||b.purpose||(b.numGuests&&b.numGuests>1))?`
+        <div class="divider" style="margin:10px 0;"></div>
+        ${b.idType||b.idNumber?`<div class="t2">ID: ${escapeHtml(b.idType||'')} ${escapeHtml(b.idNumber||'')}</div>`:''}
+        ${b.address?`<div class="t2">Address: ${escapeHtml(b.address)}</div>`:''}
+        ${b.comingFrom?`<div class="t2">Coming from: ${escapeHtml(b.comingFrom)}</div>`:''}
+        ${b.kinName?`<div class="t2">Next of kin: ${escapeHtml(b.kinName)} ${b.kinPhone?'· '+escapeHtml(b.kinPhone):''}</div>`:''}
+        ${b.plateNumber?`<div class="t2">Plate No: ${escapeHtml(b.plateNumber)}</div>`:''}
+        ${b.numGuests&&b.numGuests>1?`<div class="t2">Guests: ${b.numGuests}</div>`:''}
+        ${b.purpose?`<div class="t2">Purpose: ${escapeHtml(b.purpose)}</div>`:''}
+        `:''}
+      </div>
+      <button class="btn btn-outline" id="pay-booking-btn" style="width:100%;margin-bottom:10px;">Record Payment</button>
+      <button class="btn btn-outline" id="receipt-booking-btn" data-receipt="${b.id}" style="width:100%;margin-bottom:10px;">🧾 Share Receipt</button>
+      <button class="btn btn-dark" id="checkout-booking-btn" style="width:100%;margin-bottom:14px;">Check Out Guest</button>
+    `:`
+      <button class="btn btn-primary" id="checkin-btn" style="width:100%;margin-bottom:14px;">＋ Check In Guest</button>
+    `}
+    ${isMaster()?`<button class="btn btn-danger btn-sm" data-delete-room="${r.id}" style="width:100%;margin-bottom:14px;">Delete Room</button>`:''}
+    <div class="section-head"><h3>Past Stays</h3></div>
+    ${history.length===0?`<p class="subtle">No past stays yet.</p>`:history.map(h=>`
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;">
+          <div><b>${escapeHtml(h.guestName)}</b><div class="t2">${fmtDate(h.checkIn)} → ${fmtDate(h.checkOut)}</div></div>
+          <div style="text-align:right;"><b>${fmtMoney(h.totalAmount)}</b></div>
+        </div>
+        <button class="btn btn-sm btn-outline" data-receipt="${h.id}" style="margin-top:8px;">🧾 Share Receipt</button>
+      </div>`).join('')}
+  `);
+  const ci = document.getElementById('checkin-btn');
+  if(ci) ci.addEventListener('click', ()=>openCheckInModal(roomId));
+  const pay = document.getElementById('pay-booking-btn');
+  if(pay) pay.addEventListener('click', ()=>{
+    const amt = Number(prompt(`Amount paid (balance ${fmtMoney(b.balance)}):`, b.balance) || 0);
+    if(amt<=0) return;
+    b.paidAmount += amt;
+    b.balance = Math.max(0, b.totalAmount - b.paidAmount);
+    logAudit('lodging_payment', `${escapeHtml(b.guestName)} paid ${fmtMoney(amt)} for ${r.name}`);
+    toast('Payment recorded ✅'); openRoomDetail(roomId);
+  });
+  const co = document.getElementById('checkout-booking-btn');
+  if(co) co.addEventListener('click', ()=>{
+    if(b.balance>0 && !confirm(`This guest still owes ${fmtMoney(b.balance)}. Check out anyway?`)) return;
+    b.status = 'checked_out';
+    b.checkedOutAt = new Date().toISOString();
+    logAudit('lodging_checkout', `Checked out ${escapeHtml(b.guestName)} from ${r.name}`);
+    toast('Guest checked out ✅'); closeSheet(); render();
+  });
+  document.querySelectorAll('[data-delete-room]').forEach(el=>el.addEventListener('click', ()=>{
+    if(activeBookingForRoom(el.dataset.deleteRoom)){ toast('Check the guest out before deleting this room.'); return; }
+    if(!confirm('Delete this room? Its past stay history will be kept.')) return;
+    state.rooms = state.rooms.filter(x=>x.id!==el.dataset.deleteRoom);
+    toast('Room deleted'); closeSheet(); render();
+  }));
+  document.querySelectorAll('[data-receipt]').forEach(el=>el.addEventListener('click', ()=>openLodgingReceiptSheet(el.dataset.receipt)));
+}
+function openCheckInModal(roomId){
+  const r = state.rooms.find(x=>x.id===roomId);
+  const inDate = todayISO();
+  const outDate = (()=>{ const d=new Date(); d.setDate(d.getDate()+1); return d.toISOString().slice(0,10); })();
+  openSheet(`
+    <div class="sheet-head"><h3>Check In — ${escapeHtml(r.name)}</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="field"><label>Guest Name</label><input id="ci-name" placeholder="e.g. Mr. Adewale"></div>
+    <div class="field"><label>Guest Phone</label><input id="ci-phone" placeholder="0802 730 0375"></div>
+    <div class="row2">
+      <div class="field"><label>Check-In Date</label><input id="ci-in" type="date" value="${inDate}"></div>
+      <div class="field"><label>Expected Check-Out</label><input id="ci-out" type="date" value="${outDate}"></div>
+    </div>
+    <div class="field"><label>Rate Per Night</label><input id="ci-rate" type="number" min="0" value="${r.ratePerNight}"></div>
+    <div class="field"><label>Amount Paid Now</label><input id="ci-paid" type="number" min="0" value="0"></div>
+
+    <div class="divider"></div>
+    <div class="t1" style="margin-bottom:2px;">Extra Guest Details <span class="subtle" style="font-weight:400;">(optional — useful for security records)</span></div>
+    <p class="subtle" style="margin-bottom:10px;">Leave any of these blank if the guest doesn't have it handy, or if you don't collect this.</p>
+    <div class="row2">
+      <div class="field"><label>ID Type</label>
+        <select id="ci-idtype">
+          <option value="">— Not provided —</option>
+          <option value="National ID">National ID</option>
+          <option value="Voter's Card">Voter's Card</option>
+          <option value="Driver's License">Driver's License</option>
+          <option value="International Passport">International Passport</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+      <div class="field"><label>ID Number</label><input id="ci-idnumber" placeholder="e.g. AB1234567"></div>
+    </div>
+    <div class="field"><label>Home Address</label><input id="ci-address" placeholder="e.g. 12 Ikorodu Road, Lagos"></div>
+    <div class="field"><label>Coming From</label><input id="ci-comingfrom" placeholder="e.g. Ibadan, Oyo State"></div>
+    <div class="row2">
+      <div class="field"><label>Next of Kin Name</label><input id="ci-kinname" placeholder="e.g. Mrs. Adewale"></div>
+      <div class="field"><label>Next of Kin Phone</label><input id="ci-kinphone" placeholder="0802 730 0375"></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Car Plate Number</label><input id="ci-plate" placeholder="e.g. LSD 123 AB"></div>
+      <div class="field"><label>No. of Guests</label><input id="ci-numguests" type="number" min="1" value="1"></div>
+    </div>
+    <div class="field"><label>Purpose of Visit</label><input id="ci-purpose" placeholder="e.g. Business, Personal"></div>
+
+    <button class="btn btn-primary" id="save-checkin-btn">Check In Guest</button>
+  `);
+  document.getElementById('save-checkin-btn').addEventListener('click', ()=>{
+    const guestName = document.getElementById('ci-name').value.trim();
+    const guestPhone = document.getElementById('ci-phone').value.trim();
+    const checkIn = document.getElementById('ci-in').value || inDate;
+    const checkOut = document.getElementById('ci-out').value || outDate;
+    const rate = Number(document.getElementById('ci-rate').value||0);
+    const paid = Number(document.getElementById('ci-paid').value||0);
+    const idType = document.getElementById('ci-idtype').value;
+    const idNumber = document.getElementById('ci-idnumber').value.trim();
+    const address = document.getElementById('ci-address').value.trim();
+    const comingFrom = document.getElementById('ci-comingfrom').value.trim();
+    const kinName = document.getElementById('ci-kinname').value.trim();
+    const kinPhone = document.getElementById('ci-kinphone').value.trim();
+    const plateNumber = document.getElementById('ci-plate').value.trim();
+    const numGuests = Number(document.getElementById('ci-numguests').value||1);
+    const purpose = document.getElementById('ci-purpose').value.trim();
+    if(!guestName || rate<=0){ toast('Enter the guest name and a rate per night.'); return; }
+    if(new Date(checkOut)<=new Date(checkIn)){ toast('Check-out date must be after check-in date.'); return; }
+    const nights = lodgingNights(checkIn, checkOut);
+    const total = nights*rate;
+    state.lodgingBookings.push({ id: uid('stay'), businessId: business().id, shopId: state.currentShopId,
+      roomId, guestName, guestPhone, checkIn, checkOut, nights, ratePerNight: rate,
+      totalAmount: total, paidAmount: Math.min(paid,total), balance: Math.max(0,total-paid),
+      idType, idNumber, address, comingFrom, kinName, kinPhone, plateNumber,
+      numGuests: numGuests>0?numGuests:1, purpose,
+      status:'active', createdByUserId: state.sessionUserId, createdAt: new Date().toISOString() });
+    logAudit('lodging_checkin', `Checked in ${guestName} to ${r.name} (${nights} night(s), ${fmtMoney(total)})`);
+    toast('Guest checked in ✅'); closeSheet(); render();
+  });
+}
+/* ============================================================
+   ABOUT US / CONTACT US — content managed centrally from the
+   Zed Admin Dashboard (Supabase), not stored on this device.
+   ============================================================ */
+const SITE_CONTENT_URL = 'https://beypnkzrgqrkjttsxlju.supabase.co';
+const SITE_CONTENT_ANON_KEY = 'sb_publishable_m_MrYeKVF4HgUG5i5v_THg_LPbvmUK5';
+async function fetchSiteContent(section){
+  const res = await fetch(`${SITE_CONTENT_URL}/rest/v1/site_content?section=eq.${section}&select=*`, {
+    headers: { 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+SITE_CONTENT_ANON_KEY }
+  });
+  if(!res.ok) throw new Error('Request failed: '+res.status);
+  const rows = await res.json();
+  return rows[0] || null;
+}
+function screenAboutUs(){
+  return `
+    ${subHeader("About Us")}
+    <div id="site-content-box">
+      <div class="card"><p class="subtle">Loading…</p></div>
+    </div>
+  `;
+}
+function bindAboutUsEvents(){
+  const box = document.getElementById('site-content-box');
+  fetchSiteContent('about_us').then(row=>{
+    if(!row){ box.innerHTML = `<div class="card"><p class="subtle">This business hasn't added an About Us section yet.</p></div>`; return; }
+    box.innerHTML = `<div class="card">
+      <h2 style="margin:0 0 10px;color:var(--ink);">${escapeHtml(row.heading||'About Us')}</h2>
+      <p style="white-space:pre-wrap;line-height:1.6;margin:0;">${escapeHtml(row.body||'')}</p>
+    </div>`;
+  }).catch(()=>{
+    box.innerHTML = `<div class="card"><p class="subtle">Couldn't load this right now. Check your internet connection and try again.</p></div>`;
+  });
+}
+function screenContactUs(){
+  return `
+    ${subHeader("Contact Us")}
+    <div id="site-content-box">
+      <div class="card"><p class="subtle">Loading…</p></div>
+    </div>
+  `;
+}
+function bindContactUsEvents(){
+  const box = document.getElementById('site-content-box');
+  fetchSiteContent('contact_us').then(row=>{
+    if(!row){ box.innerHTML = `<div class="card"><p class="subtle">This business hasn't added contact details yet.</p></div>`; return; }
+    const lines = [];
+    if(row.phone) lines.push(`<div class="t2">📞 ${escapeHtml(row.phone)}</div>`);
+    if(row.whatsapp) lines.push(`<div class="t2">💬 WhatsApp: ${escapeHtml(row.whatsapp)}</div>`);
+    if(row.email) lines.push(`<div class="t2">✉️ ${escapeHtml(row.email)}</div>`);
+    if(row.address) lines.push(`<div class="t2">📍 ${escapeHtml(row.address)}</div>`);
+    box.innerHTML = `<div class="card">
+      <h2 style="margin:0 0 10px;color:var(--ink);">${escapeHtml(row.heading||'Contact Us')}</h2>
+      ${row.body?`<p style="white-space:pre-wrap;line-height:1.6;margin:0 0 14px;">${escapeHtml(row.body)}</p>`:''}
+      ${lines.join('')}
+    </div>`;
+  }).catch(()=>{
+    box.innerHTML = `<div class="card"><p class="subtle">Couldn't load this right now. Check your internet connection and try again.</p></div>`;
+  });
+}
+/* ============================================================
+   FAQ / HELP
+   ============================================================ */
+const FAQ_GROUPS = [
+  { category: "Getting Started", items: [
+    { q:"How do I create my business account?", a:"Tap Create One Free on the login screen, fill in your business and owner details, then save your recovery code somewhere safe — it's the only way back in if you forget your password." },
+    { q:"I forgot my password — what do I do?", a:"Tap Forgot Password on the login screen and enter your recovery code. If you've lost that too, you'll need to create a new account, since Zed can't recover it without it." },
+    { q:"How do multiple staff use the same device?", a:"Each staff member gets their own PIN. After the business owner logs in once, everyone unlocks their own profile with their PIN from the user-select screen — no need to log in with a password every time." },
+    { q:"How do I add a new staff member?", a:"Go to More → Staff → Generate Join Code. Share the code with them; they open Zed on their device, tap Join Business, and enter it. The code expires after a set number of minutes." },
+    { q:"What's the difference between Master, Staff, Viewer, and Super Admin?", a:"Master is the owner with full access. Staff have specific permissions you assign (sell, add goods, record cash, etc). Viewer can only look, not act. Super Admin is a staff member you've trusted to manage specific shops on your behalf." },
+  ]},
+  { category: "Shops & Business Setup", items: [
+    { q:"Can I run more than one shop from one account?", a:"Yes. Tap the ＋ next to the shop switcher at the top to add another shop, then use the dropdown to switch between them anytime." },
+    { q:"How do I change my Business Type?", a:"Go to Settings → Business Type. This changes which fields show up when you add Goods — e.g. Clothing shows sizes, Spare Parts shows compatible vehicle, Hotel/Lodging unlocks the Lodging module." },
+    { q:"What is Market Mode?", a:"A simplified, larger-text display style aimed at busy, informal selling environments like open markets. Toggle it in Settings." },
+  ]},
+  { category: "Sales & Goods", items: [
+    { q:"How do I record a sale?", a:"Go to New Sale from the bottom nav, tap items to add them to the cart, then tap Charge to complete it. Stock is deducted automatically from the oldest batch first." },
+    { q:"How do I add stock for an item I already sell?", a:"Go to Goods, tap the item, then tap Add Stock. If you bought it from a supplier, you can log it from Suppliers → tap the supplier → Log a Restock instead, which also tracks what you owe them." },
+    { q:"How do I scan a barcode?", a:"Add a barcode to an item when creating it in Goods (optional). During a sale, scanning or typing that barcode into the search box finds it instantly." },
+    { q:"How do sizes/colors (variants) work?", a:"For business types like Clothing & Fashion or Shoes & Bags, adding a Good lets you set up variants (e.g. sizes S/M/L) each with their own stock count, under one item." },
+    { q:"What happens to stock that's about to expire?", a:"Goods flags batches expiring within 7 days. You can start a 30% Auction discount on that batch straight from the item page to move it before it goes to waste." },
+    { q:"How do I give a customer group a different price?", a:"Set up Customer Groups under Customers, then add a group price when creating or editing a Good. Anyone in that group is charged that price automatically at sale time." },
+  ]},
+  { category: "Hotel / Lodging", items: [
+    { q:"How do I track food, drinks, or meat stock?", a:"The same way as any other item — through Goods. Batches with expiry dates work well for perishables like meat, drinks, and cooked food, and you'll get a low-stock or expiring alert automatically." },
+    { q:"How do I set up my hotel's rooms?", a:"Set your Business Type to \"Hotel / Lodging\" in Settings, then go to More → Lodging → ＋ Add Room. Give each room a name/number, type, and rate per night." },
+    { q:"How do I check a guest in?", a:"Go to More → Lodging, tap an Available room, then ＋ Check In Guest. Guest name and rate are required — everything else (ID, address, next of kin, plate number) is optional." },
+    { q:"Why does the app ask for a guest's ID, next of kin, or plate number?", a:"These are optional fields meant to help with guest safety and security record-keeping. You can leave any of them blank if you don't collect that information." },
+    { q:"Do ID, next-of-kin, and plate number show on the guest's receipt?", a:"No. Those details stay in your internal room record only. The shared receipt only shows the stay dates, room, and payment — never those security details." },
+    { q:"How do I record a guest's payment or check them out?", a:"Tap the occupied room, then Record Payment to log any amount paid, or Check Out Guest once their stay is done. You'll get a warning first if they still have a balance." },
+  ]},
+  { category: "Customers & Credit", items: [
+    { q:"How do I sell to a customer on credit?", a:"During a sale, choose the customer (or add a walk-in), and enter a smaller Amount Paid than the total. The rest is tracked as credit under More → Credit Ledger with a due date." },
+    { q:"How do I see who owes me money?", a:"Go to More → Credit Ledger. It lists every unpaid or partly-paid sale with balances and due dates, and lets you send WhatsApp payment reminders." },
+  ]},
+  { category: "Suppliers & Expenses", items: [
+    { q:"What's the difference between Goods and Suppliers?", a:"Goods is your shelf inventory — what you have to sell, in batches with cost, price, and expiry. Suppliers tracks who you buy stock from and what you still owe them, separate from your sales and profit reports." },
+    { q:"How do I know what I owe suppliers?", a:"Go to More → Suppliers. Each supplier shows what you owe them, and you can mark purchases as paid as you settle them." },
+    { q:"How do I record business expenses like rent or transport?", a:"Go to More → Expenses and log the amount, category, and description. These are subtracted from your gross profit in Profit Reports to show real net profit." },
+  ]},
+  { category: "Staff & Payroll", items: [
+    { q:"Can staff see everything I see?", a:"No. Staff permissions are set individually under More → Staff — you control what each person can do, like recording sales, adding goods, or handling cash." },
+    { q:"How do I record salary payments or employment letters?", a:"Go to More → Staff, tap a staff member, and you'll find options to log salary payments and generate employment/offer letters tied to their record." },
+    { q:"What is \"Record-Only\" staff?", a:"People you want to keep employment records for (like salary history) without giving them a login or access to the app itself." },
+  ]},
+  { category: "Reports & Receipts", items: [
+    { q:"How do I see my profit, not just my revenue?", a:"Go to More → Profit Reports. It shows revenue, cost of goods sold, and expenses together so you see real profit, not just what came in." },
+    { q:"How do I share a receipt with a customer or guest?", a:"Open the sale or booking, tap Share Receipt, and your phone's share sheet opens with the receipt image attached — pick WhatsApp, email, or any app you like. You can also Download it as a PNG." },
+    { q:"Can I customize the text at the bottom of receipts?", a:"Yes — go to Settings and edit the Receipt Footer and Receipt Terms fields. They appear on every sales and lodging receipt you generate." },
+    { q:"How do I close out my day?", a:"Go to More → Close Day (or Close My Shift for staff). It totals the day's sales and cash so you can confirm everything matches before locking it in." },
+    { q:"What is the Audit Log?", a:"A running history of key actions across your business — restocks, payments, staff changes, check-ins — visible to the Master account under More → Audit Log." },
+  ]},
+  { category: "Notifications & Data", items: [
+    { q:"What do the alerts on the bell icon mean?", a:"The bell shows counts for stock expiring soon, low/out-of-stock items, and credit sales that are due soon — tap it to jump straight to the relevant screen." },
+    { q:"Is my data backed up anywhere?", a:"Your data is stored on this device. Use Settings to review backup/export options for your business." },
+  ]},
+];
+let openFaqKey = null;
+function screenFAQ(){
+  return `
+    ${subHeader("Help / FAQ")}
+    <p class="subtle" style="margin-bottom:14px;">Tap a question to see the answer.</p>
+    ${FAQ_GROUPS.map((group,gi)=>`
+      <div class="section-head"><h3>${escapeHtml(group.category)}</h3></div>
+      ${group.items.map((item,ii)=>{
+        const key = gi+'-'+ii;
+        return `<div class="card" data-faq-toggle="${key}" style="cursor:pointer;margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+            <div class="t1" style="font-weight:700;">${escapeHtml(item.q)}</div>
+            <div style="flex-shrink:0;color:var(--text-dim);">${openFaqKey===key?'−':'+'}</div>
+          </div>
+          ${openFaqKey===key?`<p class="subtle" style="margin-top:10px;line-height:1.5;">${escapeHtml(item.a)}</p>`:''}
+        </div>`;
+      }).join('')}
+    `).join('')}
+    <div class="section-head"><h3>Still stuck?</h3></div>
+    <p class="subtle">Use the thumbs-down button wherever you're chatting with support to send feedback, or reach out to whoever set up your Zed account.</p>
+  `;
+}
+function bindFAQEvents(){
+  document.querySelectorAll('[data-faq-toggle]').forEach(el=>el.addEventListener('click', ()=>{
+    const key = el.dataset.faqToggle;
+    openFaqKey = openFaqKey===key ? null : key;
+    refreshMain();
+  }));
 }
 function screenSuppliers(){
   const suppliers = state.suppliers.filter(s=>s.businessId===business().id);

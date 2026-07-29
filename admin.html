@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zed — Admin Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --ink:#12213B; --teal:#0F3D3E; --marigold:#F2A93B; --marigold-dark:#D98E1E;
+    --paper:#FBFAF7; --paper-dim:#F1EEE6; --line:#E4E0D6; --text:#242B38; --text-dim:#6B7280;
+    --green:#2E7D32; --green-bg:#E7F3E8; --red:#C0392B; --red-bg:#FBEAE8;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--paper);color:var(--text);}
+  .topbar{background:var(--ink);color:#fff;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:18px;}
+  .brand-mark{width:32px;height:32px;border-radius:9px;background:var(--marigold);color:var(--ink);display:flex;align-items:center;justify-content:center;font-weight:900;}
+  #logout-btn{background:rgba(255,255,255,0.12);border:none;color:#fff;padding:8px 14px;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;}
+  main{max-width:640px;margin:0 auto;padding:24px 20px 60px;}
+  .center-screen{min-height:80vh;display:flex;align-items:center;justify-content:center;padding:24px;}
+  .card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:24px;box-shadow:0 2px 10px rgba(18,33,59,0.06);margin-bottom:20px;}
+  h1{font-size:20px;margin:0 0 4px;color:var(--ink);}
+  h2{font-size:16px;margin:0 0 16px;color:var(--ink);}
+  .subtle{color:var(--text-dim);font-size:13px;margin-bottom:20px;}
+  label{display:block;font-size:12px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;}
+  .field{margin-bottom:16px;}
+  input,textarea{width:100%;padding:12px 13px;border:1.5px solid var(--line);border-radius:10px;font-size:15px;font-family:inherit;background:#fff;color:var(--text);outline:none;}
+  input:focus,textarea:focus{border-color:var(--marigold-dark);}
+  textarea{resize:vertical;min-height:110px;}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:13px 18px;border-radius:10px;border:none;font-weight:800;font-size:14.5px;cursor:pointer;width:100%;}
+  .btn-primary{background:var(--marigold);color:var(--ink);}
+  .btn-primary:hover{background:var(--marigold-dark);}
+  .err{background:var(--red-bg);color:var(--red);padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:14px;font-weight:600;}
+  .ok{background:var(--green-bg);color:var(--green);padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:14px;font-weight:600;}
+  .auth-card{width:100%;max-width:380px;background:#fff;border-radius:18px;padding:32px 26px;box-shadow:0 10px 40px rgba(18,33,59,0.15);}
+  .hidden{display:none !important;}
+  .saved-tag{font-size:11.5px;color:var(--text-dim);margin-top:8px;}
+</style>
+</head>
+<body>
+
+<div id="login-screen" class="center-screen">
+  <div class="auth-card">
+    <div class="brand" style="margin-bottom:4px;color:var(--ink);"><div class="brand-mark">Z</div>Zed Admin</div>
+    <p class="subtle">Log in to edit your public About Us and Contact Us content.</p>
+    <div id="login-err"></div>
+    <div class="field"><label>Email</label><input id="login-email" type="email" placeholder="you@business.com"></div>
+    <div class="field"><label>Password</label><input id="login-pass" type="password" placeholder="••••••••"></div>
+    <button class="btn btn-primary" id="login-btn">Log In</button>
+  </div>
+</div>
+
+<div id="dashboard-screen" class="hidden">
+  <div class="topbar">
+    <div class="brand"><div class="brand-mark">Z</div>Zed Admin Dashboard</div>
+    <button id="logout-btn">Log Out</button>
+  </div>
+  <main>
+    <div id="save-status"></div>
+
+    <div class="card">
+      <h2>📄 About Us</h2>
+      <div class="field"><label>Heading</label><input id="about-heading" placeholder="About Us"></div>
+      <div class="field"><label>Body</label><textarea id="about-body" placeholder="Tell customers about your business…"></textarea></div>
+      <button class="btn btn-primary" id="save-about-btn">Save About Us</button>
+      <div class="saved-tag" id="about-saved-tag"></div>
+    </div>
+
+    <div class="card">
+      <h2>📞 Contact Us</h2>
+      <div class="field"><label>Heading</label><input id="contact-heading" placeholder="Contact Us"></div>
+      <div class="field"><label>Intro text</label><textarea id="contact-body" placeholder="Reach out to us using the details below…" style="min-height:70px;"></textarea></div>
+      <div class="row2">
+        <div class="field"><label>Phone</label><input id="contact-phone" placeholder="0802 730 0375"></div>
+        <div class="field"><label>WhatsApp</label><input id="contact-whatsapp" placeholder="0802 730 0375"></div>
+      </div>
+      <div class="field"><label>Email</label><input id="contact-email" placeholder="you@business.com"></div>
+      <div class="field"><label>Address</label><input id="contact-address" placeholder="No 19 Christ Street, Victoria Island, Lagos"></div>
+      <button class="btn btn-primary" id="save-contact-btn">Save Contact Us</button>
+      <div class="saved-tag" id="contact-saved-tag"></div>
+    </div>
+  </main>
+</div>
+
+<script>
+  // ---- Supabase project connection ----
+  // Publishable/anon key only — safe to keep here, it can only do what your
+  // Row Level Security policies allow (public read, authenticated-only write).
+  const SUPABASE_URL = 'https://beypnkzrgqrkjttsxlju.supabase.co';
+  const SUPABASE_ANON_KEY = 'sb_publishable_m_MrYeKVF4HgUG5i5v_THg_LPbvmUK5';
+  const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  const loginScreen = document.getElementById('login-screen');
+  const dashScreen = document.getElementById('dashboard-screen');
+
+  function showError(el, msg){ el.innerHTML = `<div class="err">${msg}</div>`; }
+  function showOk(el, msg){ el.innerHTML = `<div class="ok">${msg}</div>`; setTimeout(()=>{ el.innerHTML=''; }, 3000); }
+
+  async function checkSession(){
+    const { data } = await sb.auth.getSession();
+    if(data.session){
+      loginScreen.classList.add('hidden');
+      dashScreen.classList.remove('hidden');
+      loadContent();
+    } else {
+      loginScreen.classList.remove('hidden');
+      dashScreen.classList.add('hidden');
+    }
+  }
+
+  document.getElementById('login-btn').addEventListener('click', async ()=>{
+    const email = document.getElementById('login-email').value.trim();
+    const password = document.getElementById('login-pass').value;
+    const errBox = document.getElementById('login-err');
+    errBox.innerHTML = '';
+    if(!email || !password){ showError(errBox, 'Enter your email and password.'); return; }
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if(error){ showError(errBox, error.message); return; }
+    checkSession();
+  });
+
+  document.getElementById('logout-btn').addEventListener('click', async ()=>{
+    await sb.auth.signOut();
+    checkSession();
+  });
+
+  async function loadContent(){
+    const { data, error } = await sb.from('site_content').select('*');
+    if(error){ showError(document.getElementById('save-status'), 'Could not load content: '+error.message); return; }
+    const about = data.find(r=>r.section==='about_us') || {};
+    const contact = data.find(r=>r.section==='contact_us') || {};
+    document.getElementById('about-heading').value = about.heading || '';
+    document.getElementById('about-body').value = about.body || '';
+    document.getElementById('contact-heading').value = contact.heading || '';
+    document.getElementById('contact-body').value = contact.body || '';
+    document.getElementById('contact-phone').value = contact.phone || '';
+    document.getElementById('contact-whatsapp').value = contact.whatsapp || '';
+    document.getElementById('contact-email').value = contact.email || '';
+    document.getElementById('contact-address').value = contact.address || '';
+  }
+
+  document.getElementById('save-about-btn').addEventListener('click', async ()=>{
+    const heading = document.getElementById('about-heading').value.trim();
+    const body = document.getElementById('about-body').value.trim();
+    const { error } = await sb.from('site_content')
+      .update({ heading, body, updated_at: new Date().toISOString() })
+      .eq('section','about_us');
+    const tag = document.getElementById('about-saved-tag');
+    if(error){ tag.textContent = 'Error: '+error.message; tag.style.color = 'var(--red)'; return; }
+    tag.style.color = 'var(--green)';
+    tag.textContent = 'Saved just now — live in the Zed app immediately.';
+  });
+
+  document.getElementById('save-contact-btn').addEventListener('click', async ()=>{
+    const heading = document.getElementById('contact-heading').value.trim();
+    const body = document.getElementById('contact-body').value.trim();
+    const phone = document.getElementById('contact-phone').value.trim();
+    const whatsapp = document.getElementById('contact-whatsapp').value.trim();
+    const email = document.getElementById('contact-email').value.trim();
+    const address = document.getElementById('contact-address').value.trim();
+    const { error } = await sb.from('site_content')
+      .update({ heading, body, phone, whatsapp, email, address, updated_at: new Date().toISOString() })
+      .eq('section','contact_us');
+    const tag = document.getElementById('contact-saved-tag');
+    if(error){ tag.textContent = 'Error: '+error.message; tag.style.color = 'var(--red)'; return; }
+    tag.style.color = 'var(--green)';
+    tag.textContent = 'Saved just now — live in the Zed app immediately.';
+  });
+
+  checkSession();
+</script>
+</body>
+</html>

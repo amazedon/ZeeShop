@@ -291,6 +291,7 @@ input:checked + .slider-tog::before{transform:translateX(19px);}
 
 @media(min-width:560px){.userselect-grid{grid-template-columns:repeat(4,1fr);}}
 </style>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
 <div id="app"></div>
@@ -612,22 +613,20 @@ function render(){
   if(authMode==='forgot'){
     app.innerHTML = renderForgotPassword();
     bindForgotPasswordEvents();
-    return;
-  }
-  if(pendingRecoveryCodeDisplay){
-    app.innerHTML = renderRecoveryCodeScreen();
-    bindRecoveryCodeScreenEvents();
+    bindPasswordToggles();
     return;
   }
   if(!state.business){
     app.innerHTML = renderAuthScreen();
     bindAuthEvents();
     if(authMode==='signup-verify') bindSignupVerifyEvents();
+    bindPasswordToggles();
     return;
   }
   if(!state.sessionUserId){
     app.innerHTML = renderUserSelect();
     bindUserSelectEvents();
+    bindPasswordToggles();
     return;
   }
   if(isSuperAdmin()){
@@ -648,6 +647,7 @@ function render(){
   }
   app.innerHTML = renderShell();
   bindShellEvents();
+  bindPasswordToggles();
 }
 
 /* ============================================================
@@ -658,7 +658,61 @@ let authError = '';
 let pendingSignupData = null; // holds the form fields between "Create My Shop" and OTP entry
 let signupOtpSending = false;
 let signupOtpError = '';
-let pendingRecoveryCodeDisplay = null; // holds the plaintext code right after signup/regeneration, shown once
+/* ============================================================
+   GOOGLE SIGN-IN
+   Replace with your own Client ID from Google Cloud Console
+   (APIs & Services → Credentials → Create OAuth client ID → Web application).
+   Add your live domain under "Authorized JavaScript origins" there.
+   ============================================================ */
+const GOOGLE_CLIENT_ID = '972386732120-jeflemnhcm58cgr49mpk4vekp647p2k4.apps.googleusercontent.com';
+
+function decodeGoogleJwt(token){
+  // Reads the payload of the JWT Google returns — no server verification,
+  // fine for pre-filling signup/login by email in this local-only app.
+  const payload = token.split('.')[1];
+  const json = decodeURIComponent(atob(payload.replace(/-/g,'+').replace(/_/g,'/'))
+    .split('').map(c=>'%'+('00'+c.charCodeAt(0).toString(16)).slice(-2)).join(''));
+  return JSON.parse(json);
+}
+function handleGoogleCredentialResponse(response){
+  let profile;
+  try{ profile = decodeGoogleJwt(response.credential); }
+  catch(e){ toast("Couldn't read Google's response. Please try again."); return; }
+  const email = profile.email;
+  const firstName = profile.given_name || profile.name || 'there';
+  const lastName = profile.family_name || '';
+  // Look for an existing account with this email, across all businesses on this device.
+  const existingUser = state.users.find(u=>u.email && u.email.toLowerCase()===email.toLowerCase());
+  if(existingUser){
+    const biz = state.business && state.business.id===existingUser.businessId ? state.business : null;
+    if(!biz){ toast("This Google account is linked to a different business than what's set up on this device."); return; }
+    state.sessionUserId = existingUser.id;
+    logAudit('google_login', 'Logged in with Google: '+email);
+    toast('Welcome back, '+firstName+' 👋');
+    render();
+  } else {
+    // No account yet — jump to signup with the fields pre-filled.
+    authMode = 'signup';
+    render();
+    setTimeout(()=>{
+      const emailEl = document.getElementById('su-email');
+      const fnEl = document.getElementById('su-fn');
+      const lnEl = document.getElementById('su-ln');
+      if(emailEl) emailEl.value = email;
+      if(fnEl) fnEl.value = firstName;
+      if(lnEl) lnEl.value = lastName;
+      toast("We've filled in your details from Google — just add your business info to finish.");
+    }, 50);
+  }
+}
+function renderGoogleButton(containerId){
+  if(!window.google || !google.accounts || !google.accounts.id) return;
+  try{
+    google.accounts.id.initialize({ client_id: GOOGLE_CLIENT_ID, callback: handleGoogleCredentialResponse });
+    const el = document.getElementById(containerId);
+    if(el) google.accounts.id.renderButton(el, { theme:'outline', size:'large', width: 320, shape:'rectangular' });
+  }catch(e){ /* Google script may not have loaded yet — button area just stays empty */ }
+}
 
 function renderAuthScreen(){
   if(authMode==='signup') return renderSignup();
@@ -677,40 +731,48 @@ function renderLogin(){
       <div class="field"><label>Password</label><input id="li-pass" type="password" placeholder="••••••••"></div>
       <button class="btn btn-primary" id="btn-login">Log In</button>
       <div class="link-row"><a href="#" id="go-forgot" style="color:var(--text-dim);">Forgot password?</a></div>
+      <div style="display:flex;align-items:center;gap:10px;margin:16px 0;">
+        <div style="flex:1;height:1px;background:var(--line);"></div>
+        <span style="font-size:12px;color:var(--text-dim);">or</span>
+        <div style="flex:1;height:1px;background:var(--line);"></div>
+      </div>
+      <div id="google-login-btn" style="display:flex;justify-content:center;margin-bottom:10px;"></div>
       <div class="link-row">No business yet? <a href="#" id="go-signup" style="color:var(--marigold-dark);font-weight:800;">Create one free</a></div>
     </div>
   </div>`;
 }
 
-function renderRecoveryCodeScreen(){
-  return `
-  <div class="center-screen">
-    <div class="auth-card" style="text-align:center;">
-      <div class="brand-mark" style="margin:0 auto 14px;">Z</div>
-      <h3 style="margin-bottom:6px;">Save Your Recovery Code</h3>
-      <p class="subtle" style="margin-bottom:16px;">If you ever forget your password, this code is the only way back in. Write it down or screenshot it now — Zed cannot show it to you again.</p>
-      <div class="code-display" style="font-size:22px;letter-spacing:.08em;" id="recovery-code-text">${pendingRecoveryCodeDisplay}</div>
-      <button class="btn btn-outline btn-sm" id="copy-recovery-code" style="margin-bottom:16px;">📋 Copy Code</button>
-      <label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;color:var(--text-dim);margin-bottom:16px;text-align:left;">
-        <input type="checkbox" id="recovery-saved-check" style="margin-top:2px;">
-        I've saved this code somewhere safe.
-      </label>
-      <button class="btn btn-primary" id="recovery-code-continue" disabled>Continue to Zed</button>
-    </div>
-  </div>`;
-}
-function bindRecoveryCodeScreenEvents(){
-  const check = document.getElementById('recovery-saved-check');
-  const continueBtn = document.getElementById('recovery-code-continue');
-  check.addEventListener('change', ()=>{ continueBtn.disabled = !check.checked; });
-  document.getElementById('copy-recovery-code').addEventListener('click', async ()=>{
-    try{ await navigator.clipboard.writeText(pendingRecoveryCodeDisplay); toast('Copied ✅'); }
+function showRecoveryCodeSheet(code){
+  openSheet(`
+    <div class="sheet-head"><h3>Save Your Recovery Code</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <p class="subtle" style="margin-bottom:16px;">If you ever forget your password, this code is the only way back in. Write it down or screenshot it now — Zed cannot show it to you again.</p>
+    <div class="code-display" style="font-size:22px;letter-spacing:.08em;text-align:center;margin-bottom:16px;">${code}</div>
+    <button class="btn btn-outline" id="copy-recovery-code-sheet" style="width:100%;">📋 Copy Code</button>
+  `);
+  document.getElementById('copy-recovery-code-sheet').addEventListener('click', async ()=>{
+    try{ await navigator.clipboard.writeText(code); toast('Copied ✅'); }
     catch(e){ toast("Couldn't copy — please write it down manually."); }
   });
-  continueBtn.addEventListener('click', ()=>{
-    pendingRecoveryCodeDisplay = null;
-    toast('Welcome to Zed 🎉');
-    render();
+}
+/* Adds a 👁 toggle button to every password input on screen (call after rendering a form). */
+function bindPasswordToggles(){
+  document.querySelectorAll('input[type="password"], input[type="text"][data-pw-revealed]').forEach(input=>{
+    if(input.dataset.pwToggled) return; // already wired
+    input.dataset.pwToggled = '1';
+    const wrapper = document.createElement('div');
+    wrapper.style.position = 'relative';
+    input.parentNode.insertBefore(wrapper, input);
+    wrapper.appendChild(input);
+    input.style.paddingRight = '42px';
+    const eyeBtn = document.createElement('button');
+    eyeBtn.type = 'button';
+    eyeBtn.textContent = '👁';
+    eyeBtn.style.cssText = 'position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;font-size:16px;cursor:pointer;padding:4px;line-height:1;';
+    eyeBtn.addEventListener('click', ()=>{
+      if(input.type==='password'){ input.type='text'; input.dataset.pwRevealed='1'; eyeBtn.textContent='🙈'; }
+      else { input.type='password'; delete input.dataset.pwRevealed; eyeBtn.textContent='👁'; }
+    });
+    wrapper.appendChild(eyeBtn);
   });
 }
 
@@ -777,6 +839,12 @@ function renderSignup(){
       <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">Zed</div></div>
       <div class="tagline">Set up your business — takes 2 minutes.</div>
       ${authError ? `<div class="err">${authError}</div>` : ''}
+      <div id="google-signup-btn" style="display:flex;justify-content:center;margin-bottom:14px;"></div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+        <div style="flex:1;height:1px;background:var(--line);"></div>
+        <span style="font-size:12px;color:var(--text-dim);">or fill in manually</span>
+        <div style="flex:1;height:1px;background:var(--line);"></div>
+      </div>
       <div class="field"><label>Business Name</label><input id="su-biz" placeholder="Chika Stores"></div>
       <div class="row2">
         <div class="field"><label>Country</label>
@@ -834,6 +902,8 @@ function renderSignupVerify(){
 
 function bindAuthEvents(){
   const go = (id,fn)=>{ const e=document.getElementById(id); if(e) e.addEventListener('click', fn); };
+  if(document.getElementById('google-login-btn')) renderGoogleButton('google-login-btn');
+  if(document.getElementById('google-signup-btn')) renderGoogleButton('google-signup-btn');
   go('go-signup', e=>{e.preventDefault(); authMode='signup'; authError=''; render();});
   go('go-login', e=>{e.preventDefault(); authMode='login'; authError=''; render();});
   go('go-forgot', e=>{e.preventDefault(); authMode='forgot'; forgotStep=1; forgotUserId=null; forgotError=''; render();});
@@ -946,8 +1016,8 @@ function completeSignupAccount(data){
   state.sessionUserId = userId;
   logAudit('signup','Business created: '+biz);
   pendingSignupData = null;
-  pendingRecoveryCodeDisplay = recoveryCode;
   render();
+  showRecoveryCodeSheet(recoveryCode);
 }
 function hash(s){ let h=0; for(let i=0;i<s.length;i++){h=(h*31 + s.charCodeAt(i))|0;} return 'h'+h; }
 // Generates a readable one-time recovery code like "K4P9-X2QW-7RTN".
@@ -3617,8 +3687,8 @@ function bindProfileEvents(){
     const code = genRecoveryCode();
     currentUser().recoveryCodeHash = hash(code);
     logAudit('recovery_code_regenerated', 'Generated a new recovery code');
-    pendingRecoveryCodeDisplay = code;
     render();
+    showRecoveryCodeSheet(code);
   });
   const savePinBtn = document.getElementById('save-pin-btn');
   if(savePinBtn) savePinBtn.addEventListener('click', ()=>{
@@ -5197,6 +5267,7 @@ function openSheet(html){
   ov.addEventListener('click', e=>{ if(e.target===ov) closeSheet(); });
   const x = document.getElementById('sheet-close');
   if(x) x.addEventListener('click', closeSheet);
+  bindPasswordToggles();
 }
 function closeSheet(){
   const ov = document.getElementById('active-overlay');

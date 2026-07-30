@@ -15,7 +15,7 @@
   body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--paper);color:var(--text);}
   .topbar{background:var(--ink);color:#fff;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;}
   .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:18px;}
-  .brand-mark{width:32px;height:32px;border-radius:9px;background:var(--marigold);color:var(--ink);display:flex;align-items:center;justify-content:center;font-weight:900;}
+  .brand-mark{width:32px;height:32px;border-radius:9px;background:var(--ink) url('/icon-192.png') center/cover no-repeat;color:transparent;display:flex;align-items:center;justify-content:center;font-weight:900;}
   #logout-btn{background:rgba(255,255,255,0.12);border:none;color:#fff;padding:8px 14px;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;}
   main{max-width:640px;margin:0 auto;padding:24px 20px 60px;}
   .center-screen{min-height:80vh;display:flex;align-items:center;justify-content:center;padding:24px;}
@@ -215,9 +215,20 @@
     }, 1500);
   });
 
+  const ALLOWED_ADMIN_EMAILS = ['amazedon50@gmail.com'];
+
   async function checkSession(){
     const { data } = await sb.auth.getSession();
     if(data.session){
+      const userEmail = (data.session.user.email || '').toLowerCase();
+      const isAllowed = ALLOWED_ADMIN_EMAILS.map(e=>e.toLowerCase()).includes(userEmail);
+      if(!isAllowed){
+        await sb.auth.signOut();
+        loginScreen.classList.remove('hidden');
+        dashScreen.classList.add('hidden');
+        showError(document.getElementById('login-err'), 'This account is not authorized to access the admin dashboard.');
+        return;
+      }
       loginScreen.classList.add('hidden');
       dashScreen.classList.remove('hidden');
       loadContent();

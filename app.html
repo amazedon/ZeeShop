@@ -930,6 +930,17 @@ function bindAuthEvents(){
     logAudit('login', 'Master logged in');
     toast(`Welcome back, ${u.firstName}!`);
     render();
+
+    // Local login above is instant and works fully offline — this part is
+    // purely a background refresh of the Supabase Auth session, so the sync
+    // engine has a valid token to push queued changes with. If there's no
+    // internet right now, this silently fails and nothing about the login
+    // the owner just experienced changes.
+    if(u.email){
+      window.sb.auth.signInWithPassword({ email: u.email, password: pass })
+        .then(({ error })=>{ if(!error) flushSyncQueue(); })
+        .catch(()=>{});
+    }
   });
 
   go('btn-signup', async ()=>{

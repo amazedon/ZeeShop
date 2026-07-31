@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zed — Super Admin</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --ink:#12213B; --teal:#0F3D3E; --marigold:#F2A93B; --marigold-dark:#D98E1E;
+    --paper:#FBFAF7; --paper-dim:#F1EEE6; --line:#E4E0D6; --text:#242B38; --text-dim:#6B7280;
+    --green:#2E7D32; --green-bg:#E7F3E8; --red:#C0392B; --red-bg:#FBEAE8;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--paper);color:var(--text);}
+  .topbar{background:var(--ink);color:#fff;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:18px;}
+  .brand-mark{width:32px;height:32px;border-radius:9px;background:var(--ink) url('/icon-192.png') center/cover no-repeat;color:transparent;display:flex;align-items:center;justify-content:center;font-weight:900;}
+  #logout-btn{background:rgba(255,255,255,0.12);border:none;color:#fff;padding:8px 14px;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;}
+  main{max-width:900px;margin:0 auto;padding:24px 20px 60px;}
+  .center-screen{min-height:80vh;display:flex;align-items:center;justify-content:center;padding:24px;}
+  .card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:24px;box-shadow:0 2px 10px rgba(18,33,59,0.06);margin-bottom:20px;}
+  h1{font-size:20px;margin:0 0 4px;color:var(--ink);}
+  h2{font-size:16px;margin:0 0 16px;color:var(--ink);}
+  .subtle{color:var(--text-dim);font-size:13px;margin-bottom:20px;}
+  label{display:block;font-size:12px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;}
+  .field{margin-bottom:16px;}
+  input{width:100%;padding:12px 13px;border:1.5px solid var(--line);border-radius:10px;font-size:15px;font-family:inherit;background:#fff;color:var(--text);outline:none;}
+  input:focus{border-color:var(--marigold-dark);}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:13px 18px;border-radius:10px;border:none;font-weight:800;font-size:14.5px;cursor:pointer;width:100%;}
+  .btn-primary{background:var(--marigold);color:var(--ink);}
+  .btn-primary:hover{background:var(--marigold-dark);}
+  .err{background:var(--red-bg);color:var(--red);padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:14px;font-weight:600;}
+  .auth-card{width:100%;max-width:380px;background:#fff;border-radius:18px;padding:32px 26px;box-shadow:0 10px 40px rgba(18,33,59,0.15);}
+  .hidden{display:none !important;}
+  .pass-wrap{position:relative;}
+  .pass-wrap input{padding-right:44px;}
+  .eye-toggle{position:absolute;right:4px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:8px;color:var(--text-dim);}
+  .eye-toggle svg{width:18px;height:18px;display:block;}
+
+  .stats-row{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px;}
+  .stat-card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px;text-align:center;}
+  .stat-card .num{font-size:26px;font-weight:900;color:var(--ink);}
+  .stat-card .label{font-size:12px;color:var(--text-dim);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-top:4px;}
+
+  table{width:100%;border-collapse:collapse;font-size:13.5px;}
+  th{text-align:left;padding:10px 12px;background:var(--paper-dim);color:var(--text-dim);font-size:11px;text-transform:uppercase;letter-spacing:.04em;font-weight:800;}
+  td{padding:10px 12px;border-top:1px solid var(--line);}
+  .plan-badge{display:inline-block;padding:3px 10px;border-radius:999px;font-size:11.5px;font-weight:800;}
+  .plan-free{background:var(--paper-dim);color:var(--text-dim);}
+  .plan-pro{background:var(--green-bg);color:var(--green);}
+  .table-wrap{overflow-x:auto;}
+  .empty-note{color:var(--text-dim);font-size:13.5px;padding:20px 0;text-align:center;}
+  @media(max-width:640px){.stats-row{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+
+<div id="login-screen" class="center-screen">
+  <div class="auth-card">
+    <div class="brand" style="margin-bottom:4px;color:var(--ink);"><div class="brand-mark">Z</div>Zed Super Admin</div>
+    <p class="subtle">Platform-wide view — all registered businesses and their subscription status.</p>
+    <div id="login-err"></div>
+    <div class="field"><label>Email</label><input id="login-email" type="email" placeholder="you@business.com"></div>
+    <div class="field">
+      <label>Password</label>
+      <div class="pass-wrap">
+        <input id="login-pass" type="password" placeholder="••••••••">
+        <button type="button" class="eye-toggle" data-target="login-pass" aria-label="Show password">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
+    </div>
+    <button class="btn btn-primary" id="login-btn">Log In</button>
+  </div>
+</div>
+
+<div id="dashboard-screen" class="hidden">
+  <div class="topbar">
+    <div class="brand"><div class="brand-mark">Z</div>Zed Super Admin</div>
+    <button id="logout-btn">Log Out</button>
+  </div>
+  <main>
+    <div class="stats-row">
+      <div class="stat-card"><div class="num" id="stat-total">0</div><div class="label">Total Businesses</div></div>
+      <div class="stat-card"><div class="num" id="stat-free">0</div><div class="label">Free Plan</div></div>
+      <div class="stat-card"><div class="num" id="stat-pro">0</div><div class="label">Pro Plan</div></div>
+    </div>
+
+    <div class="card">
+      <h2>All Registered Businesses</h2>
+      <p class="subtle">Synced from businesses that have signed up and connected online at least once — offline-only signups appear here once their device reconnects.</p>
+      <div id="biz-status"></div>
+      <div class="table-wrap">
+        <table id="biz-table">
+          <thead>
+            <tr><th>Business</th><th>Country</th><th>Plan</th><th>Staff</th><th>Signed Up</th></tr>
+          </thead>
+          <tbody id="biz-tbody"></tbody>
+        </table>
+      </div>
+      <div id="biz-empty" class="empty-note hidden">No businesses have synced yet.</div>
+    </div>
+  </main>
+</div>
+
+<script>
+  const SUPABASE_URL = 'https://beypnkzrgqrkjttsxlju.supabase.co';
+  const SUPABASE_ANON_KEY = 'sb_publishable_m_MrYeKVF4HgUG5i5v_THg_LPbvmUK5';
+  const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  const loginScreen = document.getElementById('login-screen');
+  const dashScreen = document.getElementById('dashboard-screen');
+
+  function showError(el, msg){ el.innerHTML = `<div class="err">${msg}</div>`; }
+
+  document.querySelectorAll('.eye-toggle').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const input = document.getElementById(btn.dataset.target);
+      const showing = input.type === 'text';
+      input.type = showing ? 'password' : 'text';
+    });
+  });
+
+  document.getElementById('login-btn').addEventListener('click', async ()=>{
+    const email = document.getElementById('login-email').value.trim();
+    const password = document.getElementById('login-pass').value;
+    const errBox = document.getElementById('login-err');
+    errBox.innerHTML = '';
+    if(!email || !password){ showError(errBox, 'Enter your email and password.'); return; }
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if(error){ showError(errBox, error.message); return; }
+    checkSession();
+  });
+
+  document.getElementById('logout-btn').addEventListener('click', async ()=>{
+    await sb.auth.signOut();
+    checkSession();
+  });
+
+  async function checkSession(){
+    const { data } = await sb.auth.getSession();
+    if(data.session){
+      loginScreen.classList.add('hidden');
+      dashScreen.classList.remove('hidden');
+      loadBusinesses();
+    } else {
+      loginScreen.classList.remove('hidden');
+      dashScreen.classList.add('hidden');
+    }
+  }
+
+  async function loadBusinesses(){
+    const statusBox = document.getElementById('biz-status');
+    statusBox.innerHTML = '';
+    const [{ data: businesses, error: bizErr }, { data: staff, error: staffErr }] = await Promise.all([
+      sb.from('businesses').select('*').order('created_at', { ascending: false }),
+      sb.from('app_users').select('business_id')
+    ]);
+    if(bizErr){ showError(statusBox, 'Could not load businesses: '+bizErr.message); return; }
+
+    const staffCounts = {};
+    if(!staffErr && staff){
+      staff.forEach(u=>{ staffCounts[u.business_id] = (staffCounts[u.business_id]||0) + 1; });
+    }
+
+    const total = businesses.length;
+    const proCount = businesses.filter(b=>b.subscription_plan === 'pro').length;
+    const freeCount = total - proCount;
+    document.getElementById('stat-total').textContent = total;
+    document.getElementById('stat-free').textContent = freeCount;
+    document.getElementById('stat-pro').textContent = proCount;
+
+    const tbody = document.getElementById('biz-tbody');
+    const emptyNote = document.getElementById('biz-empty');
+    tbody.innerHTML = '';
+    if(total === 0){
+      emptyNote.classList.remove('hidden');
+      return;
+    }
+    emptyNote.classList.add('hidden');
+
+    businesses.forEach(b=>{
+      const plan = b.subscription_plan || 'free';
+      const planBadge = plan === 'pro'
+        ? `<span class="plan-badge plan-pro">Pro</span>`
+        : `<span class="plan-badge plan-free">Free</span>`;
+      const signedUp = b.created_at ? new Date(b.created_at).toLocaleDateString() : '—';
+      const row = document.createElement('tr');
+      row.innerHTML = `
+        <td>${escapeHtml(b.name || '—')}</td>
+        <td>${escapeHtml(b.country || '—')}</td>
+        <td>${planBadge}</td>
+        <td>${staffCounts[b.id] || 0}</td>
+        <td>${signedUp}</td>
+      `;
+      tbody.appendChild(row);
+    });
+  }
+
+  function escapeHtml(str){
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  checkSession();
+</script>
+</body>
+</html>

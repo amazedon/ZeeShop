@@ -112,6 +112,15 @@
     <div id="save-status"></div>
 
     <div class="card">
+      <h2>💰 Pro Plan Pricing</h2>
+      <p class="subtle">Businesses see these prices when upgrading from Free to Pro inside the app.</p>
+      <div class="field"><label>Monthly price (₦)</label><input id="pro-monthly" type="number" min="0" step="1" placeholder="0"></div>
+      <div class="field"><label>Yearly price (₦)</label><input id="pro-yearly" type="number" min="0" step="1" placeholder="0"></div>
+      <button class="btn btn-primary" id="save-pricing-btn">Save Pricing</button>
+      <div class="saved-tag" id="pricing-saved-tag"></div>
+    </div>
+
+    <div class="card">
       <h2>📄 About Us</h2>
       <div class="field"><label>Heading</label><input id="about-heading" placeholder="About Us"></div>
       <div class="field"><label>Body</label><textarea id="about-body" placeholder="Tell customers about your business…"></textarea></div>
@@ -259,6 +268,7 @@
     if(error){ showError(document.getElementById('save-status'), 'Could not load content: '+error.message); return; }
     const about = data.find(r=>r.section==='about_us') || {};
     const contact = data.find(r=>r.section==='contact_us') || {};
+    const pricing = data.find(r=>r.section==='pro_plan') || {};
     document.getElementById('about-heading').value = about.heading || '';
     document.getElementById('about-body').value = about.body || '';
     document.getElementById('contact-heading').value = contact.heading || '';
@@ -267,7 +277,23 @@
     document.getElementById('contact-whatsapp').value = contact.whatsapp || '';
     document.getElementById('contact-email').value = contact.email || '';
     document.getElementById('contact-address').value = contact.address || '';
+    document.getElementById('pro-monthly').value = pricing.amount_monthly || '';
+    document.getElementById('pro-yearly').value = pricing.amount_yearly || '';
   }
+
+  document.getElementById('save-pricing-btn').addEventListener('click', async ()=>{
+    const monthly = parseFloat(document.getElementById('pro-monthly').value);
+    const yearly = parseFloat(document.getElementById('pro-yearly').value);
+    const tag = document.getElementById('pricing-saved-tag');
+    if(isNaN(monthly) || isNaN(yearly) || monthly < 0 || yearly < 0){
+      tag.style.color = 'var(--red)'; tag.textContent = 'Enter valid prices for both fields.'; return;
+    }
+    const { error } = await sb.from('site_content')
+      .upsert({ section: 'pro_plan', heading: 'Zed Pro', amount_monthly: monthly, amount_yearly: yearly, updated_at: new Date().toISOString() }, { onConflict: 'section' });
+    if(error){ tag.style.color = 'var(--red)'; tag.textContent = 'Error: '+error.message; return; }
+    tag.style.color = 'var(--green)';
+    tag.textContent = 'Pricing saved — live in the app immediately.';
+  });
 
   document.getElementById('save-about-btn').addEventListener('click', async ()=>{
     const heading = document.getElementById('about-heading').value.trim();

@@ -296,6 +296,7 @@ input:checked + .slider-tog::before{transform:translateX(19px);}
 <meta name="theme-color" content="#12213B">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-180.png">
+<script src="https://checkout.flutterwave.com/v3.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 if ('serviceWorker' in navigator) {
@@ -3895,32 +3896,151 @@ function bindSettingsEvents(){
     }
   });
 }
-function openPlansSheet(){
+const FLW_PUBLIC_KEY = 'FLWPUBK-5125776fe796c3160589ef913919a973-X';
+
+async function fetchPricingForBusiness(){
   const b = business();
+  const bizCurrency = (b && b.currency) || 'USD';
+  const currency = ['NGN','GHS','GBP','EUR'].includes(bizCurrency) ? bizCurrency : 'USD';
+  const CURRENCY_SYMBOLS = { NGN:'₦', GHS:'GH₵', GBP:'£', EUR:'€', USD:'$' };
+  try{
+    const res = await fetch(`${SITE_CONTENT_URL}/rest/v1/pricing?currency=eq.${currency}&select=*`, {
+      headers: { 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+SITE_CONTENT_ANON_KEY }
+    });
+    if(!res.ok) return null;
+    const rows = await res.json();
+    const get = (plan, interval) => {
+      const row = rows.find(r=>r.plan===plan && r.interval===interval);
+      return row ? row.amount : 0;
+    };
+    const symbol = CURRENCY_SYMBOLS[currency] || currency;
+    return {
+      currency, symbol,
+      proMonthly: get('pro','monthly'), proYearly: get('pro','yearly'),
+      bossMonthly: get('boss','monthly'), bossYearly: get('boss','yearly')
+    };
+  }catch(e){ return null; }
+}
+
+function payButtonHtml(plan, interval, amount, symbol, currency){
+  if(!amount || amount <= 0){
+    return `<button class="btn btn-outline btn-sm" disabled style="opacity:.6;">Pricing coming soon</button>`;
+  }
+  return `<button class="btn btn-dark btn-sm" data-pay-plan="${plan}" data-pay-interval="${interval}" data-pay-amount="${amount}" data-pay-currency="${currency}">
+    Pay ${symbol}${amount} / ${interval==='yearly'?'yr':'mo'}
+  </button>`;
+}
+
+async function openPlansSheet(){
+  const b = business();
+  const pricing = await fetchPricingForBusiness();
+  const sym = pricing ? pricing.symbol : '';
+  const ccy = pricing ? pricing.currency : 'USD';
+
   openSheet(`
     <div class="sheet-head"><h3>Plans</h3><button class="close-x" id="sheet-close">✕</button></div>
-    ${[
-      {id:'free',name:'Freemium',price:'Free forever',features:['1 Shop','100 Goods','50 Customers','1 Staff']},
-      {id:'pro',name:'Pro',price:'$4/mo per shop',features:['3 Shops','1,000 Goods','5 Staff','Profit Reports','SMS/Email templates','Cloud Backup']},
-      {id:'boss',name:'Boss',price:'$10/mo per shop',features:['Unlimited Shops & Goods','Market Price Data','Multi-currency P&L','Priority Support']},
-    ].map(p=>`
-      <div class="card" style="border-color:${b.subscriptionPlan===p.id?'var(--marigold-dark)':'var(--line)'};">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <b>${p.name}</b><span class="subtle">${p.price}</span>
-        </div>
-        <ul style="margin:8px 0 10px;padding-left:18px;font-size:12.5px;color:var(--text-dim);">
-          ${p.features.map(f=>`<li>${f}</li>`).join('')}
-        </ul>
-        <button class="btn ${b.subscriptionPlan===p.id?'btn-outline':'btn-dark'} btn-sm" data-select-plan="${p.id}" ${b.subscriptionPlan===p.id?'disabled':''}>
-          ${b.subscriptionPlan===p.id?'Current Plan':'Select (demo)'}
-        </button>
-      </div>`).join('')}
-    <p class="subtle">Live billing runs through Stripe, Paystack, Flutterwave, Razorpay or M-Pesa depending on your country — this demo just flips the plan flag.</p>
+
+    <div class="card" style="border-color:${b.subscriptionPlan==='free'?'var(--marigold-dark)':'var(--line)'};">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <b>Freemium</b><span class="subtle">Free forever</span>
+      </div>
+      <ul style="margin:8px 0 10px;padding-left:18px;font-size:12.5px;color:var(--text-dim);">
+        <li>1 Shop</li><li>100 Goods</li><li>50 Customers</li><li>1 Staff</li>
+      </ul>
+      ${b.subscriptionPlan==='free' ? `<button class="btn btn-outline btn-sm" disabled>Current Plan</button>` : ''}
+    </div>
+
+    <div class="card" style="border-color:${b.subscriptionPlan==='pro'?'var(--marigold-dark)':'var(--line)'};">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <b>Pro</b>${b.subscriptionPlan==='pro'?'<span class="subtle">Current Plan</span>':''}
+      </div>
+      <ul style="margin:8px 0 10px;padding-left:18px;font-size:12.5px;color:var(--text-dim);">
+        <li>3 Shops</li><li>1,000 Goods</li><li>5 Staff</li><li>Profit Reports</li><li>SMS/Email templates</li><li>Cloud Backup</li>
+      </ul>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        ${pricing ? payButtonHtml('pro','monthly',pricing.proMonthly,sym,ccy) : ''}
+        ${pricing ? payButtonHtml('pro','yearly',pricing.proYearly,sym,ccy) : ''}
+      </div>
+    </div>
+
+    <div class="card" style="border-color:${b.subscriptionPlan==='boss'?'var(--marigold-dark)':'var(--line)'};">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <b>Boss</b>${b.subscriptionPlan==='boss'?'<span class="subtle">Current Plan</span>':''}
+      </div>
+      <ul style="margin:8px 0 10px;padding-left:18px;font-size:12.5px;color:var(--text-dim);">
+        <li>Unlimited Shops & Goods</li><li>Market Price Data</li><li>Multi-currency P&L</li><li>Priority Support</li>
+      </ul>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        ${pricing ? payButtonHtml('boss','monthly',pricing.bossMonthly,sym,ccy) : ''}
+        ${pricing ? payButtonHtml('boss','yearly',pricing.bossYearly,sym,ccy) : ''}
+      </div>
+    </div>
+
+    <p class="subtle">Prices shown in ${ccy}. Payments are processed securely by Flutterwave.${b.subscriptionExpiresAt ? ' Current plan renews/expires '+new Date(b.subscriptionExpiresAt).toLocaleDateString()+'.' : ''}</p>
   `);
-  document.querySelectorAll('[data-select-plan]').forEach(btn=>btn.addEventListener('click', ()=>{
-    business().subscriptionPlan = btn.dataset.selectPlan;
-    toast('Plan updated (demo mode — no real charge)'); closeSheet(); render();
+
+  document.querySelectorAll('[data-pay-plan]').forEach(btn=>btn.addEventListener('click', ()=>{
+    launchCheckout(btn.dataset.payPlan, btn.dataset.payInterval, parseFloat(btn.dataset.payAmount), btn.dataset.payCurrency);
   }));
+}
+
+function launchCheckout(plan, interval, amount, currency){
+  if(!navigator.onLine){ toast('You need an internet connection to upgrade your plan.'); return; }
+  const u = currentUser();
+  const txRef = 'zed_' + uid('txn');
+  FlutterwaveCheckout({
+    public_key: FLW_PUBLIC_KEY,
+    tx_ref: txRef,
+    amount: amount,
+    currency: currency,
+    payment_options: 'card',
+    customer: {
+      email: (u && u.email) || 'customer@zed.app',
+      name: (u ? (u.firstName+' '+(u.lastName||'')) : 'Zed Customer')
+    },
+    customizations: {
+      title: 'Zed ' + (plan==='pro' ? 'Pro' : 'Boss'),
+      description: (plan==='pro'?'Pro':'Boss') + ' plan — ' + interval + ' billing'
+    },
+    callback: function(response){
+      if(response && (response.status === 'successful' || response.status === 'completed')){
+        verifyAndApplyPayment(response.transaction_id, plan, interval, amount, currency);
+      } else {
+        toast('Payment was not completed.');
+      }
+    },
+    onclose: function(){ /* user closed the checkout without paying — no action needed */ }
+  });
+}
+
+async function verifyAndApplyPayment(transactionId, plan, interval, amount, currency){
+  toast('Confirming payment…');
+  try{
+    const { data: sessionData } = await window.sb.auth.getSession();
+    const token = sessionData.session ? sessionData.session.access_token : null;
+    if(!token){
+      toast('Payment received, but you need to log in online once to activate the plan — please log in again with internet on.');
+      return;
+    }
+    const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/verify-payment`, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+token, 'apikey': SITE_CONTENT_ANON_KEY },
+      body: JSON.stringify({ transaction_id: transactionId, plan, interval, expected_amount: amount, expected_currency: currency })
+    });
+    const result = await res.json();
+    if(result.verified){
+      business().subscriptionPlan = plan;
+      business().subscriptionExpiresAt = result.expires_at;
+      logAudit('subscription','Upgraded to '+plan+' ('+interval+')');
+      closeSheet();
+      render();
+      toast('Payment confirmed — you\'re now on the '+(plan==='pro'?'Pro':'Boss')+' plan!');
+    } else {
+      toast('Payment could not be verified: '+(result.error||'please contact support.'));
+    }
+  }catch(e){
+    toast('Could not confirm payment — if you were charged, please contact support.');
+  }
 }
 function exportCSV(){
   const rows = [['Sale ID','Date','Customer','Subtotal','Paid','Balance','Status','Sold By']];

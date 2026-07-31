@@ -168,8 +168,8 @@ footer{border-top:1px solid var(--line);padding:28px 0;}
   <div class="wrap">
     <div class="about-box">
       <div class="eyebrow">About</div>
-      <h2>Built by Ememart Solutions</h2>
-      <p>Zed is developed and operated by Ememart Solutions, based in Nnewi, Anambra State, Nigeria. We build practical, mobile-first tools for shop owners who need to manage stock, suppliers, and staff without a full back-office setup.</p>
+      <h2 id="about-heading-el">Built by Ememart Solutions</h2>
+      <p id="about-body-el">Zed is developed and operated by Ememart Solutions, based in Nnewi, Anambra State, Nigeria. We build practical, mobile-first tools for shop owners who need to manage stock, suppliers, and staff without a full back-office setup.</p>
     </div>
   </div>
 </section>
@@ -210,20 +210,21 @@ footer{border-top:1px solid var(--line);padding:28px 0;}
   <div class="wrap">
     <div class="section-head">
       <div class="eyebrow section-label">Contact</div>
-      <h2>Reach Ememart Solutions</h2>
+      <h2 id="contact-heading-el">Reach Ememart Solutions</h2>
+      <p id="contact-body-el" style="display:none;"></p>
     </div>
     <div class="contact-grid">
       <div class="contact-card">
         <div class="k">Email</div>
-        <div class="v"><a href="mailto:Help@ememart.com">Help@ememart.com</a></div>
+        <div class="v"><a id="contact-email-el" href="mailto:Help@ememart.com">Help@ememart.com</a></div>
       </div>
       <div class="contact-card">
         <div class="k">Phone</div>
-        <div class="v"><a href="tel:+2348027300375">0802 730 0375</a></div>
+        <div class="v"><a id="contact-phone-el" href="tel:+2348027300375">0802 730 0375</a></div>
       </div>
       <div class="contact-card">
         <div class="k">Address</div>
-        <div class="v">4 Ajanwa Street, Abubor Nnewichi, Nnewi, Anambra State, Nigeria</div>
+        <div class="v" id="contact-address-el">4 Ajanwa Street, Abubor Nnewichi, Nnewi, Anambra State, Nigeria</div>
       </div>
     </div>
   </div>
@@ -236,5 +237,49 @@ footer{border-top:1px solid var(--line);padding:28px 0;}
   </div>
 </footer>
 
+<script>
+  // Pull live About Us / Contact Us content from the same source the
+  // admin dashboard edits. Falls back to the static text above if the
+  // fetch fails for any reason (offline, etc.) — never leaves a blank page.
+  (async function(){
+    try{
+      const SITE_CONTENT_URL = 'https://beypnkzrgqrkjttsxlju.supabase.co';
+      const SITE_CONTENT_ANON_KEY = 'sb_publishable_m_MrYeKVF4HgUG5i5v_THg_LPbvmUK5';
+      const res = await fetch(`${SITE_CONTENT_URL}/rest/v1/site_content?section=in.(about_us,contact_us)&select=*`, {
+        headers: { 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+SITE_CONTENT_ANON_KEY }
+      });
+      if(!res.ok) return;
+      const rows = await res.json();
+      const about = rows.find(r=>r.section==='about_us');
+      const contact = rows.find(r=>r.section==='contact_us');
+
+      if(about){
+        if(about.heading) document.getElementById('about-heading-el').textContent = about.heading;
+        if(about.body) document.getElementById('about-body-el').textContent = about.body;
+      }
+      if(contact){
+        if(contact.heading) document.getElementById('contact-heading-el').textContent = contact.heading;
+        if(contact.body){
+          const bodyEl = document.getElementById('contact-body-el');
+          bodyEl.textContent = contact.body;
+          bodyEl.style.display = 'block';
+        }
+        if(contact.email){
+          const el = document.getElementById('contact-email-el');
+          el.textContent = contact.email;
+          el.href = 'mailto:'+contact.email;
+        }
+        if(contact.phone){
+          const el = document.getElementById('contact-phone-el');
+          el.textContent = contact.phone;
+          el.href = 'tel:'+contact.phone.replace(/\s+/g,'');
+        }
+        if(contact.address){
+          document.getElementById('contact-address-el').textContent = contact.address;
+        }
+      }
+    }catch(e){ /* keep static fallback content on any failure */ }
+  })();
+</script>
 </body>
 </html>

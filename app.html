@@ -296,6 +296,7 @@ input:checked + .slider-tog::before{transform:translateX(19px);}
 <meta name="theme-color" content="#12213B">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-180.png">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
@@ -1002,14 +1003,14 @@ function bindSignupVerifyEvents(){
     try{
       const result = await verifySignupOtp(pendingSignupData.email, code);
       if(!result.verified){ signupOtpError = result.error || 'Incorrect code.'; render(); return; }
-      completeSignupAccount(pendingSignupData);
+      await completeSignupAccount(pendingSignupData);
     }catch(err){
       signupOtpError = err.message || "Couldn't verify right now. Check your internet connection.";
       render();
     }
   });
 }
-function completeSignupAccount(data){
+async function completeSignupAccount(data){
   const { biz, country, ccy, fn, ln, username, phone, email, pass } = data;
   const bizId = uid('biz');
   const userId = uid('user');
@@ -1027,6 +1028,32 @@ function completeSignupAccount(data){
   state.sessionUserId = userId;
   logAudit('signup','Business created: '+biz);
   pendingSignupData = null;
+
+  // Create the matching Supabase Auth account for the owner (needs internet —
+  // signup already required internet for the OTP step, so this is no new
+  // requirement). If this fails, the local account still works fully offline;
+  // it just won't sync to Supabase until the owner logs in with internet later
+  // (see loginOwnerToSupabase, called from the normal login flow).
+  try{
+    const { data: authData, error: authErr } = await window.sb.auth.signUp({ email, password: pass });
+    if(!authErr && authData.user){
+      const ownerAuthId = authData.user.id;
+      enqueueSync('businesses','insert', {
+        id: bizId, name: biz, business_type:'', registration_number:'',
+        country, currency:ccy, timezone: state.business.timezone, language:'en',
+        tax_name:'VAT', tax_percent:0, subscription_plan:'free',
+        owner_auth_user_id: ownerAuthId
+      });
+      enqueueSync('shops','insert', {
+        id: shopId, business_id: bizId, name: biz+" — Main Shop", address:'', phone, email
+      });
+      enqueueSync('app_users','insert', {
+        id: userId, business_id: bizId, username, email, phone,
+        first_name: fn, last_name: ln, role:'master', is_active:true, can_add_goods:true
+      });
+    }
+  }catch(e){ /* offline or Supabase error — local account still works; queue nothing yet */ }
+
   render();
   showRecoveryCodeSheet(recoveryCode);
 }
@@ -4898,6 +4925,7 @@ function openCheckInModal(roomId){
    ============================================================ */
 const SITE_CONTENT_URL = 'https://beypnkzrgqrkjttsxlju.supabase.co';
 const SITE_CONTENT_ANON_KEY = 'sb_publishable_m_MrYeKVF4HgUG5i5v_THg_LPbvmUK5';
+window.sb = window.supabase.createClient(SITE_CONTENT_URL, SITE_CONTENT_ANON_KEY);
 async function fetchSiteContent(section){
   const res = await fetch(`${SITE_CONTENT_URL}/rest/v1/site_content?section=eq.${section}&select=*`, {
     headers: { 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+SITE_CONTENT_ANON_KEY }
@@ -5290,5 +5318,6 @@ function closeSheet(){
    ============================================================ */
 render();
 </script>
+<script src="sync-engine.js"></script>
 </body>
 </html>

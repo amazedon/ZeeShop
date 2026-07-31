@@ -112,11 +112,27 @@
     <div id="save-status"></div>
 
     <div class="card">
-      <h2>💰 Pro Plan Pricing</h2>
-      <p class="subtle">Businesses see these prices when upgrading from Free to Pro inside the app.</p>
-      <div class="field"><label>Monthly price (₦)</label><input id="pro-monthly" type="number" min="0" step="1" placeholder="0"></div>
-      <div class="field"><label>Yearly price (₦)</label><input id="pro-yearly" type="number" min="0" step="1" placeholder="0"></div>
-      <button class="btn btn-primary" id="save-pricing-btn">Save Pricing</button>
+      <h2>💰 Subscription Pricing</h2>
+      <p class="subtle">Each business sees prices in whichever currency they picked at signup — everything else outside these four currencies falls back to USD.</p>
+
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:13.5px;min-width:520px;">
+          <thead>
+            <tr style="background:var(--paper-dim);">
+              <th style="text-align:left;padding:8px 10px;font-size:11px;color:var(--text-dim);text-transform:uppercase;">Currency</th>
+              <th style="text-align:left;padding:8px 10px;font-size:11px;color:var(--text-dim);text-transform:uppercase;">Pro Monthly</th>
+              <th style="text-align:left;padding:8px 10px;font-size:11px;color:var(--text-dim);text-transform:uppercase;">Pro Yearly</th>
+              <th style="text-align:left;padding:8px 10px;font-size:11px;color:var(--text-dim);text-transform:uppercase;">Boss Monthly</th>
+              <th style="text-align:left;padding:8px 10px;font-size:11px;color:var(--text-dim);text-transform:uppercase;">Boss Yearly</th>
+            </tr>
+          </thead>
+          <tbody id="pricing-tbody">
+            <!-- rows injected by loadContent() for NGN, GHS, GBP, EUR, USD -->
+          </tbody>
+        </table>
+      </div>
+
+      <button class="btn btn-primary" id="save-pricing-btn" style="margin-top:16px;">Save All Pricing</button>
       <div class="saved-tag" id="pricing-saved-tag"></div>
     </div>
 
@@ -268,7 +284,6 @@
     if(error){ showError(document.getElementById('save-status'), 'Could not load content: '+error.message); return; }
     const about = data.find(r=>r.section==='about_us') || {};
     const contact = data.find(r=>r.section==='contact_us') || {};
-    const pricing = data.find(r=>r.section==='pro_plan') || {};
     document.getElementById('about-heading').value = about.heading || '';
     document.getElementById('about-body').value = about.body || '';
     document.getElementById('contact-heading').value = contact.heading || '';
@@ -277,22 +292,55 @@
     document.getElementById('contact-whatsapp').value = contact.whatsapp || '';
     document.getElementById('contact-email').value = contact.email || '';
     document.getElementById('contact-address').value = contact.address || '';
-    document.getElementById('pro-monthly').value = pricing.amount_monthly || '';
-    document.getElementById('pro-yearly').value = pricing.amount_yearly || '';
+
+    const { data: pricingRows, error: pricingErr } = await sb.from('pricing').select('*');
+    if(pricingErr){ showError(document.getElementById('pricing-saved-tag'), 'Could not load pricing: '+pricingErr.message); return; }
+    const CURRENCIES = [
+      { code:'NGN', symbol:'₦' }, { code:'GHS', symbol:'GH₵' }, { code:'GBP', symbol:'£' },
+      { code:'EUR', symbol:'€' }, { code:'USD', symbol:'$' }
+    ];
+    const find = (plan, currency, interval) => {
+      const row = pricingRows.find(r=>r.plan===plan && r.currency===currency && r.interval===interval);
+      return row ? row.amount : 0;
+    };
+    const tbody = document.getElementById('pricing-tbody');
+    tbody.innerHTML = CURRENCIES.map(c => `
+      <tr style="border-top:1px solid var(--line);">
+        <td style="padding:8px 10px;font-weight:800;color:var(--ink);">${c.symbol} ${c.code}</td>
+        <td style="padding:8px 10px;"><input type="number" min="0" step="0.01" style="width:90px;padding:8px;border:1.5px solid var(--line);border-radius:8px;" id="price-pro-${c.code}-monthly" value="${find('pro',c.code,'monthly')}"></td>
+        <td style="padding:8px 10px;"><input type="number" min="0" step="0.01" style="width:90px;padding:8px;border:1.5px solid var(--line);border-radius:8px;" id="price-pro-${c.code}-yearly" value="${find('pro',c.code,'yearly')}"></td>
+        <td style="padding:8px 10px;"><input type="number" min="0" step="0.01" style="width:90px;padding:8px;border:1.5px solid var(--line);border-radius:8px;" id="price-boss-${c.code}-monthly" value="${find('boss',c.code,'monthly')}"></td>
+        <td style="padding:8px 10px;"><input type="number" min="0" step="0.01" style="width:90px;padding:8px;border:1.5px solid var(--line);border-radius:8px;" id="price-boss-${c.code}-yearly" value="${find('boss',c.code,'yearly')}"></td>
+      </tr>
+    `).join('');
   }
 
   document.getElementById('save-pricing-btn').addEventListener('click', async ()=>{
-    const monthly = parseFloat(document.getElementById('pro-monthly').value);
-    const yearly = parseFloat(document.getElementById('pro-yearly').value);
     const tag = document.getElementById('pricing-saved-tag');
-    if(isNaN(monthly) || isNaN(yearly) || monthly < 0 || yearly < 0){
-      tag.style.color = 'var(--red)'; tag.textContent = 'Enter valid prices for both fields.'; return;
-    }
-    const { error } = await sb.from('site_content')
-      .upsert({ section: 'pro_plan', heading: 'Zed Pro', amount_monthly: monthly, amount_yearly: yearly, updated_at: new Date().toISOString() }, { onConflict: 'section' });
+    const CURRENCIES = ['NGN','GHS','GBP','EUR','USD'];
+    const PLANS = ['pro','boss'];
+    const INTERVALS = ['monthly','yearly'];
+    const updates = [];
+    let hasInvalid = false;
+
+    PLANS.forEach(plan=>{
+      CURRENCIES.forEach(currency=>{
+        INTERVALS.forEach(interval=>{
+          const el = document.getElementById(`price-${plan}-${currency}-${interval}`);
+          const val = parseFloat(el.value);
+          if(isNaN(val) || val < 0){ hasInvalid = true; return; }
+          updates.push({ plan, currency, interval, amount: val, updated_at: new Date().toISOString() });
+        });
+      });
+    });
+
+    if(hasInvalid){ tag.style.color = 'var(--red)'; tag.textContent = 'One or more prices are invalid — please check.'; return; }
+
+    tag.style.color = 'var(--text-dim)'; tag.textContent = 'Saving…';
+    const { error } = await sb.from('pricing').upsert(updates, { onConflict: 'plan,currency,interval' });
     if(error){ tag.style.color = 'var(--red)'; tag.textContent = 'Error: '+error.message; return; }
     tag.style.color = 'var(--green)';
-    tag.textContent = 'Pricing saved — live in the app immediately.';
+    tag.textContent = 'All pricing saved — live in the app immediately.';
   });
 
   document.getElementById('save-about-btn').addEventListener('click', async ()=>{

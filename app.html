@@ -839,6 +839,7 @@ function bindForgotPasswordEvents(){
     const u = state.users.find(x=>x.id===forgotUserId);
     u.passwordHash = hash(p1);
     logAudit('password_reset', 'Password reset via recovery code');
+    if(u.role === 'master') syncPasswordToSupabaseAuth(p1);
     authMode='login'; forgotStep=1; forgotUserId=null; forgotError='';
     toast('Password reset ✅ — log in with your new password.');
     render();
@@ -1035,7 +1036,10 @@ async function completeSignupAccount(data){
     role:'master', isActive:true, canAddGoods:true });
   state.shops.push({ id:shopId, businessId:bizId, name: biz+" — Main Shop", address:'', phone, email,
     receiptFooter:'Thank you for your business!', receiptTerms:'Goods sold in good condition. No refund after payment.', auctionDiscountDefault:30 });
-  state.customerGroups.push({id:uid('grp'),businessId:bizId,name:'Retail'},{id:uid('grp'),businessId:bizId,name:'Wholesale'},{id:uid('grp'),businessId:bizId,name:'VIP'});
+  const groupRetail = {id:uid('grp'),businessId:bizId,name:'Retail'};
+  const groupWholesale = {id:uid('grp'),businessId:bizId,name:'Wholesale'};
+  const groupVip = {id:uid('grp'),businessId:bizId,name:'VIP'};
+  state.customerGroups.push(groupRetail, groupWholesale, groupVip);
   state.currentShopId = shopId;
   state.sessionUserId = userId;
   logAudit('signup','Business created: '+biz);
@@ -1062,6 +1066,9 @@ async function completeSignupAccount(data){
       enqueueSync('app_users','insert', {
         id: userId, business_id: bizId, username, email, phone,
         first_name: fn, last_name: ln, role:'master', is_active:true, can_add_goods:true
+      });
+      [groupRetail, groupWholesale, groupVip].forEach(g=>{
+        enqueueSync('customer_groups','insert', { id: g.id, business_id: g.businessId, name: g.name });
       });
     }
   }catch(e){ /* offline or Supabase error — local account still works; queue nothing yet */ }
@@ -1262,6 +1269,11 @@ function openJoinFlow(){
   const code = prompt('Enter the 6-digit code from your Owner:');
   if(!code) return;
   if(code.trim() !== state.joinCode.code){ toast('Incorrect or expired code.'); return; }
+  const limits = planLimits();
+  if(state.users.length >= limits.staff){
+    toast(`This business's plan allows up to ${limits.staff} staff. Ask the owner to upgrade.`);
+    return;
+  }
   const fn = prompt('Your first name:'); if(!fn) return;
   const ln = prompt('Your last name:') || '';
   let username = prompt('Choose a username (unique in this shop):');
@@ -1380,11 +1392,65 @@ function bindShellEvents(){
   bindRouteEvents();
 }
 
-function handleAddShop(){
+/**
+ * Keeps the owner's real Supabase Auth password in sync whenever they
+ * change it locally (Settings, or recovery-code reset). Only applies to
+ * the master/owner account — staff PINs are purely local and were never
+ * part of Supabase Auth to begin with.
+ * Best-effort: if offline, or there's no live Supabase session at this
+ * exact moment (e.g. resetting via recovery code without having logged
+ * in online recently), this silently does nothing — the local password
+ * still works fine, it just won't match what Supabase Auth has on file
+ * until the owner next logs in online with the new password... but since
+ * app.html's own login only ever checks the LOCAL hash (never Supabase's),
+ * that mismatch is invisible day-to-day. It only matters for the admin
+ * dashboard / super admin login, which uses Supabase Auth directly.
+ */
+async function syncPasswordToSupabaseAuth(newPassword){
+  if(!window.sb) return;
+  try{
+    const { data } = await window.sb.auth.getSession();
+    if(!data.session) return; // no live session right now — nothing to sync against
+    await window.sb.auth.updateUser({ password: newPassword });
+  }catch(e){ /* offline or Supabase error — local password change still stands */ }
+}
+
+/**
+ * Queues a newly-created sale, plus its line items, for sync.
+ */
+function syncSaleInsert(sale){
+  enqueueSync('sales','insert', {
+    id: sale.id, shop_id: sale.shopId, customer_id: sale.customerId || null,
+    walk_in_name: sale.walkInName, walk_in_phone: sale.walkInPhone, note: sale.note,
+    items_subtotal: sale.itemsSubtotal, discount: sale.discount, tax_amount: sale.taxAmount,
+    tax_pct: sale.taxPct, subtotal: sale.subtotal, paid_amount: sale.paidAmount,
+    balance: sale.balance, due_date: sale.dueDate || null, status: sale.status,
+    sold_by_user_id: sale.soldByUserId, receipt_sent: sale.receiptSent, date: sale.date
+  });
+  sale.items.forEach(item=>{
+    enqueueSync('sale_items','insert', {
+      id: uid('saleitem'), sale_id: sale.id, good_id: item.goodId, batch_id: item.batchId || null,
+      variant_id: item.variantId || null, variant_label: item.variantLabel, qty: item.qty,
+      price_used: item.priceUsed, note: item.note
+    });
+  });
+}
+
+function planLimits(){
   const plan = business().subscriptionPlan;
-  const limit = plan==='free'?1: (plan==='pro'?3:9999);
-  if(state.shops.length >= limit){
-    toast(`Free plan allows ${limit} shop. Upgrade to Pro for more shops.`);
+  if(plan==='boss') return { shops:Infinity, goods:Infinity, customers:Infinity, staff:Infinity };
+  if(plan==='pro') return { shops:3, goods:1000, customers:Infinity, staff:5 };
+  return { shops:1, goods:100, customers:50, staff:1 };
+}
+function planLabel(){
+  const plan = business().subscriptionPlan;
+  return plan==='boss' ? 'Boss' : plan==='pro' ? 'Pro' : 'Freemium';
+}
+
+function handleAddShop(){
+  const limits = planLimits();
+  if(state.shops.length >= limits.shops){
+    toast(`Your ${planLabel()} plan allows ${limits.shops} shop${limits.shops===1?'':'s'}. Upgrade for more shops.`);
     return;
   }
   const name = prompt('New shop name:');
@@ -1806,6 +1872,8 @@ function confirmSale(){
     status = paid>=total ? 'paid' : (paid>0?'partial':'credit');
     if(!saleCustomerId){ toast('Credit sales need a buyer selected above (not walk-in).'); return; }
   }
+  const touchedBatches = {}; // batchId -> good_id (for syncing updated qty_remaining after deduction)
+  const touchedVariants = {}; // variantId -> good_id
   const items = cart.map(c=>{
     const g = state.goods.find(x=>x.id===c.goodId);
     const price = activePrice(g);
@@ -1813,7 +1881,7 @@ function confirmSale(){
     let variantLabel = '';
     if(c.variantId){
       const v = (g.variants||[]).find(x=>x.id===c.variantId);
-      if(v){ v.qty = Math.max(0, v.qty - c.qty); variantLabel = v.label; }
+      if(v){ v.qty = Math.max(0, v.qty - c.qty); variantLabel = v.label; touchedVariants[v.id] = g.id; }
     } else {
       const batch = fifoBatch(g);
       const auctionPrice = (batch && batch.auctionActive) ? batch.auctionPrice : null;
@@ -1826,6 +1894,7 @@ function confirmSale(){
         const take = Math.min(b.qtyRemaining, remainingQty);
         b.qtyRemaining -= take;
         remainingQty -= take;
+        if(take > 0) touchedBatches[b.id] = g.id;
       }
       if(auctionPrice!=null) return {goodId:g.id, batchId, variantId:null, variantLabel:'', qty:c.qty, priceUsed:auctionPrice, note:c.note||''};
     }
@@ -1840,6 +1909,17 @@ function confirmSale(){
     createdAt: new Date().toISOString()
   };
   state.sales.push(sale);
+  syncSaleInsert(sale);
+  Object.keys(touchedBatches).forEach(batchId=>{
+    const g = state.goods.find(x=>x.id===touchedBatches[batchId]);
+    const b = g && g.batches.find(x=>x.id===batchId);
+    if(b) enqueueSync('good_batches','update', { id: b.id, qty_remaining: b.qtyRemaining });
+  });
+  Object.keys(touchedVariants).forEach(variantId=>{
+    const g = state.goods.find(x=>x.id===touchedVariants[variantId]);
+    const v = g && g.variants.find(x=>x.id===variantId);
+    if(v) enqueueSync('good_variants','update', { id: v.id, qty: v.qty });
+  });
   logAudit('sale_created', `Sale ${fmtMoney(total)} (${status})`);
   cart=[]; saleCustomerId=null; saleMode='cash'; saleWalkInName=''; saleWalkInPhone=''; saleNote=''; saleDiscount=0;
   closeSheet();
@@ -2318,6 +2398,11 @@ function syncPendingVariantsFromDOM(){
   document.querySelectorAll('.pv-qty').forEach(el=>{ const i=Number(el.dataset.idx); if(pendingVariants[i]) pendingVariants[i].qty = Number(el.value||0); });
 }
 function saveNewGood(profile){
+  const limits = planLimits();
+  if(state.goods.length >= limits.goods){
+    toast(`Your ${planLabel()} plan allows up to ${limits.goods} goods. Upgrade for more.`);
+    return;
+  }
   const name = document.getElementById('ag-name').value.trim();
   const price = Number(document.getElementById('ag-price').value||0);
   const cost = Number(document.getElementById('ag-cost').value||0);
@@ -2337,6 +2422,7 @@ function saveNewGood(profile){
     const g = { id: uid('good'), shopId: state.currentShopId, name, basePrice:price, costPrice:cost,
       emoji, groupPrices:[], barcode, reorderLevel, hasVariants:true, variants: validVariants, batches:[] };
     state.goods.push(g);
+    syncGoodInsert(g);
     logAudit('good_added', `Added ${name} with ${validVariants.length} variant(s)`);
     closeSheet(); toast('Item added ✅'); render(); return;
   }
@@ -2355,8 +2441,35 @@ function saveNewGood(profile){
     g.dimension = { value: document.getElementById('ag-dim-value').value.trim(), unit: document.getElementById('ag-dim-unit').value };
   }
   state.goods.push(g);
+  syncGoodInsert(g);
   logAudit('good_added', 'Added '+qty+' x '+name);
   closeSheet(); toast('Item added ✅'); render();
+}
+
+/**
+ * Queues a newly-created good, plus its batches or variants, for sync.
+ * Called right after a good is added locally — mirrors the same
+ * "local write first, sync catches up" pattern as everything else.
+ */
+function syncGoodInsert(g){
+  enqueueSync('goods','insert', {
+    id: g.id, shop_id: g.shopId, name: g.name, base_price: g.basePrice, cost_price: g.costPrice,
+    barcode: g.barcode || null, reorder_level: g.reorderLevel, has_variants: g.hasVariants,
+    spec: g.spec || null, spec_label: g.specLabel || null,
+    dimension_value: g.dimension ? g.dimension.value : null, dimension_unit: g.dimension ? g.dimension.unit : null
+  });
+  (g.batches||[]).forEach(b=>{
+    enqueueSync('good_batches','insert', {
+      id: b.id, good_id: g.id, batch_no: b.batchNo, qty_remaining: b.qtyRemaining,
+      expiry_date: b.expiryDate, cost_price: b.costPrice, auction_active: b.auctionActive,
+      auction_price: b.auctionPrice, auction_discount: b.auctionDiscount
+    });
+  });
+  (g.variants||[]).forEach(v=>{
+    enqueueSync('good_variants','insert', {
+      id: v.id, good_id: g.id, size: v.size || null, color: v.color || null, label: v.label, qty: v.qty
+    });
+  });
 }
 
 function openGoodDetail(gid){
@@ -2537,10 +2650,26 @@ function saveCustomerFromForm(existingId){
     const c = state.customers.find(x=>x.id===existingId);
     Object.assign(c, data);
     logAudit('customer_edited', 'Edited customer '+fullName);
+    enqueueSync('customers','update', {
+      id: c.id, group_id: c.groupId || null, full_name: c.fullName, country: c.country,
+      phone_e164: c.phoneE164, whatsapp_number: c.whatsappNumber, email: c.email,
+      notes: c.notes, consent_given: c.consentGiven
+    });
     toast('Customer updated ✅');
   } else {
+    const limits = planLimits();
+    if(state.customers.length >= limits.customers){
+      toast(`Your ${planLabel()} plan allows up to ${limits.customers} customers. Upgrade for more.`);
+      return;
+    }
     const newCust = { id: uid('cust'), businessId: business().id, address:'', createdByUserId: state.sessionUserId, ...data };
     state.customers.push(newCust);
+    enqueueSync('customers','insert', {
+      id: newCust.id, business_id: newCust.businessId, group_id: newCust.groupId || null,
+      full_name: newCust.fullName, country: newCust.country, phone_e164: newCust.phoneE164,
+      whatsapp_number: newCust.whatsappNumber, email: newCust.email, address: newCust.address,
+      notes: newCust.notes, consent_given: newCust.consentGiven, created_by_user_id: newCust.createdByUserId
+    });
     logAudit('customer_added', 'Added customer '+fullName);
     toast('Customer added ✅');
     if(route==='sale'){ saleCustomerId = newCust.id; saleWalkInName=''; saleWalkInPhone=''; }
@@ -3112,8 +3241,18 @@ function openRecordSalaryPaymentModal(userId){
     state.expenses.push({ id: expenseId, businessId: business().id, shopId: state.currentShopId,
       category: 'Staff Wages', description: `Salary — ${u.firstName} ${u.lastName}${note?' ('+note+')':''}`,
       amount, date, createdByUserId: state.sessionUserId });
-    state.salaryPayments.push({ id: uid('sal'), userId, businessId: business().id, shopId: state.currentShopId,
+    enqueueSync('expenses','insert', {
+      id: expenseId, business_id: business().id, shop_id: state.currentShopId, category: 'Staff Wages',
+      description: `Salary — ${u.firstName} ${u.lastName}${note?' ('+note+')':''}`, amount, date,
+      created_by_user_id: state.sessionUserId
+    });
+    const salaryId = uid('sal');
+    state.salaryPayments.push({ id: salaryId, userId, businessId: business().id, shopId: state.currentShopId,
       amount, date, note, recordedByUserId: state.sessionUserId, createdAt: new Date().toISOString(), linkedExpenseId: expenseId });
+    enqueueSync('salary_payments','insert', {
+      id: salaryId, business_id: business().id, shop_id: state.currentShopId, user_id: userId,
+      linked_expense_id: expenseId, amount, date, note, recorded_by_user_id: state.sessionUserId
+    });
     logAudit('salary_paid', `Paid ${fmtMoney(amount)} salary to ${u.firstName} ${u.lastName}`);
     toast('Payment recorded and added to Expenses ✅'); closeSheet(); renderEmploymentRecordView(userId);
   });
@@ -3550,6 +3689,11 @@ function bindStaffEvents(){
   }));
   const gen = document.getElementById('gen-code');
   if(gen) gen.addEventListener('click', ()=>{
+    const limits = planLimits();
+    if(state.users.length >= limits.staff){
+      toast(`Your ${planLabel()} plan allows up to ${limits.staff} staff (including you). Upgrade for more.`);
+      return;
+    }
     state.joinCode = {code:String(Math.floor(100000+Math.random()*900000)), expiresAt:Date.now()+10*60000};
     logAudit('code_generated','Generated staff join code');
     render();
@@ -3728,6 +3872,7 @@ function bindProfileEvents(){
     if(p1!==p2){ toast("Passwords don't match."); return; }
     currentUser().passwordHash = hash(p1);
     logAudit('password_changed', 'Changed own password');
+    if(currentUser().role === 'master') syncPasswordToSupabaseAuth(p1);
     toast('Password updated ✅');
     document.getElementById('pf-newpass').value=''; document.getElementById('pf-newpass2').value='';
   });
@@ -3994,6 +4139,11 @@ function launchCheckout(plan, interval, amount, currency){
     amount: amount,
     currency: currency,
     payment_options: 'card',
+    meta: {
+      business_id: business().id,
+      plan: plan,
+      interval: interval
+    },
     customer: {
       email: (u && u.email) || 'customer@zed.app',
       name: (u ? (u.firstName+' '+(u.lastName||'')) : 'Zed Customer')
@@ -4592,16 +4742,17 @@ function voidSale(saleId){
     if(!g) return;
     if(it.variantId){
       const v = (g.variants||[]).find(x=>x.id===it.variantId);
-      if(v) v.qty += remaining;
+      if(v){ v.qty += remaining; enqueueSync('good_variants','update', { id: v.id, qty: v.qty }); }
     } else {
       const batch = g.batches.find(b=>b.id===it.batchId) || g.batches[0];
-      if(batch) batch.qtyRemaining += remaining;
+      if(batch){ batch.qtyRemaining += remaining; enqueueSync('good_batches','update', { id: batch.id, qty_remaining: batch.qtyRemaining }); }
     }
   });
   s.status = 'voided';
   s.voidReason = reason;
   s.voidedAt = new Date().toISOString();
   s.voidedBy = state.sessionUserId;
+  enqueueSync('sales','update', { id: s.id, status: 'voided', balance: s.balance });
   logAudit('sale_voided', `Voided sale #${s.id.slice(-6).toUpperCase()} (${fmtMoney(s.subtotal)}): ${reason||'no reason given'}`);
   toast('Sale voided ✅'); closeSheet(); render();
 }
@@ -4710,9 +4861,16 @@ function openAddExpenseModal(){
   document.getElementById('save-expense-btn').addEventListener('click', ()=>{
     const amount = Number(document.getElementById('exp-amount').value||0);
     if(amount<=0){ toast('Enter an amount.'); return; }
-    state.expenses.push({ id: uid('exp'), businessId: business().id, shopId: state.currentShopId,
-      category: document.getElementById('exp-category').value, description: document.getElementById('exp-desc').value.trim(),
-      amount, date: document.getElementById('exp-date').value || todayISO(), createdByUserId: state.sessionUserId });
+    const expenseId = uid('exp');
+    const category = document.getElementById('exp-category').value;
+    const description = document.getElementById('exp-desc').value.trim();
+    const date = document.getElementById('exp-date').value || todayISO();
+    state.expenses.push({ id: expenseId, businessId: business().id, shopId: state.currentShopId,
+      category, description, amount, date, createdByUserId: state.sessionUserId });
+    enqueueSync('expenses','insert', {
+      id: expenseId, business_id: business().id, shop_id: state.currentShopId,
+      category, description, amount, date, created_by_user_id: state.sessionUserId
+    });
     logAudit('expense_added', 'Logged expense '+fmtMoney(amount));
     toast('Expense saved ✅'); closeSheet(); render();
   });
@@ -5285,6 +5443,12 @@ function openAddSupplierModal(){
       phone: phoneRaw ? '+'+toIntlDigits(phoneRaw, country) : '',
       suppliesWhat: document.getElementById('sup-supplies').value.trim(),
       notes: document.getElementById('sup-notes').value.trim(), createdByUserId: state.sessionUserId });
+    enqueueSync('suppliers','insert', {
+      id: supplierId, business_id: business().id, name, country,
+      phone: phoneRaw ? '+'+toIntlDigits(phoneRaw, country) : '',
+      supplies_what: document.getElementById('sup-supplies').value.trim(),
+      notes: document.getElementById('sup-notes').value.trim(), created_by_user_id: state.sessionUserId
+    });
     logAudit('supplier_added', 'Added supplier '+name);
 
     // Optional first purchase, entered right in this same form.
@@ -5302,18 +5466,33 @@ function openAddSupplierModal(){
           emoji:'🛍️', groupPrices:[], barcode:null, reorderLevel:5,
           batches:[{id:uid('batch'), qtyRemaining:qty, expiryDate:expiry, costPrice:cost, batchNo:'B'+Math.floor(Math.random()*9000+1000), auctionActive:false, auctionPrice:null, auctionDiscount:null}] };
         state.goods.push(g);
+        syncGoodInsert(g);
         goodId = g.id; itemName = gName;
       } else {
         const g = state.goods.find(x=>x.id===itemSel.value);
-        g.batches.push({ id:uid('batch'), qtyRemaining:qty, expiryDate:expiry, costPrice:cost,
-          batchNo:'B'+Math.floor(Math.random()*9000+1000), auctionActive:false, auctionPrice:null, auctionDiscount:null });
+        const newBatch = { id:uid('batch'), qtyRemaining:qty, expiryDate:expiry, costPrice:cost,
+          batchNo:'B'+Math.floor(Math.random()*9000+1000), auctionActive:false, auctionPrice:null, auctionDiscount:null };
+        g.batches.push(newBatch);
         g.costPrice = cost;
+        enqueueSync('good_batches','insert', {
+          id: newBatch.id, good_id: g.id, batch_no: newBatch.batchNo, qty_remaining: newBatch.qtyRemaining,
+          expiry_date: newBatch.expiryDate, cost_price: newBatch.costPrice,
+          auction_active: newBatch.auctionActive, auction_price: newBatch.auctionPrice, auction_discount: newBatch.auctionDiscount
+        });
+        enqueueSync('goods','update', { id: g.id, cost_price: g.costPrice });
         goodId = g.id; itemName = g.name;
       }
       const total = qty*cost;
-      state.supplierPurchases.push({ id: uid('sp'), businessId: business().id, supplierId, shopId: state.currentShopId,
+      const purchaseId = uid('sp');
+      state.supplierPurchases.push({ id: purchaseId, businessId: business().id, supplierId, shopId: state.currentShopId,
         goodId, itemName, qty, costPrice: cost, totalAmount: total, paidAmount: Math.min(paid,total),
         balance: Math.max(0, total-paid), date: todayISO(), createdByUserId: state.sessionUserId, createdAt: new Date().toISOString() });
+      enqueueSync('supplier_purchases','insert', {
+        id: purchaseId, business_id: business().id, supplier_id: supplierId, shop_id: state.currentShopId,
+        good_id: goodId, item_name: itemName, qty, cost_price: cost, total_amount: total,
+        paid_amount: Math.min(paid,total), balance: Math.max(0, total-paid), date: todayISO(),
+        created_by_user_id: state.sessionUserId
+      });
       logAudit('supplier_restock', `Restocked ${qty} × ${itemName} from ${name} (${fmtMoney(total)})`);
       toast('Supplier and stock added ✅');
     } else {
@@ -5411,18 +5590,33 @@ function openLogRestockModal(supplierId){
         emoji:'🛍️', groupPrices:[], barcode:null, reorderLevel:5,
         batches:[{id:uid('batch'), qtyRemaining:qty, expiryDate:expiry, costPrice:cost, batchNo:'B'+Math.floor(Math.random()*9000+1000), auctionActive:false, auctionPrice:null, auctionDiscount:null}] };
       state.goods.push(g);
+      syncGoodInsert(g);
       goodId = g.id; itemName = name;
     } else {
       const g = state.goods.find(x=>x.id===itemSel.value);
-      g.batches.push({ id:uid('batch'), qtyRemaining:qty, expiryDate:expiry, costPrice:cost,
-        batchNo:'B'+Math.floor(Math.random()*9000+1000), auctionActive:false, auctionPrice:null, auctionDiscount:null });
+      const newBatch = { id:uid('batch'), qtyRemaining:qty, expiryDate:expiry, costPrice:cost,
+        batchNo:'B'+Math.floor(Math.random()*9000+1000), auctionActive:false, auctionPrice:null, auctionDiscount:null };
+      g.batches.push(newBatch);
       g.costPrice = cost; // reflect latest purchase cost going forward
+      enqueueSync('good_batches','insert', {
+        id: newBatch.id, good_id: g.id, batch_no: newBatch.batchNo, qty_remaining: newBatch.qtyRemaining,
+        expiry_date: newBatch.expiryDate, cost_price: newBatch.costPrice,
+        auction_active: newBatch.auctionActive, auction_price: newBatch.auctionPrice, auction_discount: newBatch.auctionDiscount
+      });
+      enqueueSync('goods','update', { id: g.id, cost_price: g.costPrice });
       goodId = g.id; itemName = g.name;
     }
     const total = qty*cost;
-    state.supplierPurchases.push({ id: uid('sp'), businessId: business().id, supplierId, shopId: state.currentShopId,
+    const purchaseId = uid('sp');
+    state.supplierPurchases.push({ id: purchaseId, businessId: business().id, supplierId, shopId: state.currentShopId,
       goodId, itemName, qty, costPrice: cost, totalAmount: total, paidAmount: Math.min(paid,total),
       balance: Math.max(0, total-paid), date: todayISO(), createdByUserId: state.sessionUserId, createdAt: new Date().toISOString() });
+    enqueueSync('supplier_purchases','insert', {
+      id: purchaseId, business_id: business().id, supplier_id: supplierId, shop_id: state.currentShopId,
+      good_id: goodId, item_name: itemName, qty, cost_price: cost, total_amount: total,
+      paid_amount: Math.min(paid,total), balance: Math.max(0, total-paid), date: todayISO(),
+      created_by_user_id: state.sessionUserId
+    });
     logAudit('supplier_restock', `Restocked ${qty} × ${itemName} from supplier (${fmtMoney(total)})`);
     toast('Restock logged and stock added ✅'); closeSheet(); render();
   });

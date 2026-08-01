@@ -94,7 +94,7 @@
       <div class="table-wrap">
         <table id="biz-table">
           <thead>
-            <tr><th>Business</th><th>Country</th><th>Plan</th><th>Staff</th><th>Signed Up</th></tr>
+            <tr><th>Business</th><th>Country</th><th>Plan</th><th>Staff</th><th>Signed Up</th><th>Actions</th></tr>
           </thead>
           <tbody id="biz-tbody"></tbody>
         </table>
@@ -182,7 +182,9 @@
 
     businesses.forEach(b=>{
       const plan = b.subscription_plan || 'free';
-      const planBadge = plan === 'pro'
+      const planBadge = plan === 'boss'
+        ? `<span class="plan-badge plan-pro">Boss</span>`
+        : plan === 'pro'
         ? `<span class="plan-badge plan-pro">Pro</span>`
         : `<span class="plan-badge plan-free">Free</span>`;
       const signedUp = b.created_at ? new Date(b.created_at).toLocaleDateString() : '—';
@@ -193,8 +195,43 @@
         <td>${planBadge}</td>
         <td>${staffCounts[b.id] || 0}</td>
         <td>${signedUp}</td>
+        <td>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <select data-plan-select="${b.id}" style="padding:6px 8px;border:1.5px solid var(--line);border-radius:8px;font-size:12.5px;">
+              <option value="free" ${plan==='free'?'selected':''}>Free</option>
+              <option value="pro" ${plan==='pro'?'selected':''}>Pro</option>
+              <option value="boss" ${plan==='boss'?'selected':''}>Boss</option>
+            </select>
+            <button data-grant-btn="${b.id}" style="padding:6px 10px;border-radius:8px;border:none;background:var(--marigold);color:var(--ink);font-weight:800;font-size:12px;cursor:pointer;">Set</button>
+          </div>
+          <div style="font-size:10.5px;color:var(--text-dim);margin-top:3px;" id="grant-status-${b.id}"></div>
+        </td>
       `;
       tbody.appendChild(row);
+    });
+
+    document.querySelectorAll('[data-grant-btn]').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const bizId = btn.dataset.grantBtn;
+        const select = document.querySelector(`[data-plan-select="${bizId}"]`);
+        const newPlan = select.value;
+        const statusEl = document.getElementById(`grant-status-${bizId}`);
+        statusEl.style.color = 'var(--text-dim)';
+        statusEl.textContent = 'Saving…';
+        // Manual grants set no expiry — they stay in effect until changed
+        // here again, unlike a real payment which sets a real expiry date.
+        const { error } = await sb.from('businesses')
+          .update({ subscription_plan: newPlan, subscription_expires_at: null })
+          .eq('id', bizId);
+        if(error){
+          statusEl.style.color = 'var(--red)';
+          statusEl.textContent = 'Error: '+error.message;
+          return;
+        }
+        statusEl.style.color = 'var(--green)';
+        statusEl.textContent = 'Updated — no expiry.';
+        setTimeout(()=>{ statusEl.textContent = ''; }, 3000);
+      });
     });
   }
 

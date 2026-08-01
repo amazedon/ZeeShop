@@ -1436,6 +1436,14 @@ function syncSaleInsert(sale){
   });
 }
 
+function syncRecordOnlyStaffInsert(p){
+  enqueueSync('record_only_staff','insert', {
+    id: p.id, business_id: p.businessId, first_name: p.firstName, last_name: p.lastName,
+    phone: p.phone, email: p.email, notes: p.notes, is_active: p.isActive,
+    created_by_user_id: p.createdByUserId
+  });
+}
+
 function planLimits(){
   const plan = business().subscriptionPlan;
   if(plan==='boss') return { shops:Infinity, goods:Infinity, customers:Infinity, staff:Infinity };
@@ -1950,8 +1958,13 @@ function openReceiptSheet(saleId){
 
   const markSent = (type)=>{
     s.receiptSent = true;
-    state.communicationLog.unshift({id:uid('log'), businessId:business().id, customerId:s.customerId,
+    const logId = uid('log');
+    state.communicationLog.unshift({id:logId, businessId:business().id, customerId:s.customerId,
       userId:state.sessionUserId, type, timestamp:new Date().toISOString()});
+    enqueueSync('communication_log','insert', {
+      id: logId, business_id: business().id, shop_id: s.shopId || null, customer_id: s.customerId || null,
+      channel: type, message: ''
+    });
     save();
   };
   document.getElementById('share-receipt-img').addEventListener('click', ()=>{
@@ -2750,7 +2763,12 @@ function bindCreditEvents(){
   document.querySelectorAll('[data-filter]').forEach(b=>b.addEventListener('click', ()=>{ creditFilter=b.dataset.filter; refreshMain(); }));
   document.querySelectorAll('[data-remind]').forEach(a=>a.addEventListener('click', ()=>{
     const s = state.sales.find(x=>x.id===a.dataset.remind);
-    state.communicationLog.unshift({id:uid('log'),businessId:business().id,customerId:s.customerId,userId:state.sessionUserId,type:'reminder',timestamp:new Date().toISOString()});
+    const logId2 = uid('log');
+    state.communicationLog.unshift({id:logId2,businessId:business().id,customerId:s.customerId,userId:state.sessionUserId,type:'reminder',timestamp:new Date().toISOString()});
+    enqueueSync('communication_log','insert', {
+      id: logId2, business_id: business().id, shop_id: s.shopId || null, customer_id: s.customerId || null,
+      channel: 'reminder', message: ''
+    });
     save();
   }));
   document.querySelectorAll('[data-mark-paid]').forEach(b=>b.addEventListener('click', ()=>{
@@ -3105,11 +3123,19 @@ function openEmploymentSetupForm(userId){
       notes: document.getElementById('er-notes').value.trim()
     };
     const now = new Date().toISOString();
+    const empId = uid('emp');
     state.employmentRecords.push({
-      id: uid('emp'), userId, businessId: business().id,
+      id: empId, userId, businessId: business().id,
       ...fields,
       original: { ...fields, createdAt: now, createdBy: state.sessionUserId },
       history: []
+    });
+    enqueueSync('employment_records','insert', {
+      id: empId, business_id: business().id, user_id: userId,
+      employment_type: fields.employmentType, resumption_date: fields.resumptionDate,
+      salary_amount: fields.salaryAmount, salary_frequency: fields.salaryFrequency,
+      settlement_date: fields.settlementDate, settlement_terms: fields.settlementTerms,
+      notes: fields.notes, created_by_user_id: state.sessionUserId
     });
     logAudit('employment_record_created', `Created employment record for ${u.firstName} ${u.lastName}`);
     toast('Employment record saved ✅'); closeSheet(); renderEmploymentRecordView(userId);
@@ -3570,6 +3596,7 @@ function openOfferLetterPreview(offer){
       phone: offer.phone ? '+'+toIntlDigits(offer.phone) : '', email: offer.email,
       notes: 'Offered role: '+offer.role, isActive: true, createdByUserId: state.sessionUserId, createdAt: new Date().toISOString() };
     state.recordOnlyStaff.push(p);
+    syncRecordOnlyStaffInsert(p);
     logAudit('recordonly_added', 'Added '+offer.firstName+' '+offer.lastName+' after accepting offer (no app account)');
     toast('Person added — set up their Employment Record when ready ✅');
     closeSheet(); render();
@@ -3597,6 +3624,7 @@ function openAddRecordOnlyPersonModal(){
       notes: document.getElementById('ro-notes').value.trim(),
       isActive: true, createdByUserId: state.sessionUserId, createdAt: new Date().toISOString() };
     state.recordOnlyStaff.push(p);
+    syncRecordOnlyStaffInsert(p);
     logAudit('recordonly_added', 'Added '+fn+' '+ln+' (no app account)');
     toast('Person added ✅'); closeSheet(); render();
   });
@@ -4326,11 +4354,17 @@ function saveNoteFromForm(existingId){
   if(existingId){
     const n = state.shopNotes.find(x=>x.id===existingId);
     n.title = title; n.text = text; n.updatedAt = new Date().toISOString();
+    enqueueSync('shop_notes','update', { id: n.id, title: n.title, text: n.text, updated_at: n.updatedAt });
     logAudit('note_edited', 'Edited note: '+title);
     toast('Note updated ✅');
   } else {
-    state.shopNotes.push({ id: uid('note'), businessId: business().id, shopId: state.currentShopId,
+    const noteId = uid('note');
+    state.shopNotes.push({ id: noteId, businessId: business().id, shopId: state.currentShopId,
       authorUserId: state.sessionUserId, title, text, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+    enqueueSync('shop_notes','insert', {
+      id: noteId, business_id: business().id, shop_id: state.currentShopId,
+      author_user_id: state.sessionUserId, title, text
+    });
     logAudit('note_added', 'Added note: '+title);
     toast('Note saved ✅');
   }
@@ -4339,6 +4373,7 @@ function saveNoteFromForm(existingId){
 function deleteNote(id){
   if(!confirm('Delete this note? This cannot be undone.')) return;
   state.shopNotes = state.shopNotes.filter(x=>x.id!==id);
+  enqueueSync('shop_notes','delete', { id });
   logAudit('note_deleted', 'Deleted a note');
   toast('Note deleted');
   render();
@@ -5058,8 +5093,13 @@ function openAddRoomModal(){
     const roomType = document.getElementById('rm-type').value.trim();
     const rate = Number(document.getElementById('rm-rate').value||0);
     if(!name || rate<=0){ toast('Enter a room name and a rate per night.'); return; }
-    state.rooms.push({ id: uid('room'), businessId: business().id, shopId: state.currentShopId,
+    const roomId = uid('room');
+    state.rooms.push({ id: roomId, businessId: business().id, shopId: state.currentShopId,
       name, roomType, ratePerNight: rate, createdAt: new Date().toISOString() });
+    enqueueSync('rooms','insert', {
+      id: roomId, business_id: business().id, shop_id: state.currentShopId,
+      name, room_type: roomType, rate_per_night: rate
+    });
     logAudit('room_added', `Added room ${name} (${fmtMoney(rate)}/night)`);
     toast('Room added ✅'); closeSheet(); render();
   });
@@ -5114,6 +5154,7 @@ function openRoomDetail(roomId){
     if(amt<=0) return;
     b.paidAmount += amt;
     b.balance = Math.max(0, b.totalAmount - b.paidAmount);
+    enqueueSync('lodging_bookings','update', { id: b.id, paid_amount: b.paidAmount, balance: b.balance });
     logAudit('lodging_payment', `${escapeHtml(b.guestName)} paid ${fmtMoney(amt)} for ${r.name}`);
     toast('Payment recorded ✅'); openRoomDetail(roomId);
   });
@@ -5122,6 +5163,7 @@ function openRoomDetail(roomId){
     if(b.balance>0 && !confirm(`This guest still owes ${fmtMoney(b.balance)}. Check out anyway?`)) return;
     b.status = 'checked_out';
     b.checkedOutAt = new Date().toISOString();
+    enqueueSync('lodging_bookings','update', { id: b.id, status: 'checked_out' });
     logAudit('lodging_checkout', `Checked out ${escapeHtml(b.guestName)} from ${r.name}`);
     toast('Guest checked out ✅'); closeSheet(); render();
   });
@@ -5198,12 +5240,22 @@ function openCheckInModal(roomId){
     if(new Date(checkOut)<=new Date(checkIn)){ toast('Check-out date must be after check-in date.'); return; }
     const nights = lodgingNights(checkIn, checkOut);
     const total = nights*rate;
-    state.lodgingBookings.push({ id: uid('stay'), businessId: business().id, shopId: state.currentShopId,
+    const stayId = uid('stay');
+    state.lodgingBookings.push({ id: stayId, businessId: business().id, shopId: state.currentShopId,
       roomId, guestName, guestPhone, checkIn, checkOut, nights, ratePerNight: rate,
       totalAmount: total, paidAmount: Math.min(paid,total), balance: Math.max(0,total-paid),
       idType, idNumber, address, comingFrom, kinName, kinPhone, plateNumber,
       numGuests: numGuests>0?numGuests:1, purpose,
       status:'active', createdByUserId: state.sessionUserId, createdAt: new Date().toISOString() });
+    enqueueSync('lodging_bookings','insert', {
+      id: stayId, business_id: business().id, shop_id: state.currentShopId, room_id: roomId,
+      guest_name: guestName, guest_phone: guestPhone, check_in: checkIn, check_out: checkOut,
+      nights, rate_per_night: rate, total_amount: total, paid_amount: Math.min(paid,total),
+      balance: Math.max(0,total-paid), status: 'active',
+      id_type: idType, id_number: idNumber, address, coming_from: comingFrom,
+      kin_name: kinName, kin_phone: kinPhone, plate_number: plateNumber,
+      num_guests: numGuests>0?numGuests:1, purpose, created_by_user_id: state.sessionUserId
+    });
     logAudit('lodging_checkin', `Checked in ${guestName} to ${r.name} (${nights} night(s), ${fmtMoney(total)})`);
     toast('Guest checked in ✅'); closeSheet(); render();
   });

@@ -940,7 +940,7 @@ function bindAuthEvents(){
     // the owner just experienced changes.
     if(u.email){
       window.sb.auth.signInWithPassword({ email: u.email, password: pass })
-        .then(({ error })=>{ if(!error) flushSyncQueue(); })
+        .then(({ error })=>{ if(!error){ flushSyncQueue(); pullSync(); } })
         .catch(()=>{});
     }
   });
@@ -1065,7 +1065,8 @@ async function completeSignupAccount(data){
       });
       enqueueSync('app_users','insert', {
         id: userId, business_id: bizId, username, email, phone,
-        first_name: fn, last_name: ln, role:'master', is_active:true, can_add_goods:true
+        first_name: fn, last_name: ln, role:'master', is_active:true, can_add_goods:true,
+        password_hash: hash(pass)
       });
       [groupRetail, groupWholesale, groupVip].forEach(g=>{
         enqueueSync('customer_groups','insert', { id: g.id, business_id: g.businessId, name: g.name });
@@ -1286,6 +1287,11 @@ function openJoinFlow(){
   const u = { id:uid('user'), businessId:business().id, username, email:null, phone, firstName:fn, lastName:ln,
     pinHash:hash(pin), pinLength:pin.length, role:'staff', isActive:true, canAddGoods:false };
   state.users.push(u);
+  enqueueSync('app_users','insert', {
+    id: u.id, business_id: u.businessId, username: u.username, email: u.email, phone: u.phone,
+    first_name: u.firstName, last_name: u.lastName, role: u.role, is_active: u.isActive, can_add_goods: u.canAddGoods,
+    pin_hash: u.pinHash, pin_length: u.pinLength
+  });
   state.joinCode = null;
   logAudit('staff_joined', fn+' '+ln+' joined as staff');
   toast('Welcome to the team, '+fn+'!');
@@ -1444,14 +1450,63 @@ function syncRecordOnlyStaffInsert(p){
   });
 }
 
+/**
+ * Returns the plan that should actually be enforced right now — this is
+ * what makes an expiry date mean something. A business stays on its paid
+ * plan as long as either:
+ *   - subscriptionExpiresAt is null (a manual grant from the Super Admin
+ *     panel, which never expires), or
+ *   - subscriptionExpiresAt is still in the future
+ * Once expired, this quietly falls back to 'free' for every limit check
+ * below — no auto-charge happens, the business just loses paid features
+ * until they renew from the Plans screen.
+ */
+/**
+ * Shows nothing for Free plan businesses, or paid businesses with plenty
+ * of time left. Shows a warning banner starting 5 days before expiry,
+ * and a stronger one once it's actually expired (no auto-charge happens
+ * either way — this is purely informational, prompting a manual renewal).
+ */
+function subscriptionReminderBanner(){
+  const b = business();
+  if(!b || b.subscriptionPlan === 'free' || !b.subscriptionPlan) return '';
+  if(!b.subscriptionExpiresAt) return ''; // manual grant — never expires, nothing to remind about
+  const expires = new Date(b.subscriptionExpiresAt);
+  const now = new Date();
+  const daysLeft = Math.ceil((expires - now) / (1000*60*60*24));
+  const planName = b.subscriptionPlan === 'boss' ? 'Boss' : 'Pro';
+
+  if(daysLeft <= 0){
+    return `<div class="card" style="border-color:var(--red);background:var(--red-bg);margin-bottom:14px;cursor:pointer;" onclick="openPlansSheet()">
+      <b style="color:var(--red);">Your ${planName} plan expired ${expires.toLocaleDateString()}</b>
+      <div class="subtle">You're now on Freemium limits. Tap to renew.</div>
+    </div>`;
+  }
+  if(daysLeft <= 5){
+    return `<div class="card" style="border-color:var(--marigold-dark);background:#FFF7E8;margin-bottom:14px;cursor:pointer;" onclick="openPlansSheet()">
+      <b style="color:var(--marigold-dark);">Your ${planName} plan expires in ${daysLeft} day${daysLeft===1?'':'s'}</b>
+      <div class="subtle">Renews ${expires.toLocaleDateString()} — tap to renew now.</div>
+    </div>`;
+  }
+  return '';
+}
+
+function effectivePlan(){
+  const b = business();
+  if(!b) return 'free';
+  if(b.subscriptionPlan === 'free' || !b.subscriptionPlan) return 'free';
+  if(!b.subscriptionExpiresAt) return b.subscriptionPlan; // manual grant — no expiry
+  return new Date(b.subscriptionExpiresAt) > new Date() ? b.subscriptionPlan : 'free';
+}
+
 function planLimits(){
-  const plan = business().subscriptionPlan;
+  const plan = effectivePlan();
   if(plan==='boss') return { shops:Infinity, goods:Infinity, customers:Infinity, staff:Infinity };
   if(plan==='pro') return { shops:3, goods:1000, customers:Infinity, staff:5 };
   return { shops:1, goods:100, customers:50, staff:1 };
 }
 function planLabel(){
-  const plan = business().subscriptionPlan;
+  const plan = effectivePlan();
   return plan==='boss' ? 'Boss' : plan==='pro' ? 'Pro' : 'Freemium';
 }
 
@@ -1498,6 +1553,7 @@ function screenDashboard(){
 
   return `
     <h2 class="screen-title">${greeting()}, ${u.firstName} 👋</h2>
+    ${isMaster() ? subscriptionReminderBanner() : ''}
     <p class="subtle" style="margin-bottom:14px;">${currentShop()?.name} · ${fmtDate(todayISO())}</p>
 
     <div class="stat-grid">
@@ -3940,7 +3996,11 @@ function screenSettings(){
       <div class="t1" style="margin-bottom:10px;">Business</div>
       <div class="t2">${b.name}</div>
       <div class="t2">${b.country} · ${b.currency}</div>
-      <div class="t2" style="margin-top:6px;">Plan: <b style="color:var(--marigold-dark);text-transform:capitalize;">${b.subscriptionPlan}</b></div>
+      <div class="t2" style="margin-top:6px;">Plan: <b style="color:var(--marigold-dark);text-transform:capitalize;">${effectivePlan()}</b></div>
+      ${b.autoRenewEnabled ? `
+        <div class="t2" style="margin-top:6px;color:var(--green);">🔄 Auto-renewal is ON (${b.autoRenewPlan==='boss'?'Boss':'Pro'}, ${b.autoRenewInterval})</div>
+        ${isMaster()?`<button class="btn btn-outline btn-sm" id="disable-autorenew" style="margin-top:8px;">Turn Off Auto-Renewal</button>`:''}
+      ` : ''}
       ${isMaster()?`<button class="btn btn-outline btn-sm" id="upgrade-plan" style="margin-top:10px;">View Plans</button>`:''}
     </div>
     ${isMaster()?`
@@ -4032,6 +4092,8 @@ function bindSettingsEvents(){
   if(lock) lock.addEventListener('click', ()=>{ state.sessionUserId=null; render(); });
   const upg = document.getElementById('upgrade-plan');
   if(upg) upg.addEventListener('click', ()=>openPlansSheet());
+  const disAR = document.getElementById('disable-autorenew');
+  if(disAR) disAR.addEventListener('click', ()=>disableAutoRenew());
   const saveBT = document.getElementById('save-biztype');
   if(saveBT) saveBT.addEventListener('click', ()=>{
     business().businessType = readBizTypeValue('set-biztype');
@@ -4106,26 +4168,29 @@ function payButtonHtml(plan, interval, amount, symbol, currency){
 
 async function openPlansSheet(){
   const b = business();
+  const current = effectivePlan();
+  const isExpiredPaid = b.subscriptionPlan !== 'free' && b.subscriptionExpiresAt && new Date(b.subscriptionExpiresAt) <= new Date();
   const pricing = await fetchPricingForBusiness();
   const sym = pricing ? pricing.symbol : '';
   const ccy = pricing ? pricing.currency : 'USD';
 
   openSheet(`
     <div class="sheet-head"><h3>Plans</h3><button class="close-x" id="sheet-close">✕</button></div>
+    ${isExpiredPaid ? `<div class="card" style="border-color:var(--red);background:var(--red-bg);"><b style="color:var(--red);">Your ${b.subscriptionPlan==='boss'?'Boss':'Pro'} plan expired ${new Date(b.subscriptionExpiresAt).toLocaleDateString()}.</b><br><span class="subtle">You're currently on Freemium limits. Renew below to restore access.</span></div>` : ''}
 
-    <div class="card" style="border-color:${b.subscriptionPlan==='free'?'var(--marigold-dark)':'var(--line)'};">
+    <div class="card" style="border-color:${current==='free'?'var(--marigold-dark)':'var(--line)'};">
       <div style="display:flex;justify-content:space-between;align-items:center;">
         <b>Freemium</b><span class="subtle">Free forever</span>
       </div>
       <ul style="margin:8px 0 10px;padding-left:18px;font-size:12.5px;color:var(--text-dim);">
         <li>1 Shop</li><li>100 Goods</li><li>50 Customers</li><li>1 Staff</li>
       </ul>
-      ${b.subscriptionPlan==='free' ? `<button class="btn btn-outline btn-sm" disabled>Current Plan</button>` : ''}
+      ${current==='free' ? `<button class="btn btn-outline btn-sm" disabled>Current Plan</button>` : ''}
     </div>
 
-    <div class="card" style="border-color:${b.subscriptionPlan==='pro'?'var(--marigold-dark)':'var(--line)'};">
+    <div class="card" style="border-color:${current==='pro'?'var(--marigold-dark)':'var(--line)'};">
       <div style="display:flex;justify-content:space-between;align-items:center;">
-        <b>Pro</b>${b.subscriptionPlan==='pro'?'<span class="subtle">Current Plan</span>':''}
+        <b>Pro</b>${current==='pro'?'<span class="subtle">Current Plan</span>':''}
       </div>
       <ul style="margin:8px 0 10px;padding-left:18px;font-size:12.5px;color:var(--text-dim);">
         <li>3 Shops</li><li>1,000 Goods</li><li>5 Staff</li><li>Profit Reports</li><li>SMS/Email templates</li><li>Cloud Backup</li>
@@ -4136,9 +4201,9 @@ async function openPlansSheet(){
       </div>
     </div>
 
-    <div class="card" style="border-color:${b.subscriptionPlan==='boss'?'var(--marigold-dark)':'var(--line)'};">
+    <div class="card" style="border-color:${current==='boss'?'var(--marigold-dark)':'var(--line)'};">
       <div style="display:flex;justify-content:space-between;align-items:center;">
-        <b>Boss</b>${b.subscriptionPlan==='boss'?'<span class="subtle">Current Plan</span>':''}
+        <b>Boss</b>${current==='boss'?'<span class="subtle">Current Plan</span>':''}
       </div>
       <ul style="margin:8px 0 10px;padding-left:18px;font-size:12.5px;color:var(--text-dim);">
         <li>Unlimited Shops & Goods</li><li>Market Price Data</li><li>Multi-currency P&L</li><li>Priority Support</li>
@@ -4149,7 +4214,7 @@ async function openPlansSheet(){
       </div>
     </div>
 
-    <p class="subtle">Prices shown in ${ccy}. Payments are processed securely by Flutterwave.${b.subscriptionExpiresAt ? ' Current plan renews/expires '+new Date(b.subscriptionExpiresAt).toLocaleDateString()+'.' : ''}</p>
+    <p class="subtle">Prices shown in ${ccy}. Payments are processed securely by Flutterwave.${(b.subscriptionExpiresAt && !isExpiredPaid) ? ' Current plan renews/expires '+new Date(b.subscriptionExpiresAt).toLocaleDateString()+'.' : ''}</p>
   `);
 
   document.querySelectorAll('[data-pay-plan]').forEach(btn=>btn.addEventListener('click', ()=>{
@@ -4191,7 +4256,76 @@ function launchCheckout(plan, interval, amount, currency){
   });
 }
 
-async function verifyAndApplyPayment(transactionId, plan, interval, amount, currency){
+/**
+ * Shown right after a successful payment, only if Flutterwave tokenized
+ * the card during checkout. Purely optional — declining just leaves the
+ * business on manual renewal, exactly as before.
+ */
+function offerAutoRenewOptIn(result, plan, interval, accessToken){
+  openSheet(`
+    <div class="sheet-head"><h3>Enable Auto-Renewal?</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <p class="subtle">Save this card to automatically renew your ${plan==='boss'?'Boss':'Pro'} plan (${interval}) when it expires — no manual payment needed each time. You can turn this off anytime from Settings.</p>
+    <div style="display:flex;gap:10px;margin-top:14px;">
+      <button class="btn btn-outline btn-sm" id="autorenew-decline" style="flex:1;">Not now</button>
+      <button class="btn btn-dark btn-sm" id="autorenew-accept" style="flex:1;">Enable Auto-Renewal</button>
+    </div>
+  `);
+  document.getElementById('autorenew-decline').addEventListener('click', closeSheet);
+  document.getElementById('autorenew-accept').addEventListener('click', async ()=>{
+    await saveAutoRenewCard(result, plan, interval, accessToken);
+  });
+}
+
+async function saveAutoRenewCard(result, plan, interval, accessToken){
+  try{
+    const headers = { 'Content-Type':'application/json', 'Authorization':'Bearer '+accessToken, 'apikey': SITE_CONTENT_ANON_KEY, 'Prefer':'return=minimal,resolution=merge-duplicates' };
+    await fetch(`${SITE_CONTENT_URL}/rest/v1/saved_payment_methods`, {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        business_id: business().id, flw_token: result.card_token, card_last4: result.card_last4,
+        card_type: result.card_type, consent_given: true, consent_at: new Date().toISOString(), is_active: true
+      })
+    });
+    await fetch(`${SITE_CONTENT_URL}/rest/v1/businesses?id=eq.${business().id}`, {
+      method: 'PATCH', headers: { ...headers, 'Prefer':'return=minimal' },
+      body: JSON.stringify({ auto_renew_enabled: true, auto_renew_plan: plan, auto_renew_interval: interval })
+    });
+    business().autoRenewEnabled = true;
+    business().autoRenewPlan = plan;
+    business().autoRenewInterval = interval;
+    closeSheet(); render();
+    toast('Auto-renewal enabled ✅');
+  }catch(e){
+    toast('Could not enable auto-renewal — you can try again from Settings.');
+  }
+}
+
+/**
+ * Turns off auto-renewal and deactivates the saved card — called from
+ * Settings. Deliberately deactivates rather than deletes the card row,
+ * so auto_renewal_log entries keep working, but is_active:false means
+ * process-auto-renewals will never charge it again unless they opt in fresh.
+ */
+async function disableAutoRenew(){
+  if(!confirm('Turn off auto-renewal? Your plan will need to be renewed manually going forward.')) return;
+  try{
+    const { data: sessionData } = await window.sb.auth.getSession();
+    const accessToken = sessionData.session ? sessionData.session.access_token : null;
+    if(!accessToken){ toast('You need internet and to be logged in online to change this.'); return; }
+    const headers = { 'Content-Type':'application/json', 'Authorization':'Bearer '+accessToken, 'apikey': SITE_CONTENT_ANON_KEY, 'Prefer':'return=minimal' };
+    await fetch(`${SITE_CONTENT_URL}/rest/v1/saved_payment_methods?business_id=eq.${business().id}`, {
+      method: 'PATCH', headers, body: JSON.stringify({ is_active: false })
+    });
+    await fetch(`${SITE_CONTENT_URL}/rest/v1/businesses?id=eq.${business().id}`, {
+      method: 'PATCH', headers, body: JSON.stringify({ auto_renew_enabled: false })
+    });
+    business().autoRenewEnabled = false;
+    render();
+    toast('Auto-renewal turned off.');
+  }catch(e){
+    toast('Could not turn off auto-renewal — check your connection and try again.');
+  }
+}
   toast('Confirming payment…');
   try{
     const { data: sessionData } = await window.sb.auth.getSession();
@@ -4213,6 +4347,9 @@ async function verifyAndApplyPayment(transactionId, plan, interval, amount, curr
       closeSheet();
       render();
       toast('Payment confirmed — you\'re now on the '+(plan==='pro'?'Pro':'Boss')+' plan!');
+      if(result.card_token){
+        offerAutoRenewOptIn(result, plan, interval, token);
+      }
     } else {
       toast('Payment could not be verified: '+(result.error||'please contact support.'));
     }

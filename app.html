@@ -669,6 +669,13 @@ function render(){
 let authMode = 'login'; // 'login' | 'signup'
 let authError = '';
 let pendingSignupData = null; // holds the form fields between "Create My Shop" and OTP entry
+
+// ============================================================
+// TEMPORARY: set to false once Termii approves your SMTP sending.
+// While true, signup skips the email verification step entirely —
+// only use this for your own testing, never leave it on for real users.
+// ============================================================
+const SKIP_SIGNUP_OTP_TEMP = true;
 let signupOtpSending = false;
 let signupOtpError = '';
 /* ============================================================
@@ -964,6 +971,21 @@ function bindAuthEvents(){
     signupOtpSending = true;
     const btn = document.getElementById('btn-signup');
     if(btn){ btn.disabled = true; btn.textContent = 'Sending code…'; }
+
+    if(SKIP_SIGNUP_OTP_TEMP){
+      // Termii SMTP not approved yet — skip straight to account creation.
+      pendingSignupData = { biz, country, ccy, fn, ln, username, phone, email, pass };
+      try{
+        await completeSignupAccount(pendingSignupData);
+        toast('Account created (email verification temporarily skipped) ✅');
+      }catch(err){
+        authError = err.message || "Couldn't create the account. Please try again.";
+      }
+      signupOtpSending = false;
+      render();
+      return;
+    }
+
     try{
       await sendSignupOtp(email);
       pendingSignupData = { biz, country, ccy, fn, ln, username, phone, email, pass };
@@ -4326,6 +4348,8 @@ async function disableAutoRenew(){
     toast('Could not turn off auto-renewal — check your connection and try again.');
   }
 }
+
+async function verifyAndApplyPayment(transactionId, plan, interval, amount, currency){
   toast('Confirming payment…');
   try{
     const { data: sessionData } = await window.sb.auth.getSession();

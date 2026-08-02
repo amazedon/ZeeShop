@@ -90,7 +90,19 @@ Deno.serve(async (req: Request) => {
       return json({ error: "Payment verified but plan update failed: " + updateErr.message }, 500);
     }
 
-    return json({ verified: true, plan, expires_at: expiresAt }, 200);
+    return json({
+      verified: true,
+      plan,
+      expires_at: expiresAt,
+      // If the customer's card was tokenized by Flutterwave during checkout,
+      // this lets the app offer "enable auto-renewal?" right after payment.
+      // The actual token is only ever sent to Supabase directly by the
+      // client afterward (if they opt in) — never logged or exposed beyond this response.
+      card_token: flwData?.data?.card?.token || null,
+      card_last4: flwData?.data?.card?.last_4digits || null,
+      card_type: flwData?.data?.card?.type || null,
+      card_expiry: flwData?.data?.card?.expiry || null
+    }, 200);
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : "Unexpected error" }, 500);
   }

@@ -737,6 +737,7 @@ function renderGoogleButton(containerId){
 function renderAuthScreen(){
   if(authMode==='signup') return renderSignup();
   if(authMode==='signup-verify') return renderSignupVerify();
+  if(authMode==='join-shop') return renderJoinShop();
   return renderLogin();
 }
 
@@ -758,6 +759,24 @@ function renderLogin(){
       </div>
       <div id="google-login-btn" style="display:flex;justify-content:center;margin-bottom:10px;"></div>
       <div class="link-row">No business yet? <a href="#" id="go-signup" style="color:var(--marigold-dark);font-weight:800;">Create one free</a></div>
+      <div class="link-row">Joining a shop as staff? <a href="#" id="go-join-shop" style="color:var(--teal);font-weight:800;">Enter your code</a></div>
+    </div>
+  </div>`;
+}
+
+function renderJoinShop(){
+  return `
+  <div class="center-screen">
+    <div class="auth-card">
+      <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">Zed</div></div>
+      <div class="tagline">Join your shop with the code your manager gave you.</div>
+      ${authError ? `<div class="err">${authError}</div>` : ''}
+      <div class="field"><label>Join Code</label><input id="join-code-input" placeholder="6-digit code" inputmode="numeric" maxlength="6"></div>
+      <div class="field"><label>First Name</label><input id="join-fn-input" placeholder="Your first name"></div>
+      <div class="field"><label>Last Name</label><input id="join-ln-input" placeholder="Your last name (optional)"></div>
+      <div class="field"><label>Phone</label><input id="join-phone-input" placeholder="Your phone (optional)"></div>
+      <button class="btn btn-primary" id="btn-join-shop">Join Shop</button>
+      <div class="link-row"><a href="#" id="go-login-from-join" style="color:var(--text-dim);">Back to log in</a></div>
     </div>
   </div>`;
 }
@@ -928,6 +947,9 @@ function bindAuthEvents(){
   go('go-signup', e=>{e.preventDefault(); authMode='signup'; authError=''; render();});
   go('go-login', e=>{e.preventDefault(); authMode='login'; authError=''; render();});
   go('go-forgot', e=>{e.preventDefault(); authMode='forgot'; forgotStep=1; forgotUserId=null; forgotError=''; render();});
+  go('go-join-shop', e=>{e.preventDefault(); authMode='join-shop'; authError=''; render();});
+  go('go-login-from-join', e=>{e.preventDefault(); authMode='login'; authError=''; render();});
+  go('btn-join-shop', ()=>joinShopSubmit());
 
   go('btn-login', ()=>{
     const idf = document.getElementById('li-user').value.trim().toLowerCase();
@@ -1281,6 +1303,97 @@ function submitPin(u){
     state.pinAttempts[u.id]=att; save();
     pinBuffer='';
     updatePinDots(u);
+  }
+}
+
+/**
+ * The NEW way a staff member can join — on a completely fresh device,
+ * with just the join code and their name, no owner login required on
+ * that device at all. Calls join-business (server-side), which creates
+ * an invisible Supabase Auth account for them, then this function signs
+ * that session in and pulls the whole business down locally.
+ */
+async function joinShopSubmit(){
+  const code = document.getElementById('join-code-input').value.trim();
+  const fn = document.getElementById('join-fn-input').value.trim();
+  const ln = document.getElementById('join-ln-input').value.trim();
+  const phone = document.getElementById('join-phone-input').value.trim();
+  if(!/^\d{6}$/.test(code)){ authError = 'Enter the 6-digit code from your manager.'; render(); return; }
+  if(!fn){ authError = 'Please enter your first name.'; render(); return; }
+  if(!navigator.onLine){ authError = 'You need internet the first time you join a shop.'; render(); return; }
+
+  authError = '';
+  const btn = document.getElementById('btn-join-shop');
+  if(btn){ btn.disabled = true; btn.textContent = 'Joining…'; }
+
+  try{
+    const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/join-business`, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'apikey': SITE_CONTENT_ANON_KEY },
+      body: JSON.stringify({ code, first_name: fn, last_name: ln, phone })
+    });
+    const result = await res.json();
+    if(!res.ok || result.error){
+      authError = result.error || 'Could not join — please check the code and try again.';
+      if(btn){ btn.disabled = false; btn.textContent = 'Join Shop'; }
+      render();
+      return;
+    }
+
+    // Sign in with the invisible synthetic account — this is what lets
+    // the sync engine (push AND pull) work on this device from now on.
+    const { error: signInErr } = await window.sb.auth.signInWithPassword({
+      email: result.auth_email, password: result.auth_password
+    });
+    if(signInErr){
+      authError = 'Joined, but could not start your session — please try logging in again with internet on.';
+      render();
+      return;
+    }
+
+    // Set a local PIN so this device works offline day-to-day from here on.
+    let pin = prompt('Set a 4-6 digit PIN for quick login on this device:');
+    while(pin && !/^\d{4,6}$/.test(pin)){ pin = prompt('PIN must be 4-6 digits — try again:'); }
+    if(!pin){ pin = String(Math.floor(1000+Math.random()*9000)); } // fallback so they're never locked out
+
+    // Bootstrap local state from what the server gave us.
+    state.business = {
+      id: result.business.id, name: result.business.name, country: result.business.country,
+      currency: result.business.currency, subscriptionPlan: result.business.subscriptionPlan,
+      subscriptionExpiresAt: result.business.subscriptionExpiresAt
+    };
+    (result.shops||[]).forEach(s=>{
+      state.shops.push({ id:s.id, businessId:s.business_id, name:s.name, address:s.address||'', phone:s.phone||'', email:s.email||'' });
+    });
+    state.currentShopId = result.shops && result.shops[0] ? result.shops[0].id : null;
+
+    const u = { ...result.user, pinHash: hash(pin), pinLength: pin.length };
+    state.users.push(u);
+    state.sessionUserId = u.id;
+
+    // Save the PIN hash server-side too, so this same staff member can
+    // join fresh on ANOTHER device later and still use the same PIN there.
+    const { data: sessionData } = await window.sb.auth.getSession();
+    if(sessionData.session){
+      await fetch(`${SITE_CONTENT_URL}/rest/v1/app_users?id=eq.${u.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+sessionData.session.access_token, 'apikey': SITE_CONTENT_ANON_KEY, 'Prefer':'return=minimal' },
+        body: JSON.stringify({ pin_hash: u.pinHash, pin_length: u.pinLength })
+      }).catch(()=>{});
+    }
+
+    save();
+    logAudit('staff_joined_remote', fn+' '+ln+' joined remotely as staff');
+    toast('Welcome, '+fn+'! Pulling in your shop\'s data…');
+    render();
+
+    // Pull everything else (goods, customers, sales, etc.) down onto
+    // this device now that a valid session exists.
+    if(typeof pullSync === 'function') pullSync();
+  }catch(e){
+    authError = 'Could not join — check your connection and try again.';
+    if(btn){ btn.disabled = false; btn.textContent = 'Join Shop'; }
+    render();
   }
 }
 
@@ -3794,15 +3907,31 @@ function bindStaffEvents(){
     toast('Request denied'); render();
   }));
   const gen = document.getElementById('gen-code');
-  if(gen) gen.addEventListener('click', ()=>{
+  if(gen) gen.addEventListener('click', async ()=>{
     const limits = planLimits();
     if(state.users.length >= limits.staff){
       toast(`Your ${planLabel()} plan allows up to ${limits.staff} staff (including you). Upgrade for more.`);
       return;
     }
-    state.joinCode = {code:String(Math.floor(100000+Math.random()*900000)), expiresAt:Date.now()+10*60000};
-    logAudit('code_generated','Generated staff join code');
-    render();
+    if(!navigator.onLine){ toast('You need internet to generate a join code, so staff can use it on their own devices.'); return; }
+    const { data: sessionData } = await window.sb.auth.getSession();
+    const accessToken = sessionData.session ? sessionData.session.access_token : null;
+    if(!accessToken){ toast('Please log in online at least once before generating staff join codes.'); return; }
+    gen.disabled = true; gen.textContent = 'Generating…';
+    try{
+      const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/create-join-code`, {
+        method: 'POST', headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+accessToken, 'apikey': SITE_CONTENT_ANON_KEY }
+      });
+      const result = await res.json();
+      if(!res.ok || result.error){ toast(result.error || 'Could not generate a join code.'); return; }
+      state.joinCode = { code: result.code, expiresAt: new Date(result.expires_at).getTime() };
+      logAudit('code_generated','Generated staff join code');
+      render();
+    }catch(e){
+      toast('Could not generate a join code — check your connection and try again.');
+    }finally{
+      gen.disabled = false; gen.textContent = 'Generate Join Code';
+    }
   });
   const offerBtn = document.getElementById('offer-letter-btn');
   if(offerBtn) offerBtn.addEventListener('click', openOfferLetterForm);
@@ -4024,6 +4153,10 @@ function screenSettings(){
         ${isMaster()?`<button class="btn btn-outline btn-sm" id="disable-autorenew" style="margin-top:8px;">Turn Off Auto-Renewal</button>`:''}
       ` : ''}
       ${isMaster()?`<button class="btn btn-outline btn-sm" id="upgrade-plan" style="margin-top:10px;">View Plans</button>`:''}
+      <div class="t2" style="margin-top:14px;">
+        🔔 Notifications: <b style="color:${b.pushEnabled?'var(--green)':'var(--text-dim)'};">${b.pushEnabled?'ON':'OFF'}</b>
+      </div>
+      <button class="btn btn-outline btn-sm" id="toggle-push" style="margin-top:6px;">${b.pushEnabled?'Turn Off Notifications':'Enable Notifications'}</button>
     </div>
     ${isMaster()?`
     <div class="card">
@@ -4116,6 +4249,11 @@ function bindSettingsEvents(){
   if(upg) upg.addEventListener('click', ()=>openPlansSheet());
   const disAR = document.getElementById('disable-autorenew');
   if(disAR) disAR.addEventListener('click', ()=>disableAutoRenew());
+  const togglePush = document.getElementById('toggle-push');
+  if(togglePush) togglePush.addEventListener('click', async ()=>{
+    if(business().pushEnabled){ await disablePushNotifications(); }
+    else{ await enablePushNotifications(); render(); }
+  });
   const saveBT = document.getElementById('save-biztype');
   if(saveBT) saveBT.addEventListener('click', ()=>{
     business().businessType = readBizTypeValue('set-biztype');
@@ -4328,6 +4466,88 @@ async function saveAutoRenewCard(result, plan, interval, accessToken){
  * so auto_renewal_log entries keep working, but is_active:false means
  * process-auto-renewals will never charge it again unless they opt in fresh.
  */
+const VAPID_PUBLIC_KEY = 'BOSZO0_OtfKUOFYiw2ppugzAlPDHpn7IlntESwoe4_eMe9QB5ijutQGTmgL6GTSvqC34XrE3OBYAe46EJtNJO7w';
+
+function urlBase64ToUint8Array(base64String){
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  return Uint8Array.from([...rawData].map(c=>c.charCodeAt(0)));
+}
+
+/**
+ * Asks for notification permission and subscribes this device, saving
+ * the subscription to Supabase so the alert/broadcast Edge Functions
+ * can reach it later. Needs internet + a live session (same as any
+ * other server-touching action) — silently no-ops without either.
+ */
+async function enablePushNotifications(){
+  if(!('serviceWorker' in navigator) || !('PushManager' in window)){
+    toast('Push notifications aren\'t supported on this browser.');
+    return false;
+  }
+  try{
+    const permission = await Notification.requestPermission();
+    if(permission !== 'granted'){ toast('Notifications permission was not granted.'); return false; }
+
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if(!sub){
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+      });
+    }
+
+    const { data: sessionData } = await window.sb.auth.getSession();
+    if(!sessionData.session){ toast('Please log in online once first, then try again.'); return false; }
+
+    const subJson = sub.toJSON();
+    await fetch(`${SITE_CONTENT_URL}/rest/v1/push_subscriptions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type':'application/json', 'Authorization':'Bearer '+sessionData.session.access_token,
+        'apikey': SITE_CONTENT_ANON_KEY, 'Prefer':'return=minimal,resolution=merge-duplicates'
+      },
+      body: JSON.stringify({
+        business_id: business().id, user_id: state.sessionUserId,
+        endpoint: subJson.endpoint, p256dh: subJson.keys.p256dh, auth_key: subJson.keys.auth, is_active: true
+      })
+    });
+    business().pushEnabled = true;
+    save();
+    toast('Notifications enabled ✅');
+    return true;
+  }catch(e){
+    toast('Could not enable notifications — please try again.');
+    return false;
+  }
+}
+
+async function disablePushNotifications(){
+  try{
+    if('serviceWorker' in navigator){
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if(sub){
+        const { data: sessionData } = await window.sb.auth.getSession();
+        if(sessionData.session){
+          await fetch(`${SITE_CONTENT_URL}/rest/v1/push_subscriptions?endpoint=eq.${encodeURIComponent(sub.endpoint)}`, {
+            method: 'DELETE',
+            headers: { 'Authorization':'Bearer '+sessionData.session.access_token, 'apikey': SITE_CONTENT_ANON_KEY }
+          }).catch(()=>{});
+        }
+        await sub.unsubscribe();
+      }
+    }
+    business().pushEnabled = false;
+    save(); render();
+    toast('Notifications turned off.');
+  }catch(e){
+    toast('Could not turn off notifications — check your connection and try again.');
+  }
+}
+
 async function disableAutoRenew(){
   if(!confirm('Turn off auto-renewal? Your plan will need to be renewed manually going forward.')) return;
   try{

@@ -56,3 +56,53 @@ self.addEventListener("fetch", (event) => {
     })
   );
 });
+
+/* ============================================================
+   PUSH NOTIFICATIONS
+   ============================================================ */
+self.addEventListener("push", (event) => {
+  let data = { title: "Zed", body: "You have a new update.", url: "/app.html" };
+  try{ if(event.data) data = { ...data, ...event.data.json() }; }catch(e){ /* fall back to defaults */ }
+
+  event.waitUntil(
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      icon: "/icon-192.png",
+      badge: "/icon-192.png",
+      data: { url: data.url || "/app.html" }
+    })
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl = (event.notification.data && event.notification.data.url) || "/app.html";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if (client.url.includes("app.html") && "focus" in client) return client.focus();
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
+    })
+  );
+});
+
+/* ============================================================
+   BACKGROUND SYNC
+   ============================================================
+   Chrome/Android only (no iOS Safari support) — lets a pending sync
+   queue flush even if the app is closed, not just while it's open.
+   The actual queue logic lives in sync-engine.js (page context, since
+   it needs localStorage) — this just asks any open/recently-open page
+   to run it. If no page responds in time, the normal in-app sync
+   (on load, on reconnect) still covers it the next time it's opened.
+   ============================================================ */
+self.addEventListener("sync", (event) => {
+  if (event.tag === "zed-flush-sync-queue") {
+    event.waitUntil(
+      self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+        clientList.forEach((client) => client.postMessage({ type: "ZED_FLUSH_SYNC_QUEUE" }));
+      })
+    );
+  }
+});

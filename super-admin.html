@@ -88,6 +88,16 @@
     </div>
 
     <div class="card">
+      <h2>📣 Send Notification</h2>
+      <p class="subtle">Sends a push notification to devices with notifications enabled. Leave "Target Business" blank to send to everyone across the platform.</p>
+      <div id="broadcast-status"></div>
+      <div class="field"><label>Title</label><input id="bc-title" placeholder="e.g. New feature: Auto-Renewal"></div>
+      <div class="field"><label>Message</label><input id="bc-body" placeholder="Short message body"></div>
+      <div class="field"><label>Target Business ID (optional)</label><input id="bc-business-id" placeholder="Leave blank for all businesses"></div>
+      <button class="btn btn-primary" id="send-broadcast-btn">Send Notification</button>
+    </div>
+
+    <div class="card">
       <h2>All Registered Businesses</h2>
       <p class="subtle">Synced from businesses that have signed up and connected online at least once — offline-only signups appear here once their device reconnects.</p>
       <div id="biz-status"></div>
@@ -240,6 +250,28 @@
     div.textContent = str;
     return div.innerHTML;
   }
+
+  document.getElementById('send-broadcast-btn').addEventListener('click', async ()=>{
+    const title = document.getElementById('bc-title').value.trim();
+    const body = document.getElementById('bc-body').value.trim();
+    const businessId = document.getElementById('bc-business-id').value.trim();
+    const statusBox = document.getElementById('broadcast-status');
+    if(!title || !body){ showError(statusBox, 'Title and message are required.'); return; }
+    statusBox.innerHTML = '<div class="subtle">Sending…</div>';
+    try{
+      const { data: sessionData } = await sb.auth.getSession();
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/send-broadcast`, {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+sessionData.session.access_token, 'apikey': SUPABASE_ANON_KEY },
+        body: JSON.stringify({ title, body, business_id: businessId || null })
+      });
+      const result = await res.json();
+      if(!res.ok || result.error){ showError(statusBox, result.error || 'Could not send.'); return; }
+      statusBox.innerHTML = `<div class="ok">Sent to ${result.sent} device(s)${result.failed?`, ${result.failed} failed`:''} (${result.totalTargeted} targeted).</div>`;
+    }catch(e){
+      showError(statusBox, 'Could not send — check your connection.');
+    }
+  });
 
   checkSession();
 </script>

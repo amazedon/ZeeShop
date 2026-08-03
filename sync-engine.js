@@ -54,6 +54,31 @@ function enqueueSync(table, op, payload){
   saveSyncQueue(queue);
   // try immediately in case we're online — harmless no-op if not
   flushSyncQueue();
+  // also register a Background Sync request, so the queue can flush
+  // even if the app gets closed before the immediate attempt above
+  // succeeds (Chrome/Android only — silently does nothing elsewhere)
+  registerBackgroundSync();
+}
+
+async function registerBackgroundSync(){
+  try{
+    if('serviceWorker' in navigator && 'SyncManager' in window){
+      const reg = await navigator.serviceWorker.ready;
+      await reg.sync.register('zed-flush-sync-queue');
+    }
+  }catch(e){ /* not supported on this browser — the normal online/load triggers still cover it */ }
+}
+
+// The service worker asks us to flush whenever a real Background Sync
+// event fires (see sw.js) — this only works while a page is at least
+// loaded in the background/recently, same limitation Background Sync
+// itself has on most browsers.
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.addEventListener('message', (event)=>{
+    if(event.data && event.data.type === 'ZED_FLUSH_SYNC_QUEUE'){
+      flushSyncQueue();
+    }
+  });
 }
 
 let syncInProgress = false;

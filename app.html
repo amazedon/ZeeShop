@@ -675,7 +675,7 @@ let pendingSignupData = null; // holds the form fields between "Create My Shop" 
 // While true, signup skips the email verification step entirely —
 // only use this for your own testing, never leave it on for real users.
 // ============================================================
-const SKIP_SIGNUP_OTP_TEMP = true;
+const SKIP_SIGNUP_OTP_TEMP = false;
 let signupOtpSending = false;
 let signupOtpError = '';
 /* ============================================================
@@ -815,9 +815,34 @@ function bindPasswordToggles(){
   });
 }
 
-let forgotStep = 1; // 1: enter username/email, 2: enter recovery code, 3: set new password
+let forgotStep = 1; // 1: enter username/email, 2: enter emailed code, 3: set new password
 let forgotUserId = null;
 let forgotError = '';
+let forgotEmail = null;
+let forgotOtpSending = false;
+
+/* ---- forgot-password email verification (Edge Functions do the actual send/verify) ---- */
+async function sendResetOtp(email){
+  const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/send-reset-otp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+SITE_CONTENT_ANON_KEY },
+    body: JSON.stringify({ email })
+  });
+  const data = await res.json();
+  if(!res.ok || data.error) throw new Error(data.error || 'Could not send the reset code.');
+  return data;
+}
+async function verifyResetOtp(email, code){
+  const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/verify-reset-otp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+SITE_CONTENT_ANON_KEY },
+    body: JSON.stringify({ email, code })
+  });
+  const data = await res.json();
+  if(!res.ok && !data) throw new Error('Could not verify the code right now.');
+  return data; // { verified: true } or { verified: false, error }
+}
+
 function renderForgotPassword(){
   return `
   <div class="center-screen">
@@ -827,11 +852,12 @@ function renderForgotPassword(){
       ${forgotError ? `<div class="err">${forgotError}</div>` : ''}
       ${forgotStep===1? `
         <div class="field"><label>Username or Email</label><input id="fp-user" placeholder="chika_stores or you@email.com"></div>
-        <button class="btn btn-primary" id="btn-forgot-next">Continue</button>
+        <button class="btn btn-primary" id="btn-forgot-next">${forgotOtpSending?'Sending code…':'Send Code'}</button>
       ` : forgotStep===2 ? `
-        <p class="subtle" style="margin-bottom:14px;">Enter the recovery code you saved when you created your account.</p>
-        <div class="field"><label>Recovery Code</label><input id="fp-code" placeholder="XXXX-XXXX-XXXX" style="text-transform:uppercase;"></div>
+        <p class="subtle" style="margin-bottom:14px;">We sent a 6-digit code to ${escAttr(forgotEmail||'')}. Enter it below.</p>
+        <div class="field"><label>Verification Code</label><input id="fp-code" inputmode="numeric" maxlength="6" placeholder="123456"></div>
         <button class="btn btn-primary" id="btn-forgot-verify">Verify</button>
+        <div class="link-row"><a href="#" id="fp-resend-otp" style="color:var(--marigold-dark);font-weight:800;">Resend code</a></div>
       ` : `
         <div class="field"><label>New Password</label><input id="fp-newpass" type="password" placeholder="Min 6 characters"></div>
         <div class="field"><label>Confirm New Password</label><input id="fp-newpass2" type="password"></div>
@@ -843,19 +869,42 @@ function renderForgotPassword(){
 }
 function bindForgotPasswordEvents(){
   const go = (id,fn)=>{ const e=document.getElementById(id); if(e) e.addEventListener('click', fn); };
-  go('go-login-from-forgot', e=>{e.preventDefault(); authMode = state.business ? '' : 'login'; forgotStep=1; forgotUserId=null; forgotError=''; render();});
-  go('btn-forgot-next', ()=>{
+  go('go-login-from-forgot', e=>{e.preventDefault(); authMode = state.business ? '' : 'login'; forgotStep=1; forgotUserId=null; forgotEmail=null; forgotError=''; render();});
+  go('btn-forgot-next', async ()=>{
+    if(forgotOtpSending) return;
     const idf = document.getElementById('fp-user').value.trim().toLowerCase();
     const u = state.users.find(x=> (x.username.toLowerCase()===idf || (x.email||'').toLowerCase()===idf) && x.role==='master');
     if(!u){ forgotError='No owner account found with that username or email.'; render(); return; }
-    if(!u.recoveryCodeHash){ forgotError='This account has no recovery code on file. Password recovery is not available for it.'; render(); return; }
-    forgotUserId = u.id; forgotStep = 2; forgotError=''; render();
+    if(!u.email){ forgotError='This account has no email on file. Password recovery is not available for it.'; render(); return; }
+    forgotUserId = u.id; forgotEmail = u.email; forgotOtpSending = true; forgotError=''; render();
+    try{
+      await sendResetOtp(u.email);
+      forgotOtpSending = false; forgotStep = 2; render();
+    }catch(err){
+      forgotOtpSending = false;
+      forgotError = err.message || "Couldn't send the code right now. Check your internet connection.";
+      render();
+    }
   });
-  go('btn-forgot-verify', ()=>{
-    const u = state.users.find(x=>x.id===forgotUserId);
-    const code = document.getElementById('fp-code').value.trim().toUpperCase();
-    if(hash(code) !== u.recoveryCodeHash){ forgotError='That recovery code is incorrect.'; render(); return; }
-    forgotStep = 3; forgotError=''; render();
+  go('fp-resend-otp', async e=>{
+    e.preventDefault();
+    if(forgotOtpSending || !forgotEmail) return;
+    try{ await sendResetOtp(forgotEmail); toast('New code sent ✅'); }
+    catch(err){ forgotError = err.message; render(); }
+  });
+  go('btn-forgot-verify', async ()=>{
+    const code = document.getElementById('fp-code').value.trim();
+    if(!code){ forgotError = 'Enter the 6-digit code.'; render(); return; }
+    const btn = document.getElementById('btn-forgot-verify');
+    if(btn){ btn.disabled = true; btn.textContent = 'Verifying…'; }
+    try{
+      const result = await verifyResetOtp(forgotEmail, code);
+      if(!result.verified){ forgotError = result.error || 'Incorrect code.'; render(); return; }
+      forgotStep = 3; forgotError=''; render();
+    }catch(err){
+      forgotError = err.message || "Couldn't verify right now. Check your internet connection.";
+      render();
+    }
   });
   go('btn-forgot-save', ()=>{
     const p1 = document.getElementById('fp-newpass').value;
@@ -864,9 +913,9 @@ function bindForgotPasswordEvents(){
     if(p1!==p2){ forgotError="Passwords don't match."; render(); return; }
     const u = state.users.find(x=>x.id===forgotUserId);
     u.passwordHash = hash(p1);
-    logAudit('password_reset', 'Password reset via recovery code');
+    logAudit('password_reset', 'Password reset via emailed code');
     if(u.role === 'master') syncPasswordToSupabaseAuth(p1);
-    authMode='login'; forgotStep=1; forgotUserId=null; forgotError='';
+    authMode='login'; forgotStep=1; forgotUserId=null; forgotEmail=null; forgotError='';
     toast('Password reset ✅ — log in with your new password.');
     render();
   });
@@ -946,7 +995,7 @@ function bindAuthEvents(){
   if(document.getElementById('google-signup-btn')) renderGoogleButton('google-signup-btn');
   go('go-signup', e=>{e.preventDefault(); authMode='signup'; authError=''; render();});
   go('go-login', e=>{e.preventDefault(); authMode='login'; authError=''; render();});
-  go('go-forgot', e=>{e.preventDefault(); authMode='forgot'; forgotStep=1; forgotUserId=null; forgotError=''; render();});
+  go('go-forgot', e=>{e.preventDefault(); authMode='forgot'; forgotStep=1; forgotUserId=null; forgotEmail=null; forgotError=''; render();});
   go('go-join-shop', e=>{e.preventDefault(); authMode='join-shop'; authError=''; render();});
   go('go-login-from-join', e=>{e.preventDefault(); authMode='login'; authError=''; render();});
   go('btn-join-shop', ()=>joinShopSubmit());
@@ -1266,7 +1315,7 @@ function bindPinEvents(u){
       render();
     });
     const ppForgot = document.getElementById('pp-go-forgot');
-    if(ppForgot) ppForgot.addEventListener('click', e=>{ e.preventDefault(); authMode='forgot'; forgotStep=1; forgotUserId=null; forgotError=''; render(); });
+    if(ppForgot) ppForgot.addEventListener('click', e=>{ e.preventDefault(); authMode='forgot'; forgotStep=1; forgotUserId=null; forgotEmail=null; forgotError=''; render(); });
     return;
   }
   updatePinDots(u);
@@ -5708,7 +5757,7 @@ function bindContactUsEvents(){
 const FAQ_GROUPS = [
   { category: "Getting Started", items: [
     { q:"How do I create my business account?", a:"Tap Create One Free on the login screen, fill in your business and owner details, then save your recovery code somewhere safe — it's the only way back in if you forget your password." },
-    { q:"I forgot my password — what do I do?", a:"Tap Forgot Password on the login screen and enter your recovery code. If you've lost that too, you'll need to create a new account, since Zed can't recover it without it." },
+    { q:"I forgot my password — what do I do?", a:"Tap Forgot Password on the login screen and enter your username or email. We'll send a 6-digit code to your email on file — enter it to set a new password. If your account has no email on file, you'll need to create a new account." },
     { q:"How do multiple staff use the same device?", a:"Each staff member gets their own PIN. After the business owner logs in once, everyone unlocks their own profile with their PIN from the user-select screen — no need to log in with a password every time." },
     { q:"How do I add a new staff member?", a:"Go to More → Staff → Generate Join Code. Share the code with them; they open Zed on their device, tap Join Business, and enter it. The code expires after a set number of minutes." },
     { q:"What's the difference between Master, Staff, Viewer, and Super Admin?", a:"Master is the owner with full access. Staff have specific permissions you assign (sell, add goods, record cash, etc). Viewer can only look, not act. Super Admin is a staff member you've trusted to manage specific shops on your behalf." },

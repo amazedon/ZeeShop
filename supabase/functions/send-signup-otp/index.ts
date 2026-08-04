@@ -1,8 +1,9 @@
-// supabase/functions/send-signup-otp/index.ts
+// supabase/functions/send-reset-otp/index.ts
 //
 // Generates a 6-digit code, stores its hash (5-minute expiry) in
-// signup_otp_codes, and asks Termii to email it to the given address.
-// The Termii API key never leaves this server-side function.
+// password_reset_otp_codes, and asks Termii to email it to the given address.
+// Mirrors send-signup-otp — same table shape, same Termii call, separate table
+// so a live signup code can never be reused to reset a password (or vice versa).
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -10,7 +11,6 @@ const TERMII_API_KEY = Deno.env.get("TERMII_API_KEY")!;
 const TERMII_BASE_URL = Deno.env.get("TERMII_BASE_URL")!; // e.g. https://v3.api.termii.com
 const TERMII_EMAIL_CONFIG_ID = Deno.env.get("TERMII_EMAIL_CONFIG_ID")!;
 
-// Supabase auto-injects these into every Edge Function's environment.
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
@@ -43,9 +43,13 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Simple throttle: don't allow a resend within 60 seconds of the last one.
+    // Note: we deliberately do NOT reveal whether this email has an account —
+    // the front end already confirmed that locally before calling this function.
+    // We still send only to addresses the client claims are valid accounts,
+    // so this stays consistent with the signup flow's trust model.
+
     const { data: recent } = await supabase
-      .from("signup_otp_codes")
+      .from("password_reset_otp_codes")
       .select("created_at")
       .eq("email", email)
       .order("created_at", { ascending: false })
@@ -57,11 +61,11 @@ Deno.serve(async (req) => {
       });
     }
 
-    const code = String(Math.floor(100000 + Math.random() * 900000)); // 6 digits
+    const code = String(Math.floor(100000 + Math.random() * 900000));
     const codeHash = await sha256(code);
-    const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString(); // 5 minutes
+    const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
 
-    const { error: dbError } = await supabase.from("signup_otp_codes").insert({
+    const { error: dbError } = await supabase.from("password_reset_otp_codes").insert({
       email,
       code_hash: codeHash,
       expires_at: expiresAt,
@@ -75,12 +79,13 @@ Deno.serve(async (req) => {
         api_key: TERMII_API_KEY,
         email_address: email,
         code,
-        email_configuration_id: TERMII_EMAIL_CONFIG_ID,
+        emailConfigurationId: TERMII_EMAIL_CONFIG_ID,
       }),
     });
     const termiiData = await termiiRes.json();
+    console.log("Termii response:", JSON.stringify(termiiData));
     if (!termiiRes.ok || termiiData.code !== "ok") {
-      throw new Error("Termii could not send the email: " + (termiiData.message || termiiRes.status));
+      throw new Error("Termii could not send the email: " + JSON.stringify(termiiData));
     }
 
     return new Response(JSON.stringify({ success: true }), {

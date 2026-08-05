@@ -3119,13 +3119,22 @@ function screenMore(){
       </div>`).join('')}
     <div class="divider"></div>
     <div class="list-row" id="do-logout" style="cursor:pointer;">
-      <div class="thumb">🚪</div><div class="info"><div class="t1">Lock / Switch User</div></div><div>›</div>
+      <div class="thumb">🔒</div><div class="info"><div class="t1">Lock / Switch User</div></div><div>›</div>
+    </div>
+    <div class="list-row" id="do-full-logout" style="cursor:pointer;">
+      <div class="thumb">🚪</div><div class="info"><div class="t1">Log Out</div><div class="t2 subtle">Sign out of this business on this device</div></div><div>›</div>
     </div>
   `;
 }
 function bindMoreEvents(){
   const lo = document.getElementById('do-logout');
   if(lo) lo.addEventListener('click', ()=>{ state.sessionUserId=null; route='dashboard'; render(); });
+  const flo = document.getElementById('do-full-logout');
+  if(flo) flo.addEventListener('click', ()=>{
+    if(confirm('Sign out of this business on this device?')){
+      state.business=null; state.sessionUserId=null; route='dashboard'; render();
+    }
+  });
 }
 
 let reportsRange = '7d'; // today | 7d | 30d | month

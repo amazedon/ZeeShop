@@ -710,40 +710,30 @@ function handleGoogleCredentialResponse(response){
   let profile;
   try{ profile = decodeGoogleJwt(response.credential); }
   catch(e){ toast("Couldn't read Google's response. Please try again."); return; }
-  const email = (profile.email || '').toLowerCase();
-  const firstName = profile.given_name  profile.name  'there';
+  const email = profile.email;
+  const firstName = profile.given_name || profile.name || 'there';
   const lastName = profile.family_name || '';
-  
-  const users = state.users  state.businesses  [];
-  const existingUser = users.find(u => (u.email||'').toLowerCase() === email);
-  
+  // Look for an existing account with this email, across all businesses on this device.
+  const existingUser = state.users.find(u=>u.email && u.email.toLowerCase()===email.toLowerCase());
   if(existingUser){
-    try{
-      state.sessionUserId = existingUser.id || existingUser.businessId;
-      state.businessId = existingUser.businessId || existingUser.id;
-      const bList = state.businesses || [];
-      state.business = bList.find(b => b.id === state.businessId) || existingUser;
-      localStorage.setItem('zed_current_business_id', state.businessId);
-      if(state.sessionUserId) localStorage.setItem('zed_session_user_id', state.sessionUserId);
-      logAudit('google_login', logged in with Google: ${email});
-      toast(Welcome back, ${firstName}!);
-    }catch(err){
-      console.error(err);
-      toast(Welcome back, ${firstName}!);
-    }
+    const biz = state.business && state.business.id===existingUser.businessId ? state.business : null;
+    if(!biz){ toast("This Google account is linked to a different business than what's set up on this device."); return; }
+    state.sessionUserId = existingUser.id;
+    logAudit('google_login', 'Logged in with Google: '+email);
+    toast('Welcome back, '+firstName+' 👋');
     render();
-    return;
   } else {
+    // No account yet — jump to signup with the fields pre-filled.
     authMode = 'signup';
     render();
     setTimeout(()=>{
-      const emailIn = document.getElementById('su-email');
-      const fnIn = document.getElementById('su-fn');
-      const lnIn = document.getElementById('su-ln');
-      if(emailIn) emailIn.value = email;
-      if(fnIn) fnIn.value = firstName;
-      if(lnIn) lnIn.value = lastName;
-      toast('We filled in your details from Google - just add your business info to finish.');
+      const emailEl = document.getElementById('su-email');
+      const fnEl = document.getElementById('su-fn');
+      const lnEl = document.getElementById('su-ln');
+      if(emailEl) emailEl.value = email;
+      if(fnEl) fnEl.value = firstName;
+      if(lnEl) lnEl.value = lastName;
+      toast("We've filled in your details from Google — just add your business info to finish.");
     }, 50);
   }
 }

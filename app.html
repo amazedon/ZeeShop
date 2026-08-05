@@ -311,7 +311,7 @@ if ('serviceWorker' in navigator) {
 
 <script>
 /* =====================================================================
-   DUKAPRO — client-side prototype implementing the core flows from the
+   ZED — client-side prototype implementing the core flows from the
    Zed Global Micro-Retailer OS spec. Runs fully offline in localStorage.
    Real deployment would sync this local store to a Postgres backend,
    run ML recognition on-device, and route push/SMS through native APIs —
@@ -319,7 +319,8 @@ if ('serviceWorker' in navigator) {
    are represented here with honest UI stubs and simulated flows.
    ===================================================================== */
 
-const DB_KEY = "dukapro_state_v1";
+const DB_KEY = "zed_state_v1";
+const DB_KEY_LEGACY = "dukapro_state_v1"; // old brand name — migrated below, then left alone
 const CCY = {NGN:"₦",KES:"KSh",GHS:"GH₵",INR:"₹",USD:"$",PHP:"₱",MXN:"$",GBP:"£",EUR:"€",ZAR:"R",CAD:"$",AUD:"$",AED:"AED ",CNY:"¥",JPY:"¥",BRL:"R$",EGP:"E£",OTHER:""};
 // Full list of countries with their international calling codes (ITU E.164 codes).
 const COUNTRIES = [
@@ -555,6 +556,16 @@ migratePhoneNumbers();
 function load(){
   const raw = localStorage.getItem(DB_KEY);
   if(raw){ try{ return JSON.parse(raw); }catch(e){} }
+  // One-time migration from the old "dukapro" key so existing accounts
+  // and data aren't lost when this device first loads the renamed key.
+  const legacyRaw = localStorage.getItem(DB_KEY_LEGACY);
+  if(legacyRaw){
+    try{
+      const migrated = JSON.parse(legacyRaw);
+      localStorage.setItem(DB_KEY, JSON.stringify(migrated));
+      return migrated;
+    }catch(e){}
+  }
   return { business:null, users:[], shops:[], currentShopId:null, currentUserId:null,
     sessionUserId:null, /* who is actually logged in on this device right now */
     goods:[], customerGroups:[], customers:[], sales:[], dayClosures:[],
@@ -1037,6 +1048,14 @@ function bindAuthEvents(){
     if(!biz||!fn||!ln||!username||!email||!pass){ authError='Please fill in every field.'; render(); return; }
     if(pass.length<6){ authError='Password must be at least 6 characters.'; render(); return; }
     if(!consent){ authError='Please accept the data consent checkbox to continue.'; render(); return; }
+    const uLower = username.toLowerCase(), eLower = email.toLowerCase();
+    const dupe = state.users.find(x=> x.username.toLowerCase()===uLower || (x.email||'').toLowerCase()===eLower);
+    if(dupe){
+      authError = dupe.email && dupe.email.toLowerCase()===eLower
+        ? 'An account with that email already exists. Try logging in, or use Forgot Password.'
+        : 'That username is already taken. Please choose another.';
+      render(); return;
+    }
 
     if(signupOtpSending) return;
     signupOtpSending = true;
@@ -4669,7 +4688,7 @@ function exportCSV(){
   const csv = rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
   const blob = new Blob([csv],{type:'text/csv'});
   const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href=url; a.download='dukapro_sales_export.csv'; a.click();
+  const a = document.createElement('a'); a.href=url; a.download='zed_sales_export.csv'; a.click();
   URL.revokeObjectURL(url);
   toast('Export downloaded ✅');
 }

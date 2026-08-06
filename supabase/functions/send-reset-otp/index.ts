@@ -29,6 +29,14 @@ async function sha256(text: string): Promise<string> {
     .join("");
 }
 
+// ilike() treats % and _ as wildcards — real emails often contain underscores
+// (john_doe@gmail.com), so an unescaped ilike could match a DIFFERENT
+// account than the one actually typed. Escape both before using ilike for
+// what should always be an exact (just case-insensitive) match.
+function escapeIlike(s: string): string {
+  return s.replace(/[%_]/g, (c) => "\\" + c);
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -47,6 +55,23 @@ Deno.serve(async (req) => {
     // the front end already confirmed that locally before calling this function.
     // We still send only to addresses the client claims are valid accounts,
     // so this stays consistent with the signup flow's trust model.
+
+    // Confirm this email actually belongs to an owner (master) account before
+    // sending anything — the front end may be asking on behalf of a device
+    // that's never seen this account before, so it can't have checked itself.
+    const { data: ownerRows, error: ownerErr } = await supabase
+      .from("app_users")
+      .select("id")
+      .ilike("email", escapeIlike(email))
+      .eq("role", "master")
+      .limit(1);
+    if (ownerErr) throw new Error("Could not look up that account: " + ownerErr.message);
+    if (!ownerRows || !ownerRows[0]) {
+      return new Response(JSON.stringify({ error: "No owner account found with that email." }), {
+        status: 404,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const { data: recent } = await supabase
       .from("password_reset_otp_codes")

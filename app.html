@@ -6,6 +6,7 @@
 <title>Zed — Your Shop, In Your Pocket</title>
 <style>
 :root{
+  color-scheme: light;
   --ink:#12213B;
   --ink-2:#1B2F52;
   --teal:#0F3D3E;
@@ -268,6 +269,7 @@ body.market-mode .receipt-card,body.market-mode .sheet{background:#0a0a0a;border
 body.market-mode .topbar,body.market-mode .bottomnav{background:#000;}
 body.market-mode h1,body.market-mode h2,body.market-mode h3,body.market-mode h4{color:#fff;}
 body.market-mode .stat-box .val{color:var(--marigold);}
+body.market-mode .t1{color:#fff;}
 body.market-mode .subtle,body.market-mode .t2,body.market-mode .lbl{color:#999;}
 
 .switch{position:relative;width:44px;height:25px;flex-shrink:0;}
@@ -294,6 +296,7 @@ input:checked + .slider-tog::before{transform:translateX(19px);}
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#12213B">
+<meta name="color-scheme" content="light">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-180.png">
 <script src="https://checkout.flutterwave.com/v3.js"></script>
@@ -795,8 +798,8 @@ function renderJoinShop(){
 
 function showRecoveryCodeSheet(code){
   openSheet(`
-    <div class="sheet-head"><h3>Save Your Recovery Code</h3><button class="close-x" id="sheet-close">✕</button></div>
-    <p class="subtle" style="margin-bottom:16px;">If you ever forget your password, this code is the only way back in. Write it down or screenshot it now — Zed cannot show it to you again.</p>
+    <div class="sheet-head"><h3>Your Backup Recovery Code</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <p class="subtle" style="margin-bottom:16px;">You can always reset your password by email instead — this code is just an optional backup. Write it down or screenshot it if you'd like a second way in.</p>
     <div class="code-display" style="font-size:22px;letter-spacing:.08em;text-align:center;margin-bottom:16px;">${code}</div>
     <button class="btn btn-outline" id="copy-recovery-code-sheet" style="width:100%;">📋 Copy Code</button>
   `);
@@ -831,6 +834,7 @@ let forgotStep = 1; // 1: enter username/email, 2: enter emailed code, 3: set ne
 let forgotUserId = null;
 let forgotError = '';
 let forgotEmail = null;
+let forgotCode = null;
 let forgotOtpSending = false;
 
 /* ---- forgot-password email verification (Edge Functions do the actual send/verify) ---- */
@@ -853,6 +857,19 @@ async function verifyResetOtp(email, code){
   const data = await res.json();
   if(!res.ok && !data) throw new Error('Could not verify the code right now.');
   return data; // { verified: true } or { verified: false, error }
+}
+// The only call actually authorized to change the password — re-checks the
+// code server-side itself, updates Supabase Auth, and keeps app_users.password_hash
+// in sync with what every device computes locally.
+async function applyResetPassword(email, code, newPassword){
+  const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/apply-reset-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+SITE_CONTENT_ANON_KEY },
+    body: JSON.stringify({ email, code, newPassword })
+  });
+  const data = await res.json();
+  if(!res.ok || data.error) throw new Error(data.error || 'Could not reset the password right now.');
+  return data;
 }
 
 function renderForgotPassword(){
@@ -881,16 +898,24 @@ function renderForgotPassword(){
 }
 function bindForgotPasswordEvents(){
   const go = (id,fn)=>{ const e=document.getElementById(id); if(e) e.addEventListener('click', fn); };
-  go('go-login-from-forgot', e=>{e.preventDefault(); authMode = state.business ? '' : 'login'; forgotStep=1; forgotUserId=null; forgotEmail=null; forgotError=''; render();});
+  go('go-login-from-forgot', e=>{e.preventDefault(); authMode = state.business ? '' : 'login'; forgotStep=1; forgotUserId=null; forgotEmail=null; forgotCode=null; forgotError=''; render();});
   go('btn-forgot-next', async ()=>{
     if(forgotOtpSending) return;
     const idf = document.getElementById('fp-user').value.trim().toLowerCase();
     const u = state.users.find(x=> (x.username.toLowerCase()===idf || (x.email||'').toLowerCase()===idf) && x.role==='master');
-    if(!u){ forgotError='No owner account found with that username or email.'; render(); return; }
-    if(!u.email){ forgotError='This account has no email on file. Password recovery is not available for it.'; render(); return; }
-    forgotUserId = u.id; forgotEmail = u.email; forgotOtpSending = true; forgotError=''; render();
+    let emailToUse;
+    if(u){
+      if(!u.email){ forgotError='This account has no email on file. Password recovery is not available for it.'; render(); return; }
+      forgotUserId = u.id; emailToUse = u.email;
+    } else {
+      // Not on this device — could still be a real account on another device.
+      // We can't resolve a username without a local record, so require an email here.
+      if(!/^\S+@\S+\.\S+$/.test(idf)){ forgotError='Enter the email on file for this account (a username only works on the device it was created on).'; render(); return; }
+      forgotUserId = null; emailToUse = idf;
+    }
+    forgotEmail = emailToUse; forgotOtpSending = true; forgotError=''; render();
     try{
-      await sendResetOtp(u.email);
+      await sendResetOtp(emailToUse);
       forgotOtpSending = false; forgotStep = 2; render();
     }catch(err){
       forgotOtpSending = false;
@@ -912,24 +937,49 @@ function bindForgotPasswordEvents(){
     try{
       const result = await verifyResetOtp(forgotEmail, code);
       if(!result.verified){ forgotError = result.error || 'Incorrect code.'; render(); return; }
+      forgotCode = code;
       forgotStep = 3; forgotError=''; render();
     }catch(err){
       forgotError = err.message || "Couldn't verify right now. Check your internet connection.";
       render();
     }
   });
-  go('btn-forgot-save', ()=>{
+  go('btn-forgot-save', async ()=>{
     const p1 = document.getElementById('fp-newpass').value;
     const p2 = document.getElementById('fp-newpass2').value;
     if(p1.length<6){ forgotError='Password must be at least 6 characters.'; render(); return; }
     if(p1!==p2){ forgotError="Passwords don't match."; render(); return; }
+    const btn = document.getElementById('btn-forgot-save');
+    if(btn){ btn.disabled = true; btn.textContent = 'Resetting…'; }
+    try{
+      await applyResetPassword(forgotEmail, forgotCode, p1);
+    }catch(err){
+      forgotError = err.message || "Couldn't reset the password right now. Check your internet connection.";
+      render(); return;
+    }
     const u = state.users.find(x=>x.id===forgotUserId);
-    u.passwordHash = hash(p1);
-    logAudit('password_reset', 'Password reset via emailed code');
-    if(u.role === 'master') syncPasswordToSupabaseAuth(p1);
-    authMode='login'; forgotStep=1; forgotUserId=null; forgotEmail=null; forgotError='';
-    toast('Password reset ✅ — log in with your new password.');
-    render();
+    if(u){
+      // Already on this device — update the local copy too, so login works offline right away.
+      u.passwordHash = hash(p1);
+      logAudit('password_reset', 'Password reset via emailed code');
+      authMode='login'; forgotStep=1; forgotUserId=null; forgotEmail=null; forgotCode=null; forgotError='';
+      toast('Password reset ✅ — log in with your new password.');
+      render();
+    } else {
+      // Never been on this device before — bootstrap it now, same as a
+      // first-time cross-device login, so they land straight on the dashboard
+      // instead of being sent back to type the same new password into Login.
+      try{
+        await loginOwnerToSupabase(forgotEmail, p1);
+        forgotStep=1; forgotUserId=null; forgotEmail=null; forgotCode=null; forgotError='';
+      }catch(err){
+        // Password was reset successfully server-side even if this device-setup
+        // step failed (e.g. offline right after) — send them to Login to try normally.
+        authMode='login'; forgotStep=1; forgotUserId=null; forgotEmail=null; forgotCode=null; forgotError='';
+        toast('Password reset ✅ — log in with your new password.');
+        render();
+      }
+    }
   });
 }
 
@@ -1001,37 +1051,125 @@ function renderSignupVerify(){
   </div>`;
 }
 
+// ilike() treats % and _ as wildcards — escape both so an email containing
+// an underscore (very common) can't accidentally match a different account.
+function escapeIlike(s){ return s.replace(/[%_]/g, c => '\\'+c); }
+
+// First-time (or account-not-on-this-device) login: authenticates directly
+// against Supabase, then bootstraps this device's local copy of the
+// business, the owner's own user record, and shops — enough to get to the
+// dashboard — before handing off to pullSync() for everything else
+// (goods, customers, sales, etc). See sync-engine.js's pullSync for the
+// "Known limitation" this closes. Used by both Login (with the existing
+// password) and Forgot Password (with the just-reset one).
+async function loginOwnerToSupabase(email, pass){
+  const { data: signInData, error: signInErr } = await window.sb.auth.signInWithPassword({ email, password: pass });
+  if(signInErr || !signInData.session){
+    throw new Error('Incorrect username/email or password.');
+  }
+  const accessToken = signInData.session.access_token;
+  const headers = { 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+accessToken };
+
+  const bizRes = await fetch(`${SITE_CONTENT_URL}/rest/v1/businesses?select=*&owner_auth_user_id=eq.${signInData.user.id}`, { headers });
+  const bizRows = bizRes.ok ? await bizRes.json() : [];
+  if(!bizRows[0]){
+    throw new Error("We couldn't find a business linked to this account.");
+  }
+  const b = bizRows[0];
+  state.business = {
+    id: b.id, name: b.name, businessType: b.business_type||'', registrationNumber: b.registration_number||'',
+    country: b.country, currency: b.currency, timezone: b.timezone, language: b.language||'en',
+    taxName: b.tax_name||'VAT', taxPercent: b.tax_percent||0, subscriptionPlan: b.subscription_plan||'free',
+    subscriptionExpiresAt: b.subscription_expires_at||null, autoRenewEnabled: b.auto_renew_enabled||false,
+    autoRenewPlan: b.auto_renew_plan||null, autoRenewInterval: b.auto_renew_interval||null,
+    createdAt: b.created_at
+  };
+
+  const [usersRes, shopsRes] = await Promise.all([
+    fetch(`${SITE_CONTENT_URL}/rest/v1/app_users?select=*&business_id=eq.${b.id}&email=ilike.${encodeURIComponent(escapeIlike(email))}`, { headers }),
+    fetch(`${SITE_CONTENT_URL}/rest/v1/shops?select=*&business_id=eq.${b.id}`, { headers })
+  ]);
+  const userRows = usersRes.ok ? await usersRes.json() : [];
+  const shopRows = shopsRes.ok ? await shopsRes.json() : [];
+  if(!userRows[0]){
+    throw new Error("We couldn't find your staff record for this business.");
+  }
+  const r = userRows[0];
+  const localUser = {
+    id: r.id, businessId: r.business_id, username: r.username, email: r.email, phone: r.phone||'',
+    firstName: r.first_name, lastName: r.last_name||'', role: r.role, isActive: r.is_active, canAddGoods: r.can_add_goods,
+    passwordHash: r.password_hash||null, pinHash: r.pin_hash||null, pinLength: r.pin_length||null
+  };
+  if(!state.users.some(x=>x.id===localUser.id)) state.users.push(localUser);
+
+  shopRows.forEach(sr=>{
+    if(!state.shops.some(x=>x.id===sr.id)){
+      state.shops.push({ id:sr.id, businessId:sr.business_id, name:sr.name, address:sr.address||'', phone:sr.phone||'', email:sr.email||'' });
+    }
+  });
+
+  state.sessionUserId = localUser.id;
+  state.currentShopId = shopRows[0] ? shopRows[0].id : (state.shops[0] ? state.shops[0].id : null);
+  logAudit('login', 'Master logged in on a new device');
+  toast(`Welcome back, ${localUser.firstName}!`);
+  render();
+
+  // Pull everything else now that business/session exist locally.
+  if(typeof pullSync === 'function') pullSync();
+}
+
 function bindAuthEvents(){
   const go = (id,fn)=>{ const e=document.getElementById(id); if(e) e.addEventListener('click', fn); };
   if(document.getElementById('google-login-btn')) renderGoogleButton('google-login-btn');
   if(document.getElementById('google-signup-btn')) renderGoogleButton('google-signup-btn');
   go('go-signup', e=>{e.preventDefault(); authMode='signup'; authError=''; render();});
   go('go-login', e=>{e.preventDefault(); authMode='login'; authError=''; render();});
-  go('go-forgot', e=>{e.preventDefault(); authMode='forgot'; forgotStep=1; forgotUserId=null; forgotEmail=null; forgotError=''; render();});
+  go('go-forgot', e=>{e.preventDefault(); authMode='forgot'; forgotStep=1; forgotUserId=null; forgotEmail=null; forgotCode=null; forgotError=''; render();});
   go('go-join-shop', e=>{e.preventDefault(); authMode='join-shop'; authError=''; render();});
   go('go-login-from-join', e=>{e.preventDefault(); authMode='login'; authError=''; render();});
   go('btn-join-shop', ()=>joinShopSubmit());
 
-  go('btn-login', ()=>{
+  go('btn-login', async ()=>{
     const idf = document.getElementById('li-user').value.trim().toLowerCase();
     const pass = document.getElementById('li-pass').value;
     const u = state.users.find(x=> (x.username.toLowerCase()===idf || (x.email||'').toLowerCase()===idf) && x.role==='master');
-    if(!u || u.passwordHash !== hash(pass)){ authError='Incorrect username/email or password.'; render(); return; }
-    state.sessionUserId = u.id;
-    if(!state.currentShopId && state.shops[0]) state.currentShopId = state.shops[0].id;
-    logAudit('login', 'Master logged in');
-    toast(`Welcome back, ${u.firstName}!`);
-    render();
 
-    // Local login above is instant and works fully offline — this part is
-    // purely a background refresh of the Supabase Auth session, so the sync
-    // engine has a valid token to push queued changes with. If there's no
-    // internet right now, this silently fails and nothing about the login
-    // the owner just experienced changes.
-    if(u.email){
-      window.sb.auth.signInWithPassword({ email: u.email, password: pass })
-        .then(({ error })=>{ if(!error){ flushSyncQueue(); pullSync(); } })
-        .catch(()=>{});
+    if(u){
+      // Fast, fully-offline path — account already lives on this device.
+      if(u.passwordHash !== hash(pass)){ authError='Incorrect username/email or password.'; render(); return; }
+      state.sessionUserId = u.id;
+      if(!state.currentShopId && state.shops[0]) state.currentShopId = state.shops[0].id;
+      logAudit('login', 'Master logged in');
+      toast(`Welcome back, ${u.firstName}!`);
+      render();
+      // Background refresh of the Supabase Auth session so the sync engine
+      // has a valid token to push queued changes with. Silently no-ops offline.
+      if(u.email){
+        window.sb.auth.signInWithPassword({ email: u.email, password: pass })
+          .then(({ error })=>{ if(!error){ flushSyncQueue(); pullSync(); } })
+          .catch(()=>{});
+      }
+      return;
+    }
+
+    // Not found on this device — this could be a brand-new device/browser
+    // for an account that already exists in Supabase. That path needs a
+    // real email (Supabase Auth doesn't know usernames) and a network call.
+    if(!/^\S+@\S+\.\S+$/.test(idf)){
+      authError='Incorrect username/email or password.';
+      render(); return;
+    }
+    if(!navigator.onLine){
+      authError="This account isn't set up on this device yet. Connect to the internet to sign in here for the first time.";
+      render(); return;
+    }
+    const btn = document.getElementById('btn-login');
+    if(btn){ btn.disabled = true; btn.textContent = 'Signing in…'; }
+    try{
+      await loginOwnerToSupabase(idf, pass);
+    }catch(err){
+      authError = err.message || 'Incorrect username/email or password.';
+      render();
     }
   });
 
@@ -1335,7 +1473,7 @@ function bindPinEvents(u){
       render();
     });
     const ppForgot = document.getElementById('pp-go-forgot');
-    if(ppForgot) ppForgot.addEventListener('click', e=>{ e.preventDefault(); authMode='forgot'; forgotStep=1; forgotUserId=null; forgotEmail=null; forgotError=''; render(); });
+    if(ppForgot) ppForgot.addEventListener('click', e=>{ e.preventDefault(); authMode='forgot'; forgotStep=1; forgotUserId=null; forgotEmail=null; forgotCode=null; forgotError=''; render(); });
     return;
   }
   updatePinDots(u);
@@ -4121,8 +4259,8 @@ function screenProfile(){
       <button class="btn btn-outline" id="save-password-btn">Update Password</button>
     </div>
     <div class="card">
-      <div class="t1" style="margin-bottom:6px;">Recovery Code</div>
-      <p class="t2" style="margin-bottom:10px;">Used to reset your password if you ever forget it. Lost your code? Generate a new one — it'll replace your old code immediately.</p>
+      <div class="t1" style="margin-bottom:6px;">Backup Recovery Code</div>
+      <p class="t2" style="margin-bottom:10px;">An optional second way to reset your password, in addition to the emailed code. Generate a new one any time — it'll replace your old code immediately.</p>
       <button class="btn btn-outline btn-sm" id="regen-recovery-btn">🔑 Generate New Recovery Code</button>
     </div>` : `
     <div class="card">
@@ -5785,7 +5923,7 @@ function bindContactUsEvents(){
    ============================================================ */
 const FAQ_GROUPS = [
   { category: "Getting Started", items: [
-    { q:"How do I create my business account?", a:"Tap Create One Free on the login screen, fill in your business and owner details, then save your recovery code somewhere safe — it's the only way back in if you forget your password." },
+    { q:"How do I create my business account?", a:"Tap Create One Free on the login screen, fill in your business and owner details, then verify your email. You can reset your password later using an emailed code, so there's no code you need to keep safe to get back in." },
     { q:"I forgot my password — what do I do?", a:"Tap Forgot Password on the login screen and enter your username or email. We'll send a 6-digit code to your email on file — enter it to set a new password. If your account has no email on file, you'll need to create a new account." },
     { q:"How do multiple staff use the same device?", a:"Each staff member gets their own PIN. After the business owner logs in once, everyone unlocks their own profile with their PIN from the user-select screen — no need to log in with a password every time." },
     { q:"How do I add a new staff member?", a:"Go to More → Staff → Generate Join Code. Share the code with them; they open Zed on their device, tap Join Business, and enter it. The code expires after a set number of minutes." },

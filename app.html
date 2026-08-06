@@ -1452,7 +1452,7 @@ function bindUserSelectEvents(){
     });
   });
   const jt = document.getElementById('tile-join'); if(jt) jt.addEventListener('click', openJoinFlow);
-  const lo = document.getElementById('full-logout'); if(lo) lo.addEventListener('click', e=>{e.preventDefault(); if(confirm('Sign out of this business on this device?')){ state.business=null; state.sessionUserId=null; authMode='login'; pendingSignupData=null; authError=''; render(); }});
+  const lo = document.getElementById('full-logout'); if(lo) lo.addEventListener('click', e=>{e.preventDefault(); if(confirm('Sign out of this business on this device?')){ state.sessionUserId=null; authMode='login'; pendingSignupData=null; authError=''; render(); }});
 }
 
 function openPinScreen(u){
@@ -3290,7 +3290,7 @@ function bindMoreEvents(){
   const flo = document.getElementById('do-full-logout');
   if(flo) flo.addEventListener('click', ()=>{
     if(confirm('Sign out of this business on this device?')){
-      state.business=null; state.sessionUserId=null; authMode='login'; pendingSignupData=null; authError=''; route='dashboard'; render();
+      state.sessionUserId=null; authMode='login'; pendingSignupData=null; authError=''; route='dashboard'; render();
     }
   });
 }

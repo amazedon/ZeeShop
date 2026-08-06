@@ -2,7 +2,12 @@
 //
 // Checks a submitted code against the most recent unexpired,
 // unconsumed row in password_reset_otp_codes for that email.
-// On success, marks the row consumed so the same code can't be replayed.
+// This is a UX check only — it does NOT consume the code, because the
+// front end calls this before showing the "set new password" screen,
+// and the code must still be valid when apply-reset-password re-checks
+// it (that function is the one that actually consumes it). Never trust
+// that this endpoint having been called means anything on its own —
+// apply-reset-password re-validates independently.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -69,11 +74,6 @@ Deno.serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-
-    await supabase
-      .from("password_reset_otp_codes")
-      .update({ consumed_at: new Date().toISOString() })
-      .eq("id", row.id);
 
     return new Response(JSON.stringify({ verified: true }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },

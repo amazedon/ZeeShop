@@ -526,7 +526,19 @@ function migratePhoneNumbers(){
   if(changed) save();
 }
 
-function uid(p){return (p||"id")+"_"+Date.now().toString(36)+Math.random().toString(36).slice(2,7);}
+// Generates a real RFC-4122 UUID (required — Supabase's id columns are
+// typed `uuid`, and Postgres rejects anything else, e.g. "biz_abc123",
+// with a 22P02 "invalid input syntax for type uuid" error). The `p` prefix
+// argument is kept for compatibility with existing call sites but is no
+// longer used in the id itself.
+function uid(p){
+  if(crypto.randomUUID) return crypto.randomUUID();
+  // Fallback UUID v4 for older browsers without crypto.randomUUID().
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c=>{
+    const r = Math.random()*16|0, v = c==='x' ? r : (r&0x3|0x8);
+    return v.toString(16);
+  });
+}
 function todayISO(){return new Date().toISOString().slice(0,10);}
 function daysBetween(d1,d2){return Math.round((new Date(d2)-new Date(d1))/86400000);}
 function fmtDate(d){return new Date(d+"T00:00:00").toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});}

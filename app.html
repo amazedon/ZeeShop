@@ -655,11 +655,20 @@ function render(){
     bindPasswordToggles();
     return;
   }
+  if(!state.sessionUserId && (authMode==='signup' || authMode==='signup-verify' || authMode==='join-shop')){
+    if(authMode==='signup-verify' && !pendingSignupData){
+      authMode = 'login'; // stale state from an earlier session — never show a broken verify screen
+    } else {
+      app.innerHTML = renderAuthScreen();
+      bindAuthEvents();
+      if(authMode==='signup-verify') bindSignupVerifyEvents();
+      bindPasswordToggles();
+      return;
+    }
+  }
   if(!state.business){
-    if(authMode==='signup-verify' && !pendingSignupData) authMode='login'; // stale state from an earlier session — never show a broken verify screen
     app.innerHTML = renderAuthScreen();
     bindAuthEvents();
-    if(authMode==='signup-verify') bindSignupVerifyEvents();
     bindPasswordToggles();
     return;
   }

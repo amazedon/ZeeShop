@@ -1294,8 +1294,7 @@ function bindSignupVerifyEvents(){
       render();
     }
   });
-}
-async function completeSignupAccount(data){
+}async function completeSignupAccount(data){
   const { biz, country, ccy, fn, ln, username, phone, email, pass } = data;
   const bizId = uid('biz');
   const userId = uid('user');
@@ -1316,34 +1315,72 @@ async function completeSignupAccount(data){
   logAudit('signup','Business created: '+biz);
   pendingSignupData = null;
 
-  // Create the matching Supabase Auth account for the owner (needs internet —
-  // signup already required internet for the OTP step, so this is no new
-  // requirement). If this fails, the local account still works fully offline;
-  // it just won't sync to Supabase until the owner logs in with internet later
-  // (see loginOwnerToSupabase, called from the normal login flow).
+  // Create the matching Supabase Auth account + database records
   try{
     const { data: authData, error: authErr } = await window.sb.auth.signUp({ email, password: pass });
     if(!authErr && authData.user){
       const ownerAuthId = authData.user.id;
-      enqueueSync('businesses','insert', {
-        id: bizId, name: biz, business_type:'', registration_number:'',
-        country, currency:ccy, timezone: state.business.timezone, language:'en',
-        tax_name:'VAT', tax_percent:0, subscription_plan:'free',
+
+      // 1. Insert business immediately
+      await window.sb.from('businesses').insert({
+        id: bizId,
+        name: biz,
+        business_type: '',
+        registration_number: '',
+        country,
+        currency: ccy,
+        timezone: state.business.timezone,
+        language: 'en',
+        tax_name: 'VAT',
+        tax_percent: 0,
+        subscription_plan: 'free',
         owner_auth_user_id: ownerAuthId
       });
-      enqueueSync('shops','insert', {
-        id: shopId, business_id: bizId, name: biz+" — Main Shop", address:'', phone, email
+
+      // 2. Insert shop
+      await window.sb.from('shops').insert({
+        id: shopId,
+        business_id: bizId,
+        name: biz + " — Main Shop",
+        address: '',
+        phone,
+        email
       });
-      enqueueSync('app_users','insert', {
-        id: userId, business_id: bizId, username, email, phone,
-        first_name: fn, last_name: ln, role:'master', is_active:true, can_add_goods:true,
-        password_hash: hash(pass)
+
+      // 3. Insert app_users (THIS WAS THE MISSING LINK)
+      await window.sb.from('app_users').insert({
+        id: userId,
+        business_id: bizId,
+        username,
+        email,
+        phone,
+        first_name: fn,
+        last_name: ln,
+        role: 'master',
+        is_active: true,
+        can_add_goods: true,
+        can_sell: true,
+        can_sell_credit: true,
+        can_record_cash: true,
+        can_void_return: true,
+        can_share: true,
+        password_hash: hash(pass),
+        auth_user_id: ownerAuthId          // ← This was missing before
       });
-      [groupRetail, groupWholesale, groupVip].forEach(g=>{
-        enqueueSync('customer_groups','insert', { id: g.id, business_id: g.businessId, name: g.name });
-      });
+
+      // 4. Insert customer groups
+      for (const g of [groupRetail, groupWholesale, groupVip]) {
+        await window.sb.from('customer_groups').insert({
+          id: g.id,
+          business_id: g.businessId,
+          name: g.name
+        });
+      }
     }
-  }catch(e){ /* offline or Supabase error — local account still works; queue nothing yet */ }
+  }catch(e){
+    console.error('Signup sync error:', e);
+    // Local account still works even if Supabase fails
+  }
 
   render();
 }

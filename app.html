@@ -1892,7 +1892,7 @@ function planLimits(){
   const plan = effectivePlan();
   if(plan==='boss') return { shops:Infinity, goods:Infinity, customers:Infinity, staff:Infinity };
   if(plan==='pro') return { shops:3, goods:1000, customers:Infinity, staff:5 };
-  return { shops:1, goods:100, customers:50, staff:1 };
+  return { shops:2, goods:100, customers:50, staff:2 };
 }
 function planLabel(){
   const plan = effectivePlan();

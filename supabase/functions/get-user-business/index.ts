@@ -6,28 +6,30 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// Every field the front end needs to build a working local user record
+// (see loginOwnerToSupabase in app.html) — must include id/email/the
+// password & pin hashes, or the device can't actually log this person in.
+const USER_COLUMNS =
+  "id, business_id, role, is_active, username, email, first_name, last_name, phone, can_add_goods, password_hash, pin_hash, pin_length";
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
-
   try {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
       return json({ error: "Missing Authorization header" }, 401);
     }
-
     const supabaseClient = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_ANON_KEY") ?? "",
       { global: { headers: { Authorization: authHeader } } }
     );
-
     const { data: { user }, error: userError } = await supabaseClient.auth.getUser();
     if (userError || !user) {
       return json({ error: "Unauthorized user: " + (userError?.message || "No user found") }, 401);
     }
-
     const authUserId = user.id;
 
     const admin = createClient(
@@ -38,10 +40,10 @@ serve(async (req) => {
     let businessId: string | null = null;
     let userData: any = null;
 
-    // 1. Check if the user is a staff member in app_users
+    // 1. The normal path — this device's account is directly linked via auth_user_id.
     const { data: appUser } = await admin
       .from("app_users")
-      .select("business_id, role, is_active, username, first_name, last_name, phone, can_add_goods")
+      .select(USER_COLUMNS)
       .eq("auth_user_id", authUserId)
       .maybeSingle();
 
@@ -49,41 +51,46 @@ serve(async (req) => {
       businessId = appUser.business_id;
       userData = appUser;
     } else {
-      // 2. If not found in app_users, check if they are the business owner in businesses
-      // (Adjust column name if your owner column is named differently, e.g., owner_auth_user_id or user_id)
+      // 2. Not linked directly — but they might still be the business owner
+      // (e.g. an account created before auth_user_id was being saved).
+      // Find the business, then look up the REAL app_users row for it —
+      // never fabricate a partial user object; every field above is real
+      // data or this whole login attempt should fail cleanly instead.
       const { data: bizOwner } = await admin
         .from("businesses")
-        .select("*")
-        .eq("owner_auth_user_id", authUserId) // Change to match your actual owner column if different
+        .select("id")
+        .eq("owner_auth_user_id", authUserId)
         .maybeSingle();
-
       if (bizOwner) {
         businessId = bizOwner.id;
-        userData = {
-          role: "owner",
-          is_active: true,
-          can_add_goods: true,
-          username: bizOwner.name,
-        };
+        const { data: ownerRow } = await admin
+          .from("app_users")
+          .select(USER_COLUMNS)
+          .eq("business_id", businessId)
+          .eq("role", "master")
+          .maybeSingle();
+        userData = ownerRow || null;
       }
     }
 
     if (!businessId) {
       return json({ error: "We couldn't find a business linked to this account." }, 404);
     }
+    if (!userData) {
+      return json({ error: "This business has no matching owner record. Contact support." }, 404);
+    }
 
-    // 3. Fetch the business details
+    // 3. Fetch the business details.
     const { data: business, error: bizErr } = await admin
       .from("businesses")
       .select("*")
       .eq("id", businessId)
       .single();
-
     if (bizErr || !business) {
       return json({ error: "Business record not found." }, 404);
     }
 
-    // 4. Fetch the shops associated with this business
+    // 4. Fetch the shops associated with this business.
     const { data: shops } = await admin
       .from("shops")
       .select("*")
@@ -93,9 +100,8 @@ serve(async (req) => {
       success: true,
       user: userData,
       business: business,
-      shops: shops || []
+      shops: shops || [],
     }, 200);
-
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : "Unexpected error" }, 500);
   }

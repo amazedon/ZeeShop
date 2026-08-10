@@ -260,17 +260,72 @@ main{flex:1;padding:14px 14px 90px;max-width:640px;margin:0 auto;width:100%;}
   font-size:12px;font-weight:800;color:var(--ink);text-decoration:none;background:#fff;
 }
 
-/* market mode (battery saver) */
-body.market-mode{background:#000;}
+/* ============================================================
+   DARK MODE (a.k.a. "Market Mode" internally — battery saver +
+   dark theme). Applied via body.market-mode, toggled in Settings.
+   Every surface and text color used anywhere in the app is
+   covered here so nothing is left showing its light-mode color.
+   ============================================================ */
+body.market-mode{background:#000;color:#eee;color-scheme:dark;}
 body.market-mode *{animation:none !important;transition:none !important;box-shadow:none !important;}
 body.market-mode main{color:#eee;}
+
+/* surfaces (cards, sheets, tiles, panels) */
 body.market-mode .card,body.market-mode .stat-box,body.market-mode .list-row,body.market-mode .good-tile,
-body.market-mode .receipt-card,body.market-mode .sheet{background:#0a0a0a;border-color:#2a2a2a;color:#eee;}
-body.market-mode .topbar,body.market-mode .bottomnav{background:#000;}
+body.market-mode .receipt-card,body.market-mode .sheet,body.market-mode .auth-card,
+body.market-mode .user-tile,body.market-mode .pinpad button,body.market-mode .contact-btns a,
+body.market-mode .contact-btns button,body.market-mode .qty-stepper button{
+  background:#0a0a0a;border-color:#2a2a2a;color:#eee;
+}
+body.market-mode .stat-box.accent{background:var(--ink);border-color:var(--ink);}
+body.market-mode .topbar,body.market-mode .bottomnav{background:#000;border-color:#2a2a2a;}
+body.market-mode .receipt-card::after{
+  background:
+    linear-gradient(-45deg, transparent 60%, #0a0a0a 60%) 0 0/12px 12px repeat-x,
+    linear-gradient(45deg, transparent 60%, #0a0a0a 60%) 0 0/12px 12px repeat-x;
+}
+
+/* nested "chip" surfaces — thumbs, icon boxes, badges, progress track, close button */
+body.market-mode .thumb,body.market-mode .good-tile .gic,body.market-mode .close-x,
+body.market-mode .progress-bar,body.market-mode .pill-gray{
+  background:#1a1a1a;color:#bbb;
+}
+body.market-mode .divider,body.market-mode .settings-row,body.market-mode .bottomnav,
+body.market-mode .field input,body.market-mode .field select,body.market-mode .field textarea,
+body.market-mode .user-tile,body.market-mode .pinpad button,body.market-mode .qty-stepper button,
+body.market-mode .contact-btns a,body.market-mode .contact-btns button{
+  border-color:#2a2a2a;
+}
+body.market-mode .divider{background:#2a2a2a;}
+
+/* form fields — the most common "still white" offenders */
+body.market-mode .field input,body.market-mode .field select,body.market-mode .field textarea{
+  background:#111;color:#f0f0f0;
+}
+body.market-mode .field input::placeholder,body.market-mode .field textarea::placeholder{color:#777;}
+body.market-mode .field label,body.market-mode .settings-row .info .t2{color:#999;}
+
+/* headings & text */
 body.market-mode h1,body.market-mode h2,body.market-mode h3,body.market-mode h4{color:#fff;}
+body.market-mode .t1,body.market-mode .uname,body.market-mode .empty b,
+body.market-mode .good-tile .gname,body.market-mode .brand-name{color:#fff;}
+body.market-mode .subtle,body.market-mode .t2,body.market-mode .lbl,body.market-mode .urole,
+body.market-mode .good-tile .gprice,body.market-mode .empty{color:#999;}
 body.market-mode .stat-box .val{color:var(--marigold);}
-body.market-mode .t1{color:#fff;}
-body.market-mode .subtle,body.market-mode .t2,body.market-mode .lbl{color:#999;}
+
+/* buttons — outline/ghost rely on --text/--ink for color, which is unreadable on a dark surface */
+body.market-mode .btn-outline{color:#eee;border-color:#3a3a3a;background:transparent;}
+body.market-mode .btn-ghost{color:var(--marigold);}
+body.market-mode .contact-btns a,body.market-mode .contact-btns button{color:#eee;}
+body.market-mode .pinpad button{color:#fff;}
+body.market-mode .pin-dot{border-color:#666;}
+body.market-mode .pin-dot.filled{background:#fff;border-color:#fff;}
+
+/* misc small elements */
+body.market-mode .close-x{color:#ccc;}
+body.market-mode .slider-tog{background:#333;}
+body.market-mode .code-display{background:#0a0a0a;border:1px solid #2a2a2a;}
+body.market-mode ::selection{background:var(--marigold);color:#000;}
 
 .switch{position:relative;width:44px;height:25px;flex-shrink:0;}
 .switch input{opacity:0;width:0;height:0;}
@@ -827,23 +882,49 @@ function renderJoinShop(){
   </div>`;
 }
 
-/* Adds a 👁 toggle button to every password input on screen (call after rendering a form). */
+/* Real "eye / eye-slash" visibility toggle for password inputs — the same
+   line-icon pattern banking apps use (open eye = hidden/tap-to-reveal,
+   slashed eye = currently revealed), not emoji. Call after rendering a form
+   that contains password fields. Icons inherit currentColor so they follow
+   both light and dark mode automatically. */
+const EYE_ICON_OPEN =
+  '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M1.5 12S5 5 12 5s10.5 7 10.5 7-3.5 7-10.5 7S1.5 12 1.5 12Z"/>'
+  + '<circle cx="12" cy="12" r="3.2"/></svg>';
+const EYE_ICON_CLOSED =
+  '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M3 3l18 18"/>'
+  + '<path d="M10.6 5.2A10.6 10.6 0 0 1 12 5c7 0 10.5 7 10.5 7a13.9 13.9 0 0 1-3.15 4.15M6.6 6.6C3.4 8.6 1.5 12 1.5 12s3.5 7 10.5 7a10.4 10.4 0 0 0 4.15-.85"/>'
+  + '<path d="M9.9 9.9a3.2 3.2 0 0 0 4.2 4.2"/></svg>';
+
 function bindPasswordToggles(){
   document.querySelectorAll('input[type="password"], input[type="text"][data-pw-revealed]').forEach(input=>{
     if(input.dataset.pwToggled) return; // already wired
     input.dataset.pwToggled = '1';
     const wrapper = document.createElement('div');
-    wrapper.style.position = 'relative';
+    wrapper.style.cssText = 'position:relative;';
     input.parentNode.insertBefore(wrapper, input);
     wrapper.appendChild(input);
-    input.style.paddingRight = '42px';
+    input.style.paddingRight = '44px';
     const eyeBtn = document.createElement('button');
     eyeBtn.type = 'button';
-    eyeBtn.textContent = '👁';
-    eyeBtn.style.cssText = 'position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;font-size:16px;cursor:pointer;padding:4px;line-height:1;';
+    eyeBtn.setAttribute('aria-label', 'Show password');
+    eyeBtn.setAttribute('tabindex', '-1');
+    eyeBtn.innerHTML = EYE_ICON_OPEN;
+    eyeBtn.style.cssText = 'position:absolute;right:6px;top:50%;transform:translateY(-50%);'
+      + 'background:none;border:none;cursor:pointer;padding:8px;line-height:0;'
+      + 'display:flex;align-items:center;justify-content:center;color:var(--text-dim);border-radius:8px;';
     eyeBtn.addEventListener('click', ()=>{
-      if(input.type==='password'){ input.type='text'; input.dataset.pwRevealed='1'; eyeBtn.textContent='🙈'; }
-      else { input.type='password'; delete input.dataset.pwRevealed; eyeBtn.textContent='👁'; }
+      const revealed = input.type === 'text';
+      if(revealed){
+        input.type = 'password'; delete input.dataset.pwRevealed;
+        eyeBtn.innerHTML = EYE_ICON_OPEN; eyeBtn.setAttribute('aria-label','Show password');
+      } else {
+        input.type = 'text'; input.dataset.pwRevealed = '1';
+        eyeBtn.innerHTML = EYE_ICON_CLOSED; eyeBtn.setAttribute('aria-label','Hide password');
+      }
+      input.focus({preventScroll:true});
+      const v = input.value; input.setSelectionRange(v.length, v.length);
     });
     wrapper.appendChild(eyeBtn);
   });
@@ -1652,7 +1733,12 @@ async function joinShopSubmit(){
   }
 }
 
-function openJoinFlow(){
+// Adds a new staff member on THIS device (boss and new hire together in person).
+// Goes through the same join-business edge function as the remote "Join Shop"
+// flow so this staff member gets a real Supabase Auth account and can sync —
+// previously this built a local-only user with no auth account, so their
+// account and everything they did stayed stuck on this one device forever.
+async function openJoinFlow(){
   if(!state.joinCode || Date.now() > state.joinCode.expiresAt){
     toast('No active join code. Ask the Owner to generate one from Staff settings.');
     return;
@@ -1660,33 +1746,57 @@ function openJoinFlow(){
   const code = prompt('Enter the 6-digit code from your Owner:');
   if(!code) return;
   if(code.trim() !== state.joinCode.code){ toast('Incorrect or expired code.'); return; }
-  const limits = planLimits();
-  if(state.users.length >= limits.staff){
-    toast(`This business's plan allows up to ${limits.staff} staff. Ask the owner to upgrade.`);
-    return;
-  }
+
   const fn = prompt('Your first name:'); if(!fn) return;
   const ln = prompt('Your last name:') || '';
-  let username = prompt('Choose a username (unique in this shop):');
-  if(!username) return;
-  username = username.trim().toLowerCase();
-  if(state.users.some(u=>u.username.toLowerCase()===username)){ toast('That username is taken here.'); return; }
-  let pin = prompt('Set a 4-6 digit PIN:');
-  if(!pin || !/^\d{4,6}$/.test(pin)){ toast('PIN must be 4-6 digits.'); return; }
   const phone = prompt('Phone number (optional):') || '';
-  const u = { id:uid('user'), businessId:business().id, username, email:null, phone, firstName:fn, lastName:ln,
-    pinHash:hash(pin), pinLength:pin.length, role:'staff', isActive:true, canAddGoods:false };
-  state.users.push(u);
-  enqueueSync('app_users','insert', {
-    id: u.id, business_id: u.businessId, username: u.username, email: u.email, phone: u.phone,
-    first_name: u.firstName, last_name: u.lastName, role: u.role, is_active: u.isActive, can_add_goods: u.canAddGoods,
-    pin_hash: u.pinHash, pin_length: u.pinLength
-  });
-  state.joinCode = null;
-  logAudit('staff_joined', fn+' '+ln+' joined as staff');
-  toast('Welcome to the team, '+fn+'!');
-  save();
-  render();
+
+  toast('Joining…');
+  try{
+    const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/join-business`, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'apikey': SITE_CONTENT_ANON_KEY },
+      body: JSON.stringify({ code: state.joinCode.code, first_name: fn, last_name: ln, phone })
+    });
+    const result = await res.json();
+    if(!res.ok || result.error){
+      toast(result.error || 'Could not join — please check the code and try again.');
+      return;
+    }
+
+    // Real Supabase Auth session for this device — required for push/pull sync.
+    const { error: signInErr } = await window.sb.auth.signInWithPassword({
+      email: result.auth_email, password: result.auth_password
+    });
+    if(signInErr){
+      toast('Joined, but could not start your session — please try again with internet on.');
+      return;
+    }
+
+    let pin = prompt('Set a 4-6 digit PIN for quick login on this device:');
+    while(pin && !/^\d{4,6}$/.test(pin)){ pin = prompt('PIN must be 4-6 digits — try again:'); }
+    if(!pin){ pin = String(Math.floor(1000+Math.random()*9000)); }
+
+    const u = { ...result.user, pinHash: hash(pin), pinLength: pin.length };
+    state.users.push(u);
+
+    const { data: sessionData } = await window.sb.auth.getSession();
+    if(sessionData.session){
+      await fetch(`${SITE_CONTENT_URL}/rest/v1/app_users?id=eq.${u.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+sessionData.session.access_token, 'apikey': SITE_CONTENT_ANON_KEY, 'Prefer':'return=minimal' },
+        body: JSON.stringify({ pin_hash: u.pinHash, pin_length: u.pinLength })
+      }).catch(()=>{});
+    }
+
+    state.joinCode = null;
+    logAudit('staff_joined', fn+' '+ln+' joined as staff');
+    toast('Welcome to the team, '+fn+'!');
+    save();
+    render();
+  }catch(e){
+    toast('Could not join — check your connection and try again.');
+  }
 }
 
 /* ============================================================
@@ -4388,7 +4498,7 @@ function screenSettings(){
     ${subHeader("Settings")}
     <div class="card">
       <div class="settings-row" style="justify-content:space-between;display:flex;">
-        <div class="info"><div class="t1">Market Mode</div><div class="t2">Black UI, low animation — saves battery</div></div>
+        <div class="info"><div class="t1">Dark Mode</div><div class="t2">Dark UI, low animation — easier at night, saves battery</div></div>
         <label class="switch"><input type="checkbox" id="toggle-market" ${state.marketMode?'checked':''}><span class="slider-tog"></span></label>
       </div>
     </div>
@@ -5896,7 +6006,13 @@ function openCheckInModal(roomId){
    ============================================================ */
 const SITE_CONTENT_URL = 'https://beypnkzrgqrkjttsxlju.supabase.co';
 const SITE_CONTENT_ANON_KEY = 'sb_publishable_m_MrYeKVF4HgUG5i5v_THg_LPbvmUK5';
-window.sb = window.supabase.createClient(SITE_CONTENT_URL, SITE_CONTENT_ANON_KEY);
+// Explicit auth options (rather than relying on library defaults) so the
+// session that staff/owner get at login is reliably cached and kept fresh —
+// this is what lets sync push/pull keep working across app restarts without
+// anyone having to sign in again.
+window.sb = window.supabase.createClient(SITE_CONTENT_URL, SITE_CONTENT_ANON_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false }
+});
 async function fetchSiteContent(section){
   const res = await fetch(`${SITE_CONTENT_URL}/rest/v1/site_content?section=eq.${section}&select=*`, {
     headers: { 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+SITE_CONTENT_ANON_KEY }

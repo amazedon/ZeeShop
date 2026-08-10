@@ -83,26 +83,64 @@ if('serviceWorker' in navigator){
 
 let syncInProgress = false;
 
+// Lightweight, inspectable status so a UI (or just the console, for now)
+// can tell WHY nothing is syncing instead of it failing completely silently.
+// This was the root cause of staff data never reaching other devices: the
+// queue blocked forever with no signal anywhere that it was blocked.
+window.__zedSyncStatus = { lastAttempt: null, lastError: null, pendingCount: 0 };
+function noteSyncStatus(error){
+  window.__zedSyncStatus.lastAttempt = new Date().toISOString();
+  window.__zedSyncStatus.lastError = error || null;
+  window.__zedSyncStatus.pendingCount = loadSyncQueue().length;
+  if(error) console.warn('[zed-sync]', error);
+}
+
+const DEAD_LETTER_KEY = 'zed_sync_dead_letter_v1';
+function moveToDeadLetter(item, reason){
+  try{
+    const dead = JSON.parse(localStorage.getItem(DEAD_LETTER_KEY) || '[]');
+    dead.push({ ...item, failedAt: new Date().toISOString(), reason });
+    // Cap it — this is a diagnostic log, not a growing liability.
+    localStorage.setItem(DEAD_LETTER_KEY, JSON.stringify(dead.slice(-100)));
+  }catch(e){ /* best-effort */ }
+}
+
 async function flushSyncQueue(){
   if(syncInProgress) return;         // avoid overlapping flushes
   if(!navigator.onLine) return;      // quick check before trying network
   const session = await getCachedAuthSession();
-  if(!session) return;               // owner not logged in to Supabase yet — nothing to push against
+  if(!session){
+    noteSyncStatus('No Supabase session on this device — sign in again to resume syncing.');
+    return;
+  }
 
   syncInProgress = true;
   try{
     let queue = loadSyncQueue();
     while(queue.length > 0){
       const item = queue[0];
-      const success = await pushSyncItem(item, session.access_token);
-      if(!success){
-        item.attempts = (item.attempts || 0) + 1;
+      const result = await pushSyncItem(item, session.access_token);
+      if(result === 'ok'){
+        queue.shift();
         saveSyncQueue(queue);
-        break; // stop here — keep order, retry this item (and the rest) next time
+        continue;
       }
-      queue.shift();
+      if(result === 'permanent'){
+        // Bad data that will never succeed (e.g. schema mismatch) — dropping it
+        // is safer than letting it jam every future item behind it forever.
+        moveToDeadLetter(item, 'rejected by server — see console for the table/op');
+        queue.shift();
+        saveSyncQueue(queue);
+        noteSyncStatus(`Dropped a ${item.table} ${item.op} that the server permanently rejected.`);
+        continue;
+      }
+      // 'retry' — auth expired, offline mid-flush, or a transient server error.
+      item.attempts = (item.attempts || 0) + 1;
       saveSyncQueue(queue);
+      noteSyncStatus(`Push paused on a ${item.table} ${item.op} — will retry.`);
+      break; // stop here — keep order, retry this item (and the rest) next time
     }
+    if(queue.length === 0) noteSyncStatus(null);
   } finally {
     syncInProgress = false;
   }
@@ -134,15 +172,19 @@ async function pushSyncItem(item, accessToken){
         headers
       });
     } else {
-      return true; // unknown op — drop it rather than block the queue forever
+      return 'permanent'; // unknown op — drop it rather than block the queue forever
     }
-    if(res.ok) return true;
-    // A 4xx that isn't auth-related (e.g. bad data) would block forever if retried
-    // forever — but we still leave it queued and surface it, rather than silently
-    // discard a shop owner's data. It'll show up in the (future) sync-status UI.
-    return false;
+    if(res.ok) return 'ok';
+    // 401/403 — the session just expired mid-flush; retry once a fresh token
+    // is available rather than discarding real data.
+    if(res.status === 401 || res.status === 403) return 'retry';
+    // Other 4xx (bad/malformed data, constraint violation, etc.) will never
+    // succeed no matter how many times we retry — drop it so it doesn't
+    // block every other queued change behind it.
+    if(res.status >= 400 && res.status < 500) return 'permanent';
+    return 'retry'; // 5xx / unexpected — transient, worth retrying
   }catch(e){
-    return false; // network error — definitely offline, try again later
+    return 'retry'; // network error — definitely offline, try again later
   }
 }
 
@@ -196,10 +238,17 @@ async function pullSync(){
   try{
     const headers = { 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer ' + session.access_token };
     let changed = false;
+    const bizId = state.business && state.business.id;
 
-    async function fetchTable(table){
+    // Scope every query to this business explicitly rather than depending
+    // solely on RLS — belt-and-braces so a policy gap can't leak another
+    // business's rows onto this device. Tables without a business_id column
+    // (batches/variants/sale items) are joined onto already-scoped parents
+    // below, so they don't need their own filter.
+    async function fetchTable(table, scoped){
       try{
-        const res = await fetch(`${SYNC_SUPABASE_URL}/rest/v1/${table}?select=*`, { headers });
+        const filter = (scoped && bizId) ? `&business_id=eq.${bizId}` : '';
+        const res = await fetch(`${SYNC_SUPABASE_URL}/rest/v1/${table}?select=*${filter}`, { headers });
         if(!res.ok) return [];
         return await res.json();
       }catch(e){ return []; }
@@ -219,12 +268,12 @@ async function pullSync(){
       suppliers, purchases, expenses, salaries, emp, ros, notes,
       rooms, bookings, comms, sales, saleItems
     ] = await Promise.all([
-      fetchTable('shops'), fetchTable('app_users'), fetchTable('customer_groups'), fetchTable('customers'),
-      fetchTable('goods'), fetchTable('good_batches'), fetchTable('good_variants'),
-      fetchTable('suppliers'), fetchTable('supplier_purchases'), fetchTable('expenses'), fetchTable('salary_payments'),
-      fetchTable('employment_records'), fetchTable('record_only_staff'), fetchTable('shop_notes'),
-      fetchTable('rooms'), fetchTable('lodging_bookings'), fetchTable('communication_log'),
-      fetchTable('sales'), fetchTable('sale_items')
+      fetchTable('shops', true), fetchTable('app_users', true), fetchTable('customer_groups', true), fetchTable('customers', true),
+      fetchTable('goods', false), fetchTable('good_batches', false), fetchTable('good_variants', false),
+      fetchTable('suppliers', true), fetchTable('supplier_purchases', true), fetchTable('expenses', true), fetchTable('salary_payments', true),
+      fetchTable('employment_records', true), fetchTable('record_only_staff', true), fetchTable('shop_notes', true),
+      fetchTable('rooms', true), fetchTable('lodging_bookings', true), fetchTable('communication_log', true),
+      fetchTable('sales', false), fetchTable('sale_items', false)
     ]);
 
     mergeFlat(shops, state.shops, r=>({

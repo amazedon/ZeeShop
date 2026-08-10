@@ -14,7 +14,7 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   try {
     const { code, first_name, last_name, phone } = await req.json();
-    if (!code ||!first_name) return json({ error: "Missing code or first name" }, 400);
+    if (!code || !first_name) return json({ error: "Missing code or first name" }, 400);
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -32,13 +32,13 @@ Deno.serve(async (req: Request) => {
     if (!biz) return json({ error: "Business not found." }, 404);
 
     const planExpired = biz.subscription_expires_at && new Date(biz.subscription_expires_at) <= new Date();
-    const effectivePlan = (!biz.subscription_plan || biz.subscription_plan === "free" || planExpired)? "free" : biz.subscription_plan;
-    const staffLimit = STAFF_LIMITS[effectivePlan]?? 2;
-    const shopLimit = SHOP_LIMITS[effectivePlan]?? 2;
+    const effectivePlan = (!biz.subscription_plan || biz.subscription_plan === "free" || planExpired) ? "free" : biz.subscription_plan;
+    const staffLimit = STAFF_LIMITS[effectivePlan] ?? 2;
+    const shopLimit = SHOP_LIMITS[effectivePlan] ?? 2;
 
     // Staff limit check — only count staff
     const { count: staffCount } = await admin.from("app_users").select("id", { count: "exact", head: true }).eq("business_id", businessId).eq("role", "staff");
-    if ((staffCount?? 0) >= staffLimit) {
+    if ((staffCount ?? 0) >= staffLimit) {
       return json({ error: `This business's plan allows up to ${staffLimit} staff. Ask the owner to upgrade.` }, 400);
     }
 
@@ -50,7 +50,7 @@ Deno.serve(async (req: Request) => {
     const syntheticPassword = crypto.randomUUID() + crypto.randomUUID();
 
     const { data: authUser, error: authErr } = await admin.auth.admin.createUser({ email: syntheticEmail, password: syntheticPassword, email_confirm: true });
-    if (authErr ||!authUser?.user) return json({ error: "Could not create account: " + (authErr?.message || "unknown") }, 500);
+    if (authErr || !authUser?.user) return json({ error: "Could not create account: " + (authErr?.message || "unknown") }, 500);
 
     const username = (first_name + (last_name || "")).toLowerCase().replace(/[^a-z0-9]/g, "") + Math.floor(Math.random() * 1000);
 
@@ -83,20 +83,12 @@ Deno.serve(async (req: Request) => {
     });
     if (empErr) console.log("employment_records insert warning:", empErr.message);
 
-    // FIX — Auto-assign staff to ALL shops of business so goods/sales show up
-    // This fixes your "goods/sales never showed up on boss's dashboard"
-    const { data: allShops } = await admin.from("shops").select("id").eq("business_id", businessId);
-    if (allShops && allShops.length > 0) {
-      // Try shop_staff table if you have it
-      for (const shop of allShops) {
-        await admin.from("shop_members").insert({ shop_id: shop.id, user_id: authUser.user.id, business_id: businessId }).then(r => {
-          if (r.error) console.log("shop_members not exists, trying shop_staff");
-        });
-        await admin.from("shop_staff").insert({ shop_id: shop.id, user_id: authUser.user.id, business_id: businessId }).then(r => {
-          if (r.error) console.log("shop_staff insert skipped:", r.error.message);
-        });
-      }
-    }
+    // Note: staff shop access is NOT gated by a shop_members/shop_staff join
+    // table — the client treats every shop under this business_id as visible
+    // to any staff member of that business (see state.shops in app.html), and
+    // Super Admin's per-shop restriction (managesShopIds) is a separate,
+    // client-side-only concept. There is no shop-assignment table to write to
+    // here; the earlier code was inserting into two tables nothing ever reads.
 
     const { data: shops } = await admin.from("shops").select("*").eq("business_id", businessId);
 
@@ -105,14 +97,14 @@ Deno.serve(async (req: Request) => {
       auth_email: syntheticEmail,
       auth_password: syntheticPassword,
       user: { id: authUser.user.id, businessId, username, firstName: first_name, lastName: last_name || "", phone: phone || "", role: "staff", isActive: true, canAddGoods: true },
-      business: { id: businessId, name: biz.name, country: biz.country, currency: biz.currency, subscriptionPlan: biz.subscription_plan, subscriptionExpiresAt: biz.subscription_expires_at, shopLimit, staffLimit, shopCount: shopCount?? 0, staffCount: (staffCount?? 0) + 1 },
+      business: { id: businessId, name: biz.name, country: biz.country, currency: biz.currency, subscriptionPlan: biz.subscription_plan, subscriptionExpiresAt: biz.subscription_expires_at, shopLimit, staffLimit, shopCount: shopCount ?? 0, staffCount: (staffCount ?? 0) + 1 },
       shops: shops || [],
     }, 200);
   } catch (e) {
-    return json({ error: e instanceof Error? e.message : "Unexpected error" }, 500);
+    return json({ error: e instanceof Error ? e.message : "Unexpected error" }, 500);
   }
 });
 
 function json(body: Record<string, unknown>, status: number) {
-  return new Response(JSON.stringify(body), { status, headers: {...corsHeaders, "Content-Type": "application/json" } });
+  return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 }

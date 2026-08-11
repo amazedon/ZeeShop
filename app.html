@@ -8,6 +8,7 @@
 :root{
   color-scheme: light;
   --ink:#12213B;
+  --ink-text:#12213B;
   --ink-2:#1B2F52;
   --teal:#0F3D3E;
   --marigold:#F2A93B;
@@ -34,11 +35,11 @@ body{
   color:var(--text);
   overflow-x:hidden;
 }
-h1,h2,h3,h4{margin:0;font-weight:800;letter-spacing:-0.01em;color:var(--ink);}
+h1,h2,h3,h4{margin:0;font-weight:800;letter-spacing:-0.01em;color:var(--ink-text);}
 p{margin:0;}
 button{font-family:inherit;cursor:pointer;}
 input,select,textarea{font-family:inherit;}
-::selection{background:var(--marigold);color:var(--ink);}
+::selection{background:var(--marigold);color:var(--ink-text);}
 
 /* ---------- layout shells ---------- */
 #app{min-height:100vh;display:flex;flex-direction:column;}
@@ -65,7 +66,7 @@ input,select,textarea{font-family:inherit;}
   display:flex;align-items:center;justify-content:center;color:transparent;
   font-weight:900;font-size:18px;flex-shrink:0;
 }
-.brand-name{font-size:22px;font-weight:900;color:var(--ink);letter-spacing:-0.02em;}
+.brand-name{font-size:22px;font-weight:900;color:var(--ink-text);letter-spacing:-0.02em;}
 .tagline{color:var(--text-dim);font-size:13px;margin-bottom:22px;}
 .field{margin-bottom:14px;}
 .field label{display:block;font-size:12px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;}
@@ -81,11 +82,11 @@ input,select,textarea{font-family:inherit;}
   transition:transform .08s, box-shadow .15s; letter-spacing:.01em;
 }
 .btn:active{transform:scale(0.97);}
-.btn-primary{background:var(--marigold);color:var(--ink);width:100%;box-shadow:0 6px 16px rgba(242,169,59,0.35);}
+.btn-primary{background:var(--marigold);color:var(--ink-text);width:100%;box-shadow:0 6px 16px rgba(242,169,59,0.35);}
 .btn-primary:hover{background:var(--marigold-dark);}
 .btn-dark{background:var(--ink);color:#fff;width:100%;}
 .btn-outline{background:transparent;border:1.5px solid var(--line);color:var(--text);}
-.btn-ghost{background:transparent;color:var(--ink);text-decoration:underline;padding:6px;font-weight:700;}
+.btn-ghost{background:transparent;color:var(--ink-text);text-decoration:underline;padding:6px;font-weight:700;}
 .btn-danger{background:var(--red);color:#fff;}
 .btn-sm{padding:7px 12px;font-size:13px;border-radius:8px;}
 .link-row{text-align:center;margin-top:16px;font-size:13.5px;color:var(--text-dim);}
@@ -102,13 +103,13 @@ input,select,textarea{font-family:inherit;}
   width:52px;height:52px;border-radius:50%;background:var(--ink);color:#fff;
   display:flex;align-items:center;justify-content:center;font-weight:800;font-size:18px;
 }
-.avatar.oga{background:var(--marigold);color:var(--ink);}
-.user-tile .uname{font-size:12.5px;font-weight:700;color:var(--ink);}
+.avatar.oga{background:var(--marigold);color:var(--ink-text);}
+.user-tile .uname{font-size:12.5px;font-weight:700;color:var(--ink-text);}
 .user-tile .urole{font-size:10.5px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em;}
 .pinpad{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:18px;}
 .pinpad button{
   padding:16px 0;border-radius:12px;border:1.5px solid var(--line);background:#fff;
-  font-size:20px;font-weight:800;color:var(--ink);
+  font-size:20px;font-weight:800;color:var(--ink-text);
 }
 .pinpad button:active{background:var(--paper-dim);}
 .pin-dots{display:flex;justify-content:center;gap:12px;margin:18px 0;}
@@ -136,6 +137,17 @@ input,select,textarea{font-family:inherit;}
   display:flex;align-items:center;justify-content:center;padding:0 3px;
 }
 .badge-dot[data-count="0"]::after{display:none;}
+
+/* Small always-visible sync-health dot in the topbar — quiet by default
+   (nothing to see when sync is healthy), only draws attention when there's
+   something waiting or stuck. Status is written in from window.__zedSyncStatus. */
+.sync-dot{
+  width:9px;height:9px;border-radius:50%;flex-shrink:0;background:#4CAF50;
+  box-shadow:0 0 0 2px rgba(255,255,255,0.15);transition:background .2s;
+}
+.sync-dot[data-state="pending"]{background:#F2A93B;}
+.sync-dot[data-state="error"]{background:var(--red);}
+.sync-dot[data-state="offline"]{background:#666;}
 
 main{flex:1;padding:14px 14px 90px;max-width:640px;margin:0 auto;width:100%;}
 .screen-title{font-size:20px;margin-bottom:14px;}
@@ -171,7 +183,7 @@ main{flex:1;padding:14px 14px 90px;max-width:640px;margin:0 auto;width:100%;}
 .stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;}
 .stat-box{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;}
 .stat-box .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-dim);font-weight:700;}
-.stat-box .val{font-size:22px;font-weight:900;color:var(--ink);margin-top:4px;}
+.stat-box .val{font-size:22px;font-weight:900;color:var(--ink-text);margin-top:4px;}
 .stat-box.accent{background:var(--ink);}
 .stat-box.accent .lbl{color:rgba(255,255,255,0.6);}
 .stat-box.accent .val{color:var(--marigold);}
@@ -193,13 +205,13 @@ main{flex:1;padding:14px 14px 90px;max-width:640px;margin:0 auto;width:100%;}
   display:flex;align-items:center;justify-content:center;font-size:18px;color:var(--text-dim);
 }
 .list-row .info{flex:1;min-width:0;}
-.list-row .info .t1{font-weight:700;font-size:14px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.list-row .info .t1{font-weight:700;font-size:14px;color:var(--ink-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .list-row .info .t2{font-size:12px;color:var(--text-dim);}
 .list-row .right{text-align:right;flex-shrink:0;}
 
 .fab{
   position:fixed;bottom:82px;right:18px;width:58px;height:58px;border-radius:50%;
-  background:var(--marigold);color:var(--ink);border:none;font-size:26px;font-weight:900;
+  background:var(--marigold);color:var(--ink-text);border:none;font-size:26px;font-weight:900;
   box-shadow:0 8px 22px rgba(242,169,59,0.45);z-index:29;display:flex;align-items:center;justify-content:center;
 }
 .fab:active{transform:scale(0.94);}
@@ -208,7 +220,7 @@ main{flex:1;padding:14px 14px 90px;max-width:640px;margin:0 auto;width:100%;}
   text-align:center;padding:36px 18px;color:var(--text-dim);
 }
 .empty .ic{font-size:34px;margin-bottom:8px;}
-.empty b{color:var(--ink);display:block;margin-bottom:3px;font-size:14.5px;}
+.empty b{color:var(--ink-text);display:block;margin-bottom:3px;font-size:14.5px;}
 
 /* modal / sheet */
 .overlay{
@@ -233,7 +245,7 @@ main{flex:1;padding:14px 14px 90px;max-width:640px;margin:0 auto;width:100%;}
   display:flex;flex-direction:column;align-items:center;gap:5px;
 }
 .good-tile .gic{width:40px;height:40px;border-radius:9px;background:var(--paper-dim);display:flex;align-items:center;justify-content:center;font-size:17px;}
-.good-tile .gname{font-size:11.5px;font-weight:700;color:var(--ink);line-height:1.2;}
+.good-tile .gname{font-size:11.5px;font-weight:700;color:var(--ink-text);line-height:1.2;}
 .good-tile .gprice{font-size:11px;color:var(--text-dim);font-weight:700;}
 .good-tile.instock0{opacity:0.4;}
 .cart-bar{
@@ -257,25 +269,39 @@ main{flex:1;padding:14px 14px 90px;max-width:640px;margin:0 auto;width:100%;}
 .contact-btns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;}
 .contact-btns a,.contact-btns button{
   flex:1;min-width:70px;text-align:center;padding:9px 6px;border-radius:9px;border:1.5px solid var(--line);
-  font-size:12px;font-weight:800;color:var(--ink);text-decoration:none;background:#fff;
+  font-size:12px;font-weight:800;color:var(--ink-text);text-decoration:none;background:#fff;
 }
 
 /* ============================================================
    DARK MODE (a.k.a. "Market Mode" internally — battery saver +
    dark theme). Applied via body.market-mode, toggled in Settings.
-   Every surface and text color used anywhere in the app is
-   covered here so nothing is left showing its light-mode color.
+
+   Text colors are handled by redefining the CSS variables
+   themselves (--ink-text, --text, --text-dim, --line), NOT by
+   overriding individual selectors. This matters because a lot of
+   the app's text color comes from inline style="color:var(--ink)"
+   attributes written directly into generated HTML — no class-level
+   CSS override, however specific, can beat an inline style, but a
+   redefined variable resolves correctly wherever it's referenced,
+   inline or in the stylesheet. --ink itself is left alone because
+   it also doubles as a background color (topbar, avatar, accent
+   stat box) that should stay dark in both themes.
    ============================================================ */
-body.market-mode{background:#000;color:#eee;color-scheme:dark;}
+body.market-mode{
+  background:#000;color:#eee;color-scheme:dark;
+  --ink-text:#fff; --text:#eee; --text-dim:#9a9a9a; --line:#2a2a2a;
+  --paper-dim:#1a1a1a; --green-bg:#123420; --red-bg:#3a1414; --amber-bg:#3a2a10;
+}
 body.market-mode *{animation:none !important;transition:none !important;box-shadow:none !important;}
 body.market-mode main{color:#eee;}
 
-/* surfaces (cards, sheets, tiles, panels) */
+/* surfaces (cards, sheets, tiles, panels) — these use literal #fff rather
+   than var(--paper), so they still need explicit overrides here. */
 body.market-mode .card,body.market-mode .stat-box,body.market-mode .list-row,body.market-mode .good-tile,
 body.market-mode .receipt-card,body.market-mode .sheet,body.market-mode .auth-card,
 body.market-mode .user-tile,body.market-mode .pinpad button,body.market-mode .contact-btns a,
 body.market-mode .contact-btns button,body.market-mode .qty-stepper button{
-  background:#0a0a0a;border-color:#2a2a2a;color:#eee;
+  background:#0a0a0a;border-color:#2a2a2a;
 }
 body.market-mode .stat-box.accent{background:var(--ink);border-color:var(--ink);}
 body.market-mode .topbar,body.market-mode .bottomnav{background:#000;border-color:#2a2a2a;}
@@ -285,40 +311,17 @@ body.market-mode .receipt-card::after{
     linear-gradient(45deg, transparent 60%, #0a0a0a 60%) 0 0/12px 12px repeat-x;
 }
 
-/* nested "chip" surfaces — thumbs, icon boxes, badges, progress track, close button */
-body.market-mode .thumb,body.market-mode .good-tile .gic,body.market-mode .close-x,
-body.market-mode .progress-bar,body.market-mode .pill-gray{
-  background:#1a1a1a;color:#bbb;
-}
-body.market-mode .divider,body.market-mode .settings-row,body.market-mode .bottomnav,
-body.market-mode .field input,body.market-mode .field select,body.market-mode .field textarea,
-body.market-mode .user-tile,body.market-mode .pinpad button,body.market-mode .qty-stepper button,
-body.market-mode .contact-btns a,body.market-mode .contact-btns button{
-  border-color:#2a2a2a;
-}
-body.market-mode .divider{background:#2a2a2a;}
-
-/* form fields — the most common "still white" offenders */
+/* form fields — literal #fff backgrounds, not variable-driven */
 body.market-mode .field input,body.market-mode .field select,body.market-mode .field textarea{
-  background:#111;color:#f0f0f0;
+  background:#111;border-color:#2a2a2a;
 }
 body.market-mode .field input::placeholder,body.market-mode .field textarea::placeholder{color:#777;}
-body.market-mode .field label,body.market-mode .settings-row .info .t2{color:#999;}
 
-/* headings & text */
-body.market-mode h1,body.market-mode h2,body.market-mode h3,body.market-mode h4{color:#fff;}
-body.market-mode .t1,body.market-mode .uname,body.market-mode .empty b,
-body.market-mode .good-tile .gname,body.market-mode .brand-name{color:#fff;}
-body.market-mode .subtle,body.market-mode .t2,body.market-mode .lbl,body.market-mode .urole,
-body.market-mode .good-tile .gprice,body.market-mode .empty{color:#999;}
-body.market-mode .stat-box .val{color:var(--marigold);}
-
-/* buttons — outline/ghost rely on --text/--ink for color, which is unreadable on a dark surface */
-body.market-mode .btn-outline{color:#eee;border-color:#3a3a3a;background:transparent;}
+/* buttons — outline/ghost borders use literal var(--line)/transparent, need explicit dark border */
+body.market-mode .btn-outline{border-color:#3a3a3a;background:transparent;}
 body.market-mode .btn-ghost{color:var(--marigold);}
-body.market-mode .contact-btns a,body.market-mode .contact-btns button{color:#eee;}
-body.market-mode .pinpad button{color:#fff;}
 body.market-mode .pin-dot{border-color:#666;}
+
 body.market-mode .pin-dot.filled{background:#fff;border-color:#fff;}
 
 /* misc small elements */
@@ -622,6 +625,7 @@ if(!state.salaryPayments) state.salaryPayments = [];
 if(!state.recordOnlyStaff) state.recordOnlyStaff = [];
 if(!state.rooms) state.rooms = [];
 if(!state.lodgingBookings) state.lodgingBookings = [];
+if(!state.dismissedHandoverIds) state.dismissedHandoverIds = [];
 migratePhoneNumbers();
 function load(){
   const raw = localStorage.getItem(DB_KEY);
@@ -641,7 +645,8 @@ function load(){
     goods:[], customerGroups:[], customers:[], sales:[], dayClosures:[],
     auditLog:[], communicationLog:[], shopNotes:[], expenses:[], suppliers:[], supplierPurchases:[],
     employmentRecords:[], salaryPayments:[], recordOnlyStaff:[], rooms:[], lodgingBookings:[],
-    joinCode:null, marketMode:false, pinAttempts:{} };
+    joinCode:null, marketMode:false, pinAttempts:{},
+    dismissedHandoverIds:[] /* local-only — per-device "got it" acks, never synced */ };
 }
 function save(){ localStorage.setItem(DB_KEY, JSON.stringify(state)); }
 function business(){ return state.business; }
@@ -677,8 +682,18 @@ function canDo(perm){
   return u[perm] !== false;
 }
 function logAudit(action,details){
-  state.auditLog.unshift({id:uid('log'),businessId:business()?.id,userId:state.sessionUserId,
-    action, details, timestamp:new Date().toISOString()});
+  const entry = {id:uid('log'),businessId:business()?.id,userId:state.sessionUserId,
+    action, details, timestamp:new Date().toISOString()};
+  state.auditLog.unshift(entry);
+  // Audit entries need to sync like everything else — a staff activity feed
+  // for the owner is pointless if it only shows what happened on the
+  // owner's own device.
+  if(entry.businessId){
+    enqueueSync('audit_log','insert', {
+      id: entry.id, business_id: entry.businessId, user_id: entry.userId,
+      action: entry.action, details: entry.details
+    });
+  }
   save();
 }
 
@@ -758,6 +773,28 @@ function render(){
   app.innerHTML = renderShell();
   bindShellEvents();
   bindPasswordToggles();
+  updateSyncDot();
+}
+
+// Reflects window.__zedSyncStatus (written by sync-engine.js) as a small
+// dot in the topbar — green when caught up, amber while something's
+// queued, red if a push keeps failing, gray if this device is offline.
+// Checked on every render plus a light interval, since sync happens in
+// the background independent of any particular screen being open.
+function updateSyncDot(){
+  const dot = document.getElementById('sync-dot');
+  if(!dot) return;
+  const st = window.__zedSyncStatus;
+  if(!navigator.onLine){ dot.dataset.state = 'offline'; dot.title = 'Offline — will sync when back online'; return; }
+  if(!st){ dot.dataset.state = ''; dot.title = 'Sync status unavailable'; return; }
+  if(st.lastError && st.pendingCount > 0){ dot.dataset.state = 'error'; dot.title = st.lastError; return; }
+  if(st.pendingCount > 0){ dot.dataset.state = 'pending'; dot.title = `${st.pendingCount} change(s) waiting to sync`; return; }
+  dot.dataset.state = ''; dot.title = 'All changes synced';
+}
+if(typeof window !== 'undefined'){
+  setInterval(updateSyncDot, 15000);
+  window.addEventListener('online', updateSyncDot);
+  window.addEventListener('offline', updateSyncDot);
 }
 
 /* ============================================================
@@ -865,7 +902,24 @@ function renderLogin(){
   </div>`;
 }
 
+let joinShopMode = 'new'; // 'new' = first time joining, 'reconnect' = existing staff, new device
 function renderJoinShop(){
+  if(joinShopMode === 'reconnect'){
+    return `
+    <div class="center-screen">
+      <div class="auth-card">
+        <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">Zed</div></div>
+        <div class="tagline">Sign back in on this phone using your own phone number and PIN.</div>
+        ${authError ? `<div class="err">${authError}</div>` : ''}
+        <div class="field"><label>Business Connect Code</label><input id="reconnect-code-input" placeholder="8-digit code from your Owner" inputmode="numeric" maxlength="8"></div>
+        <div class="field"><label>Your Phone Number</label><input id="reconnect-phone-input" placeholder="The phone number on your account" inputmode="tel"></div>
+        <div class="field"><label>Your PIN</label><input id="reconnect-pin-input" type="password" placeholder="4-6 digit PIN" inputmode="numeric" maxlength="6"></div>
+        <button class="btn btn-primary" id="btn-reconnect-shop">Sign In</button>
+        <div class="link-row"><a href="#" id="go-new-join" style="color:var(--text-dim);">I'm joining for the first time</a></div>
+        <div class="link-row"><a href="#" id="go-login-from-join" style="color:var(--text-dim);">Back to log in</a></div>
+      </div>
+    </div>`;
+  }
   return `
   <div class="center-screen">
     <div class="auth-card">
@@ -877,6 +931,7 @@ function renderJoinShop(){
       <div class="field"><label>Last Name</label><input id="join-ln-input" placeholder="Your last name (optional)"></div>
       <div class="field"><label>Phone</label><input id="join-phone-input" placeholder="Your phone (optional)"></div>
       <button class="btn btn-primary" id="btn-join-shop">Join Shop</button>
+      <div class="link-row"><a href="#" id="go-reconnect-shop" style="color:var(--text-dim);">I already have an account — sign in on this phone</a></div>
       <div class="link-row"><a href="#" id="go-login-from-join" style="color:var(--text-dim);">Back to log in</a></div>
     </div>
   </div>`;
@@ -1182,7 +1237,7 @@ async function loginOwnerToSupabase(email, pass){
     taxName: b.tax_name||'VAT', taxPercent: b.tax_percent||0, subscriptionPlan: b.subscription_plan||'free',
     subscriptionExpiresAt: b.subscription_expires_at||null, autoRenewEnabled: b.auto_renew_enabled||false,
     autoRenewPlan: b.auto_renew_plan||null, autoRenewInterval: b.auto_renew_interval||null,
-    createdAt: b.created_at
+    connectCode: b.connect_code||null, createdAt: b.created_at
   };
 
   const [usersRes, shopsRes] = await Promise.all([
@@ -1226,9 +1281,12 @@ function bindAuthEvents(){
   go('go-signup', e=>{e.preventDefault(); authMode='signup'; authError=''; render();});
   go('go-login', e=>{e.preventDefault(); authMode='login'; authError=''; render();});
   go('go-forgot', e=>{e.preventDefault(); authMode='forgot'; forgotStep=1; forgotUserId=null; forgotEmail=null; forgotCode=null; forgotError=''; render();});
-  go('go-join-shop', e=>{e.preventDefault(); authMode='join-shop'; authError=''; render();});
+  go('go-join-shop', e=>{e.preventDefault(); authMode='join-shop'; joinShopMode='new'; authError=''; render();});
   go('go-login-from-join', e=>{e.preventDefault(); authMode='login'; authError=''; render();});
+  go('go-reconnect-shop', e=>{e.preventDefault(); joinShopMode='reconnect'; authError=''; render();});
+  go('go-new-join', e=>{e.preventDefault(); joinShopMode='new'; authError=''; render();});
   go('btn-join-shop', ()=>joinShopSubmit());
+  go('btn-reconnect-shop', ()=>reconnectStaffDevice());
 
   go('btn-login', async ()=>{
     const idf = document.getElementById('li-user').value.trim().toLowerCase();
@@ -1708,7 +1766,8 @@ async function joinShopSubmit(){
     state.sessionUserId = u.id;
 
     // Save the PIN hash server-side too, so this same staff member can
-    // join fresh on ANOTHER device later and still use the same PIN there.
+    // reconnect on another device later via "I already have an account"
+    // (see reconnectStaffDevice) without creating a duplicate.
     const { data: sessionData } = await window.sb.auth.getSession();
     if(sessionData.session){
       await fetch(`${SITE_CONTENT_URL}/rest/v1/app_users?id=eq.${u.id}`, {
@@ -1733,7 +1792,76 @@ async function joinShopSubmit(){
   }
 }
 
-// Adds a new staff member on THIS device (boss and new hire together in person).
+/*
+ * For an EXISTING staff member adding a second (or replacement) device.
+ * Unlike joinShopSubmit, this does NOT create a new account — it verifies
+ * the business's permanent Connect Code + the staff's own phone + PIN
+ * against their existing app_users row (server-side, in staff-device-login),
+ * then re-authenticates that same account on this device.
+ */
+async function reconnectStaffDevice(){
+  const code = document.getElementById('reconnect-code-input').value.trim();
+  const phone = document.getElementById('reconnect-phone-input').value.trim();
+  const pin = document.getElementById('reconnect-pin-input').value.trim();
+  if(!/^\d{8}$/.test(code)){ authError = 'Enter the 8-digit Connect Code from your Owner.'; render(); return; }
+  if(!phone){ authError = 'Enter the phone number on your account.'; render(); return; }
+  if(!/^\d{4,6}$/.test(pin)){ authError = 'Enter your 4-6 digit PIN.'; render(); return; }
+  if(!navigator.onLine){ authError = 'You need internet to sign in on a new phone.'; render(); return; }
+
+  authError = '';
+  const btn = document.getElementById('btn-reconnect-shop');
+  if(btn){ btn.disabled = true; btn.textContent = 'Signing in…'; }
+
+  try{
+    const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/staff-device-login`, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'apikey': SITE_CONTENT_ANON_KEY },
+      body: JSON.stringify({ connect_code: code, phone, pin })
+    });
+    const result = await res.json();
+    if(!res.ok || result.error){
+      authError = result.error || 'Could not sign in — please check your details and try again.';
+      if(btn){ btn.disabled = false; btn.textContent = 'Sign In'; }
+      render();
+      return;
+    }
+
+    const { error: signInErr } = await window.sb.auth.signInWithPassword({
+      email: result.auth_email, password: result.auth_password
+    });
+    if(signInErr){
+      authError = 'Verified, but could not start your session — please try again.';
+      if(btn){ btn.disabled = false; btn.textContent = 'Sign In'; }
+      render();
+      return;
+    }
+
+    // Bootstrap local state from the SAME account — reuses the existing
+    // PIN hash rather than prompting for a new one, since the PIN they
+    // just typed already matched it.
+    if(result.business) state.business = { ...result.business };
+    (result.shops||[]).forEach(s=>{
+      if(!state.shops.some(x=>x.id===s.id)){
+        state.shops.push({ id:s.id, businessId:s.business_id, name:s.name, address:s.address||'', phone:s.phone||'', email:s.email||'' });
+      }
+    });
+    state.currentShopId = result.shops && result.shops[0] ? result.shops[0].id : null;
+
+    if(!state.users.some(x=>x.id===result.user.id)) state.users.push(result.user);
+    state.sessionUserId = result.user.id;
+
+    save();
+    logAudit('staff_reconnected', result.user.firstName+' signed in on a new device');
+    toast('Welcome back, '+result.user.firstName+'! Pulling in your shop\'s data…');
+    render();
+
+    if(typeof pullSync === 'function') pullSync();
+  }catch(e){
+    authError = 'Could not reach the server — check your connection and try again.';
+    if(btn){ btn.disabled = false; btn.textContent = 'Sign In'; }
+    render();
+  }
+}
 // Goes through the same join-business edge function as the remote "Join Shop"
 // flow so this staff member gets a real Supabase Auth account and can sync —
 // previously this built a local-only user with no auth account, so their
@@ -1811,9 +1939,10 @@ function alertCounts(){
     if(d<=14) expiring++;
   }));
   const lowStock = shopGoods.filter(g=>{ const s=totalStock(g); return s>0 && s<=(g.reorderLevel||5); }).length;
-  const dueSoon = state.sales.filter(s=>s.shopId===state.currentShopId && s.status!=='paid' && s.status!=='voided' && s.dueDate &&
-    daysBetween(todayISO(), s.dueDate) <= 2).length;
-  return {expiring, dueSoon, lowStock};
+  const openCredit = state.sales.filter(s=>s.shopId===state.currentShopId && s.status!=='paid' && s.status!=='voided' && s.dueDate);
+  const overdue = openCredit.filter(s=>daysBetween(todayISO(), s.dueDate) < 0).length;
+  const dueSoon = openCredit.filter(s=>{ const d=daysBetween(todayISO(), s.dueDate); return d>=0 && d<=2; }).length;
+  return {expiring, dueSoon, overdue, lowStock};
 }
 
 function renderShell(){
@@ -1841,7 +1970,8 @@ function renderShell(){
           : `<option value="">No shops assigned yet</option>`}
       </select>
       ${isMaster() ? `<button class="icon-btn" id="add-shop-btn" title="Add shop">＋</button>`:''}
-      <button class="icon-btn badge-dot" data-count="${alerts.expiring+alerts.dueSoon+alerts.lowStock}" id="alerts-btn">🔔</button>
+      <span id="sync-dot" class="sync-dot" title="Sync status"></span>
+      <button class="icon-btn badge-dot" data-count="${alerts.expiring+alerts.dueSoon+alerts.overdue+alerts.lowStock}" id="alerts-btn">🔔</button>
     </div>
     <main id="main-content">${renderRoute()}</main>
     <div class="bottomnav">
@@ -2034,7 +2164,6 @@ function screenDashboard(){
   const todayCash = shopSales.filter(s=>s.status!=='credit').reduce((a,s)=>a+s.paidAmount,0);
   const alerts = alertCounts();
   const goods = state.goods.filter(g=>g.shopId===state.currentShopId);
-  const lowStock = goods.filter(g=>totalStock(g)<=5 && totalStock(g)>0);
   const outStock = goods.filter(g=>totalStock(g)<=0);
 
   let profitBlock = '';
@@ -2053,15 +2182,20 @@ function screenDashboard(){
   return `
     <h2 class="screen-title">${greeting()}, ${u.firstName} 👋</h2>
     ${isMaster() ? subscriptionReminderBanner() : ''}
+    ${handoverNoteBanner()}
     <p class="subtle" style="margin-bottom:14px;">${currentShop()?.name} · ${fmtDate(todayISO())}</p>
 
     <div class="stat-grid">
       <div class="stat-box"><div class="lbl">Sales Today</div><div class="val">${fmtMoney(todayTotal)}</div></div>
       ${profitBlock || `<div class="stat-box"><div class="lbl">Cash In</div><div class="val">${fmtMoney(todayCash)}</div></div>`}
     </div>
+    ${isMaster() ? dailyDigestBlock() : ''}
 
-    ${(alerts.expiring>0 || alerts.dueSoon>0 || alerts.lowStock>0 || outStock.length>0) ? `
+    ${(alerts.expiring>0 || alerts.dueSoon>0 || alerts.overdue>0 || alerts.lowStock>0 || outStock.length>0) ? `
       <div class="section-head"><h3>Needs Attention</h3></div>
+      ${alerts.overdue>0 && isMaster()?`<div class="card" style="display:flex;align-items:center;gap:10px;" data-goto="credit">
+        <div style="font-size:20px;">🔴</div><div style="flex:1;"><b>${alerts.overdue} customer(s)</b> overdue on credit — worth a reminder</div>
+      </div>`:''}
       ${alerts.expiring>0?`<div class="card" style="display:flex;align-items:center;gap:10px;" data-goto="goods">
         <div style="font-size:20px;">⏰</div><div style="flex:1;"><b>${alerts.expiring} item(s)</b> expiring within 14 days</div>
       </div>`:''}
@@ -2082,12 +2216,104 @@ function screenDashboard(){
       ${isMaster()?`<button class="btn btn-outline" style="flex:1;" data-goto="closeday">🔒 Close Day</button>`:''}
       ${isStaff() && canDo('canRecordCash')?`<button class="btn btn-outline" style="flex:1;" data-goto="closeday">🔒 Close My Shift</button>`:''}
     </div>
+
+    ${isMaster() ? staffActivityFeed() : ''}
   `;
+}
+
+// Handover notes — left by whoever closed the previous shift, shown to
+// anyone else who opens the app until they tap "Got it". Dismissal is
+// tracked locally per device (state.dismissedHandoverIds), not synced —
+// each person clears it once on their own device.
+function handoverNoteBanner(){
+  const notes = state.shopNotes.filter(n=>
+    n.shopId===state.currentShopId && n.isHandover &&
+    n.authorUserId !== state.sessionUserId &&
+    !(state.dismissedHandoverIds||[]).includes(n.id) &&
+    daysBetween(n.createdAt.slice(0,10), todayISO()) <= 3
+  ).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+  if(notes.length===0) return '';
+  const n = notes[0];
+  const author = state.users.find(u=>u.id===n.authorUserId);
+  return `
+    <div class="card" style="border-color:var(--marigold-dark);background:var(--amber-bg);margin-bottom:14px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+        <div>
+          <div style="font-weight:800;font-size:13.5px;margin-bottom:2px;">📌 ${escapeHtml(n.title)}</div>
+          <div style="font-size:13px;white-space:pre-wrap;">${escapeHtml(n.text)}</div>
+          <div class="subtle" style="font-size:11px;margin-top:6px;">${author?author.firstName:'A teammate'} · ${fmtDate(n.createdAt.slice(0,10))}</div>
+        </div>
+      </div>
+      <button data-dismiss-handover="${n.id}" class="btn btn-outline btn-sm" style="margin-top:10px;">Got it</button>
+    </div>`;
+}
+
+// A slightly richer end-of-day-so-far snapshot for the owner, entirely
+// computed on-device from today's local data — no server job, no push,
+// no email, nothing sent anywhere. It's just today's numbers laid out.
+function dailyDigestBlock(){
+  const shopExpensesToday = state.expenses.filter(e=>e.shopId===state.currentShopId && e.date===todayISO());
+  const expensesToday = shopExpensesToday.reduce((a,e)=>a+e.amount,0);
+  const shopSalesToday = state.sales.filter(s=>s.shopId===state.currentShopId && s.date===todayISO() && s.status!=='voided');
+  const creditGivenToday = shopSalesToday.filter(s=>s.status==='credit'||s.status==='partial').reduce((a,s)=>a+s.balance,0);
+  const txCount = shopSalesToday.length;
+  return `
+    <div class="section-head"><h3>Today's Snapshot</h3></div>
+    <div class="stat-grid">
+      <div class="stat-box"><div class="lbl">Expenses Today</div><div class="val">${fmtMoney(expensesToday)}</div></div>
+      <div class="stat-box"><div class="lbl">Credit Given Today</div><div class="val">${fmtMoney(creditGivenToday)}</div></div>
+    </div>
+    <p class="subtle" style="margin:-6px 0 4px;">${txCount} sale(s) today</p>
+  `;
+}
+
+// Recent staff activity — the owner's window into what's happening across
+// every device, not just this one. Pulled from the audit log, which now
+// syncs (see logAudit / pullSync), so entries made on a staff member's
+// phone show up here once that device has been online.
+function staffActivityFeed(){
+  const entries = state.auditLog
+    .filter(l=>l.businessId===business()?.id)
+    .slice()
+    .sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp))
+    .slice(0,6);
+  if(entries.length===0) return '';
+  return `
+    <div class="section-head"><h3>Recent Activity</h3><a href="#" data-goto="audit" style="font-size:12px;color:var(--marigold-dark);font-weight:700;">View all</a></div>
+    ${entries.map(l=>{
+      const actor = state.users.find(u=>u.id===l.userId);
+      return `<div class="list-row">
+        <div class="thumb">👤</div>
+        <div class="info"><div class="t1">${actor?actor.firstName+' '+(actor.lastName||''):'Someone'}</div><div class="t2">${escapeHtml(l.details||l.action)}</div></div>
+        <div class="subtle" style="font-size:10.5px;flex-shrink:0;">${timeAgo(l.timestamp)}</div>
+      </div>`;
+    }).join('')}
+  `;
+}
+function timeAgo(iso){
+  if(!iso) return '';
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diffMs/60000);
+  if(mins < 1) return 'just now';
+  if(mins < 60) return mins+'m ago';
+  const hrs = Math.floor(mins/60);
+  if(hrs < 24) return hrs+'h ago';
+  const days = Math.floor(hrs/24);
+  if(days < 7) return days+'d ago';
+  return fmtDate(iso.slice(0,10));
+}
+function bindDashboardEvents(){
+  document.querySelectorAll('[data-dismiss-handover]').forEach(b=>b.addEventListener('click', ()=>{
+    const id = b.dataset.dismissHandover;
+    if(!state.dismissedHandoverIds.includes(id)) state.dismissedHandoverIds.push(id);
+    save();
+    render();
+  }));
 }
 function greeting(){ const h=new Date().getHours(); return h<12?'Good morning':h<17?'Good afternoon':'Good evening'; }
 function subHeader(title){
   return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
-    <button data-goto="more" style="background:var(--paper-dim);border:none;width:34px;height:34px;border-radius:10px;font-size:17px;color:var(--ink);flex-shrink:0;">←</button>
+    <button data-goto="more" style="background:var(--paper-dim);border:none;width:34px;height:34px;border-radius:10px;font-size:17px;color:var(--ink-text);flex-shrink:0;">←</button>
     <h2 class="screen-title" style="margin:0;">${title}</h2>
   </div>`;
 }
@@ -2196,7 +2422,7 @@ function screenNewSale(){
         <div style="display:flex;justify-content:space-between;"><span>Subtotal</span><span>${fmtMoney(bd.sub)}</span></div>
         ${bd.disc>0?`<div style="display:flex;justify-content:space-between;color:var(--red);"><span>Discount</span><span>-${fmtMoney(bd.disc)}</span></div>`:''}
         ${bd.taxPct>0?`<div style="display:flex;justify-content:space-between;"><span>${business().taxName||'Tax'} (${bd.taxPct}%)</span><span>${fmtMoney(bd.tax)}</span></div>`:''}
-        <div style="display:flex;justify-content:space-between;font-weight:800;color:var(--ink);margin-top:4px;"><span>Total</span><span>${fmtMoney(bd.grand)}</span></div>
+        <div style="display:flex;justify-content:space-between;font-weight:800;color:var(--ink-text);margin-top:4px;"><span>Total</span><span>${fmtMoney(bd.grand)}</span></div>
       </div>
     </div>
     ` : ''}
@@ -2293,6 +2519,7 @@ function cartBreakdown(){
 }
 
 function bindRouteEvents(){
+  if(route==='dashboard'){ bindDashboardEvents(); }
   if(route==='sale'){
     const search = document.getElementById('sale-search');
     if(search) search.addEventListener('input', e=>{ saleSearch=e.target.value; refreshMain(); });
@@ -3143,7 +3370,7 @@ function screenCustomers(){
     list.map(c=>{
       const bal = customerBalance(c.id);
       return `<div class="card" data-cust-detail="${c.id}" style="display:flex;align-items:center;gap:12px;">
-        <div class="avatar" style="background:var(--paper-dim);color:var(--ink);">${initials(c.fullName.split(' ')[0], c.fullName.split(' ')[1]||'')}</div>
+        <div class="avatar" style="background:var(--paper-dim);color:var(--ink-text);">${initials(c.fullName.split(' ')[0], c.fullName.split(' ')[1]||'')}</div>
         <div class="info" style="flex:1;">
           <div class="t1">${c.fullName}</div>
           <div class="t2">${c.groupId?groupName(c.groupId):'Retail'} · ${c.phoneE164||'no phone'}</div>
@@ -3369,6 +3596,7 @@ function screenCloseDay(){
         <div class="field"><label>Note <span class="subtle">(required if there's a shortage)</span></label><textarea id="cd-note" rows="2" placeholder="e.g. gave change from own pocket"></textarea></div>
         <button class="btn btn-danger" id="cd-submit">Submit &amp; Close</button>
       </div>
+      <button class="btn btn-outline" id="cd-handover-btn" style="margin-top:12px;">📌 Leave a note for the next shift</button>
     `}
     ${isMaster() && allClosures.length>0 ? `
       <div class="section-head"><h3>Today's Closures (All Staff)</h3></div>
@@ -3384,6 +3612,8 @@ function screenCloseDay(){
   `;
 }
 function bindCloseDayEvents(){
+  const handoverBtn = document.getElementById('cd-handover-btn');
+  if(handoverBtn) handoverBtn.addEventListener('click', ()=>openAddNoteModal(true));
   const submit = document.getElementById('cd-submit');
   if(!submit) return;
   submit.addEventListener('click', ()=>{
@@ -3720,8 +3950,8 @@ function renderEmploymentRecordView(userId){
         <div class="stat-box"><div class="lbl">Type</div><div class="val" style="font-size:15px;">${typeLabel}</div></div>
         <div class="stat-box"><div class="lbl">Resumed</div><div class="val" style="font-size:15px;">${fmtDate(rec.resumptionDate)}</div></div>
       </div>
-      ${rec.salaryFrequency!=='none' ? `<div class="t2" style="margin-bottom:6px;"><b style="color:var(--ink);">${fmtMoney(rec.salaryAmount)}</b> / ${rec.salaryFrequency}</div>` : `<div class="t2" style="margin-bottom:6px;">No fixed salary</div>`}
-      ${rec.settlementDate ? `<div class="t2" style="margin-bottom:6px;">🎓 Settlement date: <b style="color:var(--ink);">${fmtDate(rec.settlementDate)}</b></div>` : ''}
+      ${rec.salaryFrequency!=='none' ? `<div class="t2" style="margin-bottom:6px;"><b style="color:var(--ink-text);">${fmtMoney(rec.salaryAmount)}</b> / ${rec.salaryFrequency}</div>` : `<div class="t2" style="margin-bottom:6px;">No fixed salary</div>`}
+      ${rec.settlementDate ? `<div class="t2" style="margin-bottom:6px;">🎓 Settlement date: <b style="color:var(--ink-text);">${fmtDate(rec.settlementDate)}</b></div>` : ''}
       ${rec.settlementTerms ? `<div class="t2" style="margin-bottom:6px;">Settlement terms: ${escapeHtml(rec.settlementTerms)}</div>` : ''}
       ${rec.notes ? `<div class="t2">Notes: ${escapeHtml(rec.notes)}</div>` : ''}
       <button class="btn btn-outline btn-sm" id="edit-er-btn" style="margin-top:12px;">✏️ Edit Record</button>
@@ -4359,8 +4589,8 @@ function renderMyEmploymentRecordCard(userId){
         <div class="stat-box"><div class="lbl">Type</div><div class="val" style="font-size:15px;">${typeLabel}</div></div>
         <div class="stat-box"><div class="lbl">Resumed</div><div class="val" style="font-size:15px;">${fmtDate(rec.resumptionDate)}</div></div>
       </div>
-      ${rec.salaryFrequency!=='none' ? `<div class="t2" style="margin-bottom:6px;">Salary: <b style="color:var(--ink);">${fmtMoney(rec.salaryAmount)}</b> / ${rec.salaryFrequency}</div>` : `<div class="t2" style="margin-bottom:6px;">No fixed salary</div>`}
-      ${rec.settlementDate ? `<div class="t2" style="margin-bottom:6px;">🎓 Settlement date: <b style="color:var(--ink);">${fmtDate(rec.settlementDate)}</b></div>` : ''}
+      ${rec.salaryFrequency!=='none' ? `<div class="t2" style="margin-bottom:6px;">Salary: <b style="color:var(--ink-text);">${fmtMoney(rec.salaryAmount)}</b> / ${rec.salaryFrequency}</div>` : `<div class="t2" style="margin-bottom:6px;">No fixed salary</div>`}
+      ${rec.settlementDate ? `<div class="t2" style="margin-bottom:6px;">🎓 Settlement date: <b style="color:var(--ink-text);">${fmtDate(rec.settlementDate)}</b></div>` : ''}
       ${rec.settlementTerms ? `<div class="t2" style="margin-bottom:6px;">Settlement terms: ${escapeHtml(rec.settlementTerms)}</div>` : ''}
       <div class="divider"></div>
       <div class="t2" style="font-weight:700;margin-bottom:4px;">Payments Received</div>
@@ -4399,7 +4629,7 @@ function screenProfile(){
     ${u.role!=='master' ? (u.nameChangeRequest ? `
     <div class="card">
       <div class="t1" style="margin-bottom:6px;">📝 Name Change Requested</div>
-      <p class="t2" style="margin-bottom:12px;">You asked to be renamed to <b style="color:var(--ink);">${escapeHtml(u.nameChangeRequest.firstName+' '+u.nameChangeRequest.lastName)}</b>. Waiting for your Owner to approve it.</p>
+      <p class="t2" style="margin-bottom:12px;">You asked to be renamed to <b style="color:var(--ink-text);">${escapeHtml(u.nameChangeRequest.firstName+' '+u.nameChangeRequest.lastName)}</b>. Waiting for your Owner to approve it.</p>
       <button class="btn btn-outline btn-sm" id="cancel-name-request-btn">Cancel Request</button>
     </div>` : `
     <div class="card">
@@ -4519,6 +4749,18 @@ function screenSettings(){
     </div>
     ${isMaster()?`
     <div class="card">
+      <div class="t1" style="margin-bottom:6px;">Staff Connect Code</div>
+      <p class="t2" style="margin-bottom:10px;">Lets a staff member sign in on a second phone (their own account, not a new one) using this code plus their own phone number and PIN. Anyone with this code, a staff phone number, and that person's PIN can reconnect as them — reset it if it's ever shared somewhere it shouldn't be.</p>
+      ${b.connectCode ? `
+        <div class="code-display" style="text-align:center;padding:14px;">${b.connectCode.replace(/(\d{4})(\d{4})/,'$1 $2')}</div>
+        <div style="display:flex;gap:8px;margin-top:10px;">
+          <button class="btn btn-outline btn-sm" id="copy-connect-code" style="flex:1;">Copy</button>
+          <button class="btn btn-outline btn-sm" id="reset-connect-code" style="flex:1;">Generate New Code</button>
+        </div>
+      ` : `<button class="btn btn-outline btn-sm" id="reset-connect-code">Generate Connect Code</button>`}
+    </div>` : ''}
+    ${isMaster()?`
+    <div class="card">
       <div class="t1" style="margin-bottom:10px;">Business Logo <span class="subtle" style="font-weight:400;">(shows on your receipts)</span></div>
       ${b.logoDataUrl ? `
         <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;">
@@ -4578,6 +4820,34 @@ function screenSettings(){
 }
 function bindSettingsEvents(){
   bindBizTypeSelect('set-biztype');
+  const copyCode = document.getElementById('copy-connect-code');
+  if(copyCode) copyCode.addEventListener('click', async ()=>{
+    try{ await navigator.clipboard.writeText(business().connectCode); toast('Code copied ✅'); }
+    catch(e){ toast('Could not copy — code is '+business().connectCode); }
+  });
+  const resetCode = document.getElementById('reset-connect-code');
+  if(resetCode) resetCode.addEventListener('click', async ()=>{
+    const isReset = !!business().connectCode;
+    if(isReset && !confirm('Generate a new code? The current code will stop working immediately. Staff already signed in on their devices are not affected.')) return;
+    resetCode.disabled = true; resetCode.textContent = 'Generating…';
+    try{
+      const { data: sessionData } = await window.sb.auth.getSession();
+      if(!sessionData.session){ toast('Please sign in again to do this.'); return; }
+      const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/regenerate-connect-code`, {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+sessionData.session.access_token, 'apikey': SITE_CONTENT_ANON_KEY },
+        body: JSON.stringify({ business_id: business().id })
+      });
+      const result = await res.json();
+      if(!res.ok || result.error){ toast(result.error || 'Could not generate a code.'); return; }
+      business().connectCode = result.connect_code;
+      logAudit('connect_code_reset', 'Generated a new staff connect code');
+      toast(isReset ? 'New code generated ✅' : 'Connect code created ✅');
+      render();
+    }catch(e){
+      toast('Could not reach the server — check your connection.');
+    }
+  });
   const logoInput = document.getElementById('logo-upload-input');
   if(logoInput) logoInput.addEventListener('change', async (e)=>{
     const file = e.target.files[0];
@@ -5068,11 +5338,14 @@ function openShareNoteModal(noteId){
   });
 }
 
-function openAddNoteModal(){
+function openAddNoteModal(prefillHandover){
   openSheet(`
     <div class="sheet-head"><h3>New Note</h3><button class="close-x" id="sheet-close">✕</button></div>
-    <div class="field"><label>Title</label><input id="note-title" placeholder="e.g. Supplier contact, Restock reminder"></div>
+    <div class="field"><label>Title</label><input id="note-title" placeholder="e.g. Supplier contact, Restock reminder" value="${prefillHandover?'Handover note':''}"></div>
     <div class="field"><label>Details</label><textarea id="note-text" rows="6" placeholder="Write anything worth remembering..."></textarea></div>
+    <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-bottom:16px;">
+      <input type="checkbox" id="note-handover" ${prefillHandover?'checked':''}> 📌 Show this to the next person who logs in (handover note)
+    </label>
     <button class="btn btn-primary" id="save-note-btn">Save Note</button>
   `);
   document.getElementById('save-note-btn').addEventListener('click', ()=>saveNoteFromForm(null));
@@ -5083,6 +5356,9 @@ function openEditNoteModal(id){
     <div class="sheet-head"><h3>Edit Note</h3><button class="close-x" id="sheet-close">✕</button></div>
     <div class="field"><label>Title</label><input id="note-title" value="${escAttr(n.title)}"></div>
     <div class="field"><label>Details</label><textarea id="note-text" rows="6">${escapeHtml(n.text)}</textarea></div>
+    <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-bottom:16px;">
+      <input type="checkbox" id="note-handover" ${n.isHandover?'checked':''}> 📌 Show this to the next person who logs in (handover note)
+    </label>
     <button class="btn btn-primary" id="save-note-btn">Save Changes</button>
   `);
   document.getElementById('save-note-btn').addEventListener('click', ()=>saveNoteFromForm(id));
@@ -5090,20 +5366,21 @@ function openEditNoteModal(id){
 function saveNoteFromForm(existingId){
   const title = document.getElementById('note-title').value.trim();
   const text = document.getElementById('note-text').value.trim();
+  const isHandover = document.getElementById('note-handover').checked;
   if(!title){ toast('Please give this note a title.'); return; }
   if(existingId){
     const n = state.shopNotes.find(x=>x.id===existingId);
-    n.title = title; n.text = text; n.updatedAt = new Date().toISOString();
-    enqueueSync('shop_notes','update', { id: n.id, title: n.title, text: n.text, updated_at: n.updatedAt });
+    n.title = title; n.text = text; n.isHandover = isHandover; n.updatedAt = new Date().toISOString();
+    enqueueSync('shop_notes','update', { id: n.id, title: n.title, text: n.text, is_handover: n.isHandover, updated_at: n.updatedAt });
     logAudit('note_edited', 'Edited note: '+title);
     toast('Note updated ✅');
   } else {
     const noteId = uid('note');
     state.shopNotes.push({ id: noteId, businessId: business().id, shopId: state.currentShopId,
-      authorUserId: state.sessionUserId, title, text, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      authorUserId: state.sessionUserId, title, text, isHandover, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
     enqueueSync('shop_notes','insert', {
       id: noteId, business_id: business().id, shop_id: state.currentShopId,
-      author_user_id: state.sessionUserId, title, text
+      author_user_id: state.sessionUserId, title, text, is_handover: isHandover
     });
     logAudit('note_added', 'Added note: '+title);
     toast('Note saved ✅');
@@ -6034,7 +6311,7 @@ function bindAboutUsEvents(){
   fetchSiteContent('about_us').then(row=>{
     if(!row){ box.innerHTML = `<div class="card"><p class="subtle">This business hasn't added an About Us section yet.</p></div>`; return; }
     box.innerHTML = `<div class="card">
-      <h2 style="margin:0 0 10px;color:var(--ink);">${escapeHtml(row.heading||'About Us')}</h2>
+      <h2 style="margin:0 0 10px;color:var(--ink-text);">${escapeHtml(row.heading||'About Us')}</h2>
       <p style="white-space:pre-wrap;line-height:1.6;margin:0;">${escapeHtml(row.body||'')}</p>
     </div>`;
   }).catch(()=>{
@@ -6059,7 +6336,7 @@ function bindContactUsEvents(){
     if(row.email) lines.push(`<div class="t2">✉️ ${escapeHtml(row.email)}</div>`);
     if(row.address) lines.push(`<div class="t2">📍 ${escapeHtml(row.address)}</div>`);
     box.innerHTML = `<div class="card">
-      <h2 style="margin:0 0 10px;color:var(--ink);">${escapeHtml(row.heading||'Contact Us')}</h2>
+      <h2 style="margin:0 0 10px;color:var(--ink-text);">${escapeHtml(row.heading||'Contact Us')}</h2>
       ${row.body?`<p style="white-space:pre-wrap;line-height:1.6;margin:0 0 14px;">${escapeHtml(row.body)}</p>`:''}
       ${lines.join('')}
     </div>`;

@@ -49,9 +49,22 @@
   .plan-badge{display:inline-block;padding:3px 10px;border-radius:999px;font-size:11.5px;font-weight:800;}
   .plan-free{background:var(--paper-dim);color:var(--text-dim);}
   .plan-pro{background:var(--green-bg);color:var(--green);}
+  .plan-boss{background:#FDF1DC;color:var(--marigold-dark);}
+  .status-badge{display:inline-block;padding:3px 10px;border-radius:999px;font-size:11.5px;font-weight:800;margin-left:6px;}
+  .status-suspended{background:var(--red-bg);color:var(--red);}
   .table-wrap{overflow-x:auto;}
   .empty-note{color:var(--text-dim);font-size:13.5px;padding:20px 0;text-align:center;}
-  @media(max-width:640px){.stats-row{grid-template-columns:1fr;}}
+  .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;}
+  .toolbar input[type="search"]{flex:1;min-width:180px;padding:10px 12px;border:1.5px solid var(--line);border-radius:9px;font-size:13.5px;font-family:inherit;}
+  .btn-sm{width:auto;padding:8px 14px;font-size:12.5px;}
+  .btn-outline-sm{width:auto;padding:6px 10px;font-size:12px;border-radius:8px;border:1.5px solid var(--line);background:#fff;color:var(--text);font-weight:700;cursor:pointer;}
+  .btn-danger-sm{width:auto;padding:6px 10px;font-size:12px;border-radius:8px;border:none;background:var(--red);color:#fff;font-weight:700;cursor:pointer;}
+  .detail-row td{background:var(--paper-dim);padding:14px 16px;}
+  .detail-row .staff-line{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--line);font-size:12.5px;}
+  .detail-row .staff-line:last-child{border-bottom:none;}
+  .row-expand{cursor:pointer;color:var(--marigold-dark);font-weight:700;font-size:12px;background:none;border:none;padding:4px 0;}
+  .unauthorized{max-width:420px;text-align:center;}
+  @media(max-width:640px){.stats-row{grid-template-columns:1fr 1fr;}}
 </style>
 </head>
 <body>
@@ -85,6 +98,7 @@
       <div class="stat-card"><div class="num" id="stat-total">0</div><div class="label">Total Businesses</div></div>
       <div class="stat-card"><div class="num" id="stat-free">0</div><div class="label">Free Plan</div></div>
       <div class="stat-card"><div class="num" id="stat-pro">0</div><div class="label">Pro Plan</div></div>
+      <div class="stat-card"><div class="num" id="stat-boss">0</div><div class="label">Boss Plan</div></div>
     </div>
 
     <div class="card">
@@ -101,6 +115,10 @@
       <h2>All Registered Businesses</h2>
       <p class="subtle">Synced from businesses that have signed up and connected online at least once — offline-only signups appear here once their device reconnects.</p>
       <div id="biz-status"></div>
+      <div class="toolbar">
+        <input type="search" id="biz-search" placeholder="Search by business name, country, or business ID…">
+        <button class="btn-outline-sm" id="export-csv-btn">⬇ Export CSV</button>
+      </div>
       <div class="table-wrap">
         <table id="biz-table">
           <thead>
@@ -110,8 +128,17 @@
         </table>
       </div>
       <div id="biz-empty" class="empty-note hidden">No businesses have synced yet.</div>
+      <div id="biz-no-match" class="empty-note hidden">No businesses match that search.</div>
     </div>
   </main>
+</div>
+
+<div id="unauthorized-screen" class="center-screen hidden">
+  <div class="auth-card unauthorized">
+    <div class="brand" style="margin-bottom:12px;color:var(--ink);justify-content:center;"><div class="brand-mark">Z</div>Zed Super Admin</div>
+    <div class="err">This account isn't authorized for super admin access. If this should be your account, ask an existing super admin to add you to the <code>super_admins</code> table.</div>
+    <button class="btn btn-primary" id="unauthorized-back-btn" style="margin-top:6px;">Back to Log In</button>
+  </div>
 </div>
 
 <script>
@@ -121,6 +148,11 @@
 
   const loginScreen = document.getElementById('login-screen');
   const dashScreen = document.getElementById('dashboard-screen');
+  const unauthorizedScreen = document.getElementById('unauthorized-screen');
+  let allBusinesses = [];
+  let staffCountsById = {};
+  let expandedBizId = null;
+  let bizDetailCache = {};
 
   function showError(el, msg){ el.innerHTML = `<div class="err">${msg}</div>`; }
 
@@ -131,6 +163,26 @@
       input.type = showing ? 'password' : 'text';
     });
   });
+
+  // Every privileged call goes through the super-admin edge function, which
+  // re-checks (server-side, against the super_admins table) that the caller
+  // is actually authorized on every single request — not just at login.
+  async function callAdminApi(action, params){
+    const { data: sessionData } = await sb.auth.getSession();
+    if(!sessionData.session) throw new Error('Not signed in.');
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/super-admin`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + sessionData.session.access_token,
+        'apikey': SUPABASE_ANON_KEY
+      },
+      body: JSON.stringify({ action, ...params })
+    });
+    const result = await res.json();
+    if(!res.ok || result.error) throw new Error(result.error || 'Request failed.');
+    return result;
+  }
 
   document.getElementById('login-btn').addEventListener('click', async ()=>{
     const email = document.getElementById('login-email').value.trim();
@@ -148,102 +200,227 @@
     checkSession();
   });
 
+  document.getElementById('unauthorized-back-btn').addEventListener('click', async ()=>{
+    await sb.auth.signOut();
+    checkSession();
+  });
+
   async function checkSession(){
     const { data } = await sb.auth.getSession();
-    if(data.session){
-      loginScreen.classList.add('hidden');
-      dashScreen.classList.remove('hidden');
-      loadBusinesses();
-    } else {
+    if(!data.session){
       loginScreen.classList.remove('hidden');
       dashScreen.classList.add('hidden');
+      unauthorizedScreen.classList.add('hidden');
+      return;
     }
+    // Signing in only proves this is A valid Zed account (owner, staff,
+    // anyone) — it does NOT prove super-admin access. That's verified here,
+    // server-side, before anything privileged is shown.
+    try{
+      await callAdminApi('list_businesses', {});
+    }catch(e){
+      loginScreen.classList.add('hidden');
+      dashScreen.classList.add('hidden');
+      unauthorizedScreen.classList.remove('hidden');
+      return;
+    }
+    loginScreen.classList.add('hidden');
+    unauthorizedScreen.classList.add('hidden');
+    dashScreen.classList.remove('hidden');
+    loadBusinesses();
   }
 
   async function loadBusinesses(){
     const statusBox = document.getElementById('biz-status');
-    statusBox.innerHTML = '';
-    const [{ data: businesses, error: bizErr }, { data: staff, error: staffErr }] = await Promise.all([
-      sb.from('businesses').select('*').order('created_at', { ascending: false }),
-      sb.from('app_users').select('business_id')
-    ]);
-    if(bizErr){ showError(statusBox, 'Could not load businesses: '+bizErr.message); return; }
-
-    const staffCounts = {};
-    if(!staffErr && staff){
-      staff.forEach(u=>{ staffCounts[u.business_id] = (staffCounts[u.business_id]||0) + 1; });
+    statusBox.innerHTML = '<div class="subtle">Loading…</div>';
+    try{
+      const result = await callAdminApi('list_businesses', {});
+      allBusinesses = result.businesses || [];
+      staffCountsById = result.staffCounts || {};
+      statusBox.innerHTML = '';
+    }catch(e){
+      showError(statusBox, 'Could not load businesses: ' + e.message);
+      return;
     }
 
-    const total = businesses.length;
-    const proCount = businesses.filter(b=>b.subscription_plan === 'pro').length;
-    const freeCount = total - proCount;
+    const total = allBusinesses.length;
+    const bossCount = allBusinesses.filter(b=>b.subscription_plan === 'boss').length;
+    const proCount = allBusinesses.filter(b=>b.subscription_plan === 'pro').length;
+    const freeCount = total - proCount - bossCount;
     document.getElementById('stat-total').textContent = total;
     document.getElementById('stat-free').textContent = freeCount;
     document.getElementById('stat-pro').textContent = proCount;
+    document.getElementById('stat-boss').textContent = bossCount;
 
+    renderBizTable(allBusinesses);
+  }
+
+  function renderBizTable(list){
     const tbody = document.getElementById('biz-tbody');
     const emptyNote = document.getElementById('biz-empty');
+    const noMatchNote = document.getElementById('biz-no-match');
     tbody.innerHTML = '';
-    if(total === 0){
+
+    if(allBusinesses.length === 0){
       emptyNote.classList.remove('hidden');
+      noMatchNote.classList.add('hidden');
       return;
     }
     emptyNote.classList.add('hidden');
 
-    businesses.forEach(b=>{
+    if(list.length === 0){
+      noMatchNote.classList.remove('hidden');
+      return;
+    }
+    noMatchNote.classList.add('hidden');
+
+    list.forEach(b=>{
       const plan = b.subscription_plan || 'free';
-      const planBadge = plan === 'boss'
-        ? `<span class="plan-badge plan-pro">Boss</span>`
-        : plan === 'pro'
-        ? `<span class="plan-badge plan-pro">Pro</span>`
-        : `<span class="plan-badge plan-free">Free</span>`;
+      const planBadgeClass = plan === 'boss' ? 'plan-boss' : plan === 'pro' ? 'plan-pro' : 'plan-free';
+      const planLabel = plan === 'boss' ? 'Boss' : plan === 'pro' ? 'Pro' : 'Free';
+      const suspended = b.is_active === false;
+      const planBadge = `<span class="plan-badge ${planBadgeClass}">${planLabel}</span>${suspended ? '<span class="status-badge status-suspended">Suspended</span>' : ''}`;
       const signedUp = b.created_at ? new Date(b.created_at).toLocaleDateString() : '—';
       const row = document.createElement('tr');
       row.innerHTML = `
-        <td>${escapeHtml(b.name || '—')}</td>
+        <td>
+          ${escapeHtml(b.name || '—')}
+          <div><button class="row-expand" data-expand-btn="${b.id}">${expandedBizId===b.id?'Hide staff ▲':'View staff ▼'}</button></div>
+        </td>
         <td>${escapeHtml(b.country || '—')}</td>
         <td>${planBadge}</td>
-        <td>${staffCounts[b.id] || 0}</td>
+        <td>${staffCountsById[b.id] || 0}</td>
         <td>${signedUp}</td>
         <td>
-          <div style="display:flex;gap:6px;align-items:center;">
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
             <select data-plan-select="${b.id}" style="padding:6px 8px;border:1.5px solid var(--line);border-radius:8px;font-size:12.5px;">
               <option value="free" ${plan==='free'?'selected':''}>Free</option>
               <option value="pro" ${plan==='pro'?'selected':''}>Pro</option>
               <option value="boss" ${plan==='boss'?'selected':''}>Boss</option>
             </select>
+            <input type="date" data-expiry-input="${b.id}" value="${b.subscription_expires_at ? b.subscription_expires_at.slice(0,10) : ''}" title="Expiry date (optional — leave blank for no expiry)" style="padding:5px 6px;border:1.5px solid var(--line);border-radius:8px;font-size:11.5px;">
             <button data-grant-btn="${b.id}" style="padding:6px 10px;border-radius:8px;border:none;background:var(--marigold);color:var(--ink);font-weight:800;font-size:12px;cursor:pointer;">Set</button>
+            <button class="${suspended?'btn-outline-sm':'btn-danger-sm'}" data-suspend-btn="${b.id}" data-suspend-to="${suspended?'true':'false'}">${suspended?'Reactivate':'Suspend'}</button>
           </div>
           <div style="font-size:10.5px;color:var(--text-dim);margin-top:3px;" id="grant-status-${b.id}"></div>
         </td>
       `;
       tbody.appendChild(row);
+
+      if(expandedBizId === b.id){
+        const detailRow = document.createElement('tr');
+        detailRow.className = 'detail-row';
+        detailRow.innerHTML = `<td colspan="6" id="detail-${b.id}"><div class="subtle">Loading staff…</div></td>`;
+        tbody.appendChild(detailRow);
+        renderBizDetail(b.id);
+      }
     });
 
     document.querySelectorAll('[data-grant-btn]').forEach(btn=>{
       btn.addEventListener('click', async ()=>{
         const bizId = btn.dataset.grantBtn;
         const select = document.querySelector(`[data-plan-select="${bizId}"]`);
+        const expiryInput = document.querySelector(`[data-expiry-input="${bizId}"]`);
         const newPlan = select.value;
+        const expiresAt = expiryInput.value ? new Date(expiryInput.value + 'T23:59:59Z').toISOString() : null;
         const statusEl = document.getElementById(`grant-status-${bizId}`);
         statusEl.style.color = 'var(--text-dim)';
         statusEl.textContent = 'Saving…';
-        // Manual grants set no expiry — they stay in effect until changed
-        // here again, unlike a real payment which sets a real expiry date.
-        const { error } = await sb.from('businesses')
-          .update({ subscription_plan: newPlan, subscription_expires_at: null })
-          .eq('id', bizId);
-        if(error){
+        try{
+          await callAdminApi('grant_plan', { business_id: bizId, plan: newPlan, expires_at: expiresAt });
+          statusEl.style.color = 'var(--green)';
+          statusEl.textContent = expiresAt ? `Updated — expires ${expiryInput.value}.` : 'Updated — no expiry.';
+          const b = allBusinesses.find(x=>x.id===bizId);
+          if(b){ b.subscription_plan = newPlan; b.subscription_expires_at = expiresAt; }
+          setTimeout(()=>{ statusEl.textContent = ''; }, 3500);
+        }catch(e){
           statusEl.style.color = 'var(--red)';
-          statusEl.textContent = 'Error: '+error.message;
-          return;
+          statusEl.textContent = 'Error: ' + e.message;
         }
-        statusEl.style.color = 'var(--green)';
-        statusEl.textContent = 'Updated — no expiry.';
-        setTimeout(()=>{ statusEl.textContent = ''; }, 3000);
+      });
+    });
+
+    document.querySelectorAll('[data-suspend-btn]').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const bizId = btn.dataset.suspendBtn;
+        const toActive = btn.dataset.suspendTo === 'true';
+        const statusEl = document.getElementById(`grant-status-${bizId}`);
+        const label = toActive ? 'reactivate' : 'suspend';
+        if(!confirm(`Are you sure you want to ${label} this business? Staff and owner sign-in will ${toActive?'work again':'stop working'}.`)) return;
+        statusEl.style.color = 'var(--text-dim)';
+        statusEl.textContent = 'Saving…';
+        try{
+          await callAdminApi('set_business_active', { business_id: bizId, is_active: toActive });
+          const b = allBusinesses.find(x=>x.id===bizId);
+          if(b) b.is_active = toActive;
+          applySearchFilter();
+        }catch(e){
+          statusEl.style.color = 'var(--red)';
+          statusEl.textContent = 'Error: ' + e.message;
+        }
+      });
+    });
+
+    document.querySelectorAll('[data-expand-btn]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const bizId = btn.dataset.expandBtn;
+        expandedBizId = expandedBizId === bizId ? null : bizId;
+        applySearchFilter();
       });
     });
   }
+
+  async function renderBizDetail(bizId){
+    const cell = document.getElementById(`detail-${bizId}`);
+    if(!cell) return;
+    try{
+      if(!bizDetailCache[bizId]){
+        bizDetailCache[bizId] = await callAdminApi('business_detail', { business_id: bizId });
+      }
+      const { staff, shops } = bizDetailCache[bizId];
+      if(!staff || staff.length === 0){
+        cell.innerHTML = '<div class="subtle">No staff on this account yet.</div>';
+        return;
+      }
+      cell.innerHTML = `
+        <div style="font-weight:800;font-size:12px;margin-bottom:6px;">Staff (${staff.length}) · Shops: ${shops.map(s=>escapeHtml(s.name)).join(', ') || '—'}</div>
+        ${staff.map(u=>`
+          <div class="staff-line">
+            <span>${escapeHtml((u.first_name||'')+' '+(u.last_name||''))} <span class="subtle">· ${escapeHtml(u.role||'staff')}</span></span>
+            <span class="subtle">${u.is_active===false?'Inactive':'Active'}</span>
+          </div>
+        `).join('')}
+      `;
+    }catch(e){
+      cell.innerHTML = `<div class="err">Could not load staff: ${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  function applySearchFilter(){
+    const q = document.getElementById('biz-search').value.trim().toLowerCase();
+    if(!q){ renderBizTable(allBusinesses); return; }
+    const filtered = allBusinesses.filter(b=>
+      (b.name||'').toLowerCase().includes(q) ||
+      (b.country||'').toLowerCase().includes(q) ||
+      (b.id||'').toLowerCase().includes(q)
+    );
+    renderBizTable(filtered);
+  }
+  document.getElementById('biz-search').addEventListener('input', applySearchFilter);
+
+  document.getElementById('export-csv-btn').addEventListener('click', ()=>{
+    if(allBusinesses.length === 0) return;
+    const cols = ['id','name','country','currency','subscription_plan','subscription_expires_at','is_active','created_at'];
+    const rows = [cols.join(',')].concat(
+      allBusinesses.map(b => cols.map(c => `"${String(b[c] ?? '').replace(/"/g,'""')}"`).join(','))
+    );
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `zed-businesses-${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
 
   function escapeHtml(str){
     const div = document.createElement('div');

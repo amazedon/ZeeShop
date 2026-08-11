@@ -266,14 +266,14 @@ async function pullSync(){
     const [
       shops, users, groups, customers, goods, batches, variants,
       suppliers, purchases, expenses, salaries, emp, ros, notes,
-      rooms, bookings, comms, sales, saleItems
+      rooms, bookings, comms, sales, saleItems, auditRows
     ] = await Promise.all([
       fetchTable('shops', true), fetchTable('app_users', true), fetchTable('customer_groups', true), fetchTable('customers', true),
       fetchTable('goods', false), fetchTable('good_batches', false), fetchTable('good_variants', false),
       fetchTable('suppliers', true), fetchTable('supplier_purchases', true), fetchTable('expenses', true), fetchTable('salary_payments', true),
       fetchTable('employment_records', true), fetchTable('record_only_staff', true), fetchTable('shop_notes', true),
       fetchTable('rooms', true), fetchTable('lodging_bookings', true), fetchTable('communication_log', true),
-      fetchTable('sales', false), fetchTable('sale_items', false)
+      fetchTable('sales', false), fetchTable('sale_items', false), fetchTable('audit_log', true)
     ]);
 
     mergeFlat(shops, state.shops, r=>({
@@ -349,7 +349,12 @@ async function pullSync(){
 
     mergeFlat(notes, state.shopNotes, r=>({
       id:r.id, businessId:r.business_id, shopId:r.shop_id, authorUserId:r.author_user_id,
-      title:r.title, text:r.text||'', createdAt:r.created_at, updatedAt:r.updated_at
+      title:r.title, text:r.text||'', createdAt:r.created_at, updatedAt:r.updated_at, isHandover:!!r.is_handover
+    }));
+
+    mergeFlat(auditRows, state.auditLog, r=>({
+      id:r.id, businessId:r.business_id, userId:r.user_id, action:r.action, details:r.details,
+      timestamp:r.created_at || r.timestamp
     }));
 
     mergeFlat(rooms, state.rooms, r=>({

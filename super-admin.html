@@ -122,7 +122,7 @@
       <div class="table-wrap">
         <table id="biz-table">
           <thead>
-            <tr><th>Business</th><th>Country</th><th>Plan</th><th>Staff</th><th>Signed Up</th><th>Actions</th></tr>
+            <tr><th>Business</th><th>Owner</th><th>Country</th><th>Plan</th><th>Staff</th><th>Signed Up</th><th>Actions</th></tr>
           </thead>
           <tbody id="biz-tbody"></tbody>
         </table>
@@ -151,6 +151,7 @@
   const unauthorizedScreen = document.getElementById('unauthorized-screen');
   let allBusinesses = [];
   let staffCountsById = {};
+  let ownersById = {};
   let expandedBizId = null;
   let bizDetailCache = {};
 
@@ -237,6 +238,7 @@
       const result = await callAdminApi('list_businesses', {});
       allBusinesses = result.businesses || [];
       staffCountsById = result.staffCounts || {};
+      ownersById = result.owners || {};
       statusBox.innerHTML = '';
     }catch(e){
       showError(statusBox, 'Could not load businesses: ' + e.message);
@@ -281,12 +283,17 @@
       const suspended = b.is_active === false;
       const planBadge = `<span class="plan-badge ${planBadgeClass}">${planLabel}</span>${suspended ? '<span class="status-badge status-suspended">Suspended</span>' : ''}`;
       const signedUp = b.created_at ? new Date(b.created_at).toLocaleDateString() : '—';
+      const owner = ownersById[b.id];
+      const ownerCell = owner
+        ? `${escapeHtml(owner.name||'—')}<div class="subtle" style="font-size:11px;">@${escapeHtml(owner.username||'—')}<br>${escapeHtml(owner.phone||'no phone')}<br>${escapeHtml(owner.email||'no email')}</div>`
+        : `<span class="subtle">No owner record synced yet</span>`;
       const row = document.createElement('tr');
       row.innerHTML = `
         <td>
           ${escapeHtml(b.name || '—')}
           <div><button class="row-expand" data-expand-btn="${b.id}">${expandedBizId===b.id?'Hide staff ▲':'View staff ▼'}</button></div>
         </td>
+        <td>${ownerCell}</td>
         <td>${escapeHtml(b.country || '—')}</td>
         <td>${planBadge}</td>
         <td>${staffCountsById[b.id] || 0}</td>
@@ -383,11 +390,14 @@
         return;
       }
       cell.innerHTML = `
-        <div style="font-weight:800;font-size:12px;margin-bottom:6px;">Staff (${staff.length}) · Shops: ${shops.map(s=>escapeHtml(s.name)).join(', ') || '—'}</div>
+        <div style="font-weight:800;font-size:12px;margin-bottom:6px;">Team (${staff.length}) · Shops: ${shops.map(s=>escapeHtml(s.name)).join(', ') || '—'}</div>
         ${staff.map(u=>`
-          <div class="staff-line">
-            <span>${escapeHtml((u.first_name||'')+' '+(u.last_name||''))} <span class="subtle">· ${escapeHtml(u.role||'staff')}</span></span>
-            <span class="subtle">${u.is_active===false?'Inactive':'Active'}</span>
+          <div class="staff-line" style="flex-direction:column;align-items:flex-start;gap:2px;">
+            <div style="display:flex;justify-content:space-between;width:100%;">
+              <span><b>${escapeHtml((u.first_name||'')+' '+(u.last_name||''))}</b> <span class="subtle">· ${u.role==='master'?'Owner':'Staff'}</span></span>
+              <span class="subtle">${u.is_active===false?'Inactive':'Active'}</span>
+            </div>
+            <div class="subtle" style="font-size:11px;">@${escapeHtml(u.username||'—')} · ${escapeHtml(u.phone||'no phone')} · ${escapeHtml(u.email||'no email')}</div>
           </div>
         `).join('')}
       `;

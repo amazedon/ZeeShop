@@ -69,20 +69,24 @@ Deno.serve(async (req: Request) => {
         .order("created_at", { ascending: false });
       if (bizErr) return json({ error: bizErr.message }, 500);
 
-      const { data: staff } = await admin.from("app_users").select("business_id, role");
+      const { data: staff } = await admin.from("app_users").select("business_id, role, first_name, last_name, username, phone, email");
       const staffCounts: Record<string, number> = {};
-      (staff || []).forEach((u: { business_id: string; role: string }) => {
+      const owners: Record<string, { name: string; username: string; phone: string | null; email: string | null }> = {};
+      (staff || []).forEach((u: { business_id: string; role: string; first_name: string; last_name: string; username: string; phone: string | null; email: string | null }) => {
         if (u.role === "staff") staffCounts[u.business_id] = (staffCounts[u.business_id] || 0) + 1;
+        if (u.role === "master" && !owners[u.business_id]) {
+          owners[u.business_id] = { name: `${u.first_name || ""} ${u.last_name || ""}`.trim(), username: u.username, phone: u.phone, email: u.email };
+        }
       });
 
-      return json({ businesses: businesses || [], staffCounts }, 200);
+      return json({ businesses: businesses || [], staffCounts, owners }, 200);
     }
 
     if (action === "business_detail") {
       const businessId = params.business_id;
       if (!businessId) return json({ error: "Missing business_id" }, 400);
       const [{ data: staff }, { data: shops }] = await Promise.all([
-        admin.from("app_users").select("id, first_name, last_name, role, is_active, email, phone, created_at").eq("business_id", businessId),
+        admin.from("app_users").select("id, first_name, last_name, username, role, is_active, email, phone, created_at").eq("business_id", businessId),
         admin.from("shops").select("id, name").eq("business_id", businessId),
       ]);
       return json({ staff: staff || [], shops: shops || [] }, 200);

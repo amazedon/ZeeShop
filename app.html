@@ -742,6 +742,23 @@ function render(){
     bindPasswordToggles();
     return;
   }
+  if(state.business.isActive === false){
+    // Purely an in-app lockout — no email/SMS is sent about this, matching
+    // how the rest of the app works. The business's own data stays intact
+    // locally and in Supabase; this just stops anyone (owner or staff) from
+    // using the app on this device while suspended, until reactivated from
+    // the Super Admin panel.
+    app.innerHTML = `
+      <div class="center-screen">
+        <div class="auth-card" style="text-align:center;">
+          <div class="brand" style="justify-content:center;"><div class="brand-mark">Z</div><div class="brand-name">Zed</div></div>
+          <div style="font-size:40px;margin:10px 0;">🔒</div>
+          <h2 style="margin-bottom:8px;">This account is suspended</h2>
+          <p class="subtle">Access to ${escapeHtml(state.business.name||'this business')} has been paused. Please contact support to find out why.</p>
+        </div>
+      </div>`;
+    return;
+  }
   if(!state.sessionUserId){
     if(forceFullLogin){
       app.innerHTML = renderLogin();
@@ -2063,8 +2080,14 @@ function syncSaleInsert(sale){
     sold_by_user_id: sale.soldByUserId, receipt_sent: sale.receiptSent, date: sale.date
   });
   sale.items.forEach(item=>{
+    // The id is generated here and ALSO written back onto the local item
+    // (not just the push payload) — without that, nothing later (like
+    // processing a return) has any way to reference this specific
+    // sale_items row again, since the server-side id was never known
+    // locally to begin with.
+    item.saleItemId = uid('saleitem');
     enqueueSync('sale_items','insert', {
-      id: uid('saleitem'), sale_id: sale.id, good_id: item.goodId, batch_id: item.batchId || null,
+      id: item.saleItemId, sale_id: sale.id, good_id: item.goodId, batch_id: item.batchId || null,
       variant_id: item.variantId || null, variant_label: item.variantLabel, qty: item.qty,
       price_used: item.priceUsed, note: item.note
     });
@@ -2150,6 +2173,14 @@ function handleAddShop(){
   const s = {id:uid('shop'), businessId:business().id, name, address:'', phone:'', email:'', receiptFooter:'Thank you for your business!', receiptTerms:'Goods sold in good condition. No refund after payment.', auctionDiscountDefault:30};
   state.shops.push(s);
   state.currentShopId = s.id;
+  // Only the VERY FIRST shop (created at signup) was ever actually pushed to
+  // the server — every shop added afterward through this "Add Shop" flow
+  // stayed local-only, invisible on every other device including the
+  // owner's own second phone.
+  enqueueSync('shops','insert', {
+    id: s.id, business_id: s.businessId, name: s.name, address: s.address, phone: s.phone, email: s.email,
+    receipt_footer: s.receiptFooter, receipt_terms: s.receiptTerms, auction_discount_default: s.auctionDiscountDefault
+  });
   logAudit('shop_added', 'Added shop: '+name);
   render();
 }
@@ -3561,6 +3592,10 @@ function bindCreditEvents(){
     s.paidAmount += amt;
     s.balance = Math.max(0, s.subtotal - s.paidAmount);
     s.status = s.balance<=0 ? 'paid' : 'partial';
+    // Previously local-only — a payment collected on one device never
+    // reached another, so the customer could still show as owing money
+    // (and risk being asked to pay again) everywhere except this device.
+    enqueueSync('sales','update', { id: s.id, paid_amount: s.paidAmount, balance: s.balance, status: s.status });
     logAudit('credit_payment', fmtMoney(amt)+' received');
     toast('Payment recorded ✅');
     render();
@@ -4026,7 +4061,8 @@ function openEmploymentEditForm(userId){
       salaryFrequency: rec.salaryFrequency, settlementDate: rec.settlementDate, settlementTerms: rec.settlementTerms, notes: rec.notes
     };
     const reason = document.getElementById('er-change-reason').value.trim();
-    rec.history.push({ changedAt: new Date().toISOString(), changedBy: state.sessionUserId, previousValues, reason });
+    const historyId = uid('erhist');
+    rec.history.push({ id: historyId, changedAt: new Date().toISOString(), changedBy: state.sessionUserId, previousValues, reason });
     rec.employmentType = document.getElementById('er-type').value;
     rec.resumptionDate = resume;
     rec.salaryAmount = Number(document.getElementById('er-salary').value||0);
@@ -4034,6 +4070,19 @@ function openEmploymentEditForm(userId){
     rec.settlementDate = document.getElementById('er-settle-date').value || null;
     rec.settlementTerms = document.getElementById('er-settle-terms').value.trim();
     rec.notes = document.getElementById('er-notes').value.trim();
+    // This whole amend flow — both the updated current terms AND the
+    // amendment history entry — used to be entirely local-only. A salary
+    // change made on one device never reached another; the audit trail of
+    // "what it used to be" existed only on whichever device made the edit.
+    enqueueSync('employment_records','update', {
+      id: rec.id, employment_type: rec.employmentType, resumption_date: rec.resumptionDate,
+      salary_amount: rec.salaryAmount, salary_frequency: rec.salaryFrequency,
+      settlement_date: rec.settlementDate, settlement_terms: rec.settlementTerms, notes: rec.notes
+    });
+    enqueueSync('employment_record_history','insert', {
+      id: historyId, employment_record_id: rec.id, business_id: business().id,
+      changed_by_user_id: state.sessionUserId, previous_values: previousValues, reason
+    });
     logAudit('employment_record_edited', `Edited employment record for ${u.firstName} ${u.lastName}${reason?': '+reason:''}`);
     toast('Record updated — previous version saved to history ✅'); closeSheet(); renderEmploymentRecordView(userId);
   });
@@ -4487,6 +4536,17 @@ function openStaffPermissionsModal(userId){
         if(wasSuper) logAudit('super_admin_revoked', `Revoked Super Admin from ${u.firstName} ${u.lastName}`);
       }
     }
+    // Permission changes are exactly the kind of thing that MUST reach the
+    // server and every device promptly — a revoked permission that only
+    // took effect locally would leave the staff member able to keep doing
+    // whatever was just turned off, on their own device. is_super_admin and
+    // manages_shop_ids were previously left out here entirely, which is why
+    // a Super Admin's assigned-shop list never followed them to another device.
+    enqueueSync('app_users','update', {
+      id: u.id, can_sell: u.canSell, can_sell_credit: u.canSellCredit, can_record_cash: u.canRecordCash,
+      can_add_goods: u.canAddGoods, can_void_return: u.canVoidReturn,
+      is_super_admin: !!u.isSuperAdmin, manages_shop_ids: u.managesShopIds || []
+    });
     logAudit('permissions_updated', `Updated permissions for ${u.firstName} ${u.lastName}`);
     toast('Permissions saved ✅'); closeSheet(); render();
   });
@@ -4568,6 +4628,11 @@ function bindStaffEvents(){
     const u = state.users.find(x=>x.id===b.dataset.toggleActive);
     if(!canManageThisUser(u)){ toast("You don't have permission to manage this account."); return; }
     u.isActive = u.isActive===false ? true : false;
+    // This MUST reach the server, not just stay local — staff-device-login
+    // checks is_active there before letting someone reconnect on a new
+    // phone, so a staff member "removed" only on this device could still
+    // sign in elsewhere if the server never found out they'd been deactivated.
+    enqueueSync('app_users','update', { id: u.id, is_active: u.isActive });
     logAudit('staff_status', (u.isActive?'Reactivated ':'Deactivated ')+u.firstName);
     render();
   }));
@@ -5830,6 +5895,8 @@ function openReturnModal(saleId){
   document.getElementById('confirm-return').addEventListener('click', ()=>{
     let refundTotal = 0;
     let anyReturned = false;
+    const restockedBatches = {}; // batchId -> goodId, for syncing the restock
+    const restockedVariants = {}; // variantId -> goodId
     s.items.forEach((it,idx)=>{
       const input = document.getElementById('ret-qty-'+idx);
       const qty = input ? Number(input.value||0) : 0;
@@ -5843,10 +5910,10 @@ function openReturnModal(saleId){
       if(g){
         if(it.variantId){
           const v = (g.variants||[]).find(x=>x.id===it.variantId);
-          if(v) v.qty += qty;
+          if(v){ v.qty += qty; restockedVariants[v.id] = g.id; }
         } else {
           const batch = g.batches.find(b=>b.id===it.batchId) || g.batches[0];
-          if(batch) batch.qtyRemaining += qty;
+          if(batch){ batch.qtyRemaining += qty; restockedBatches[batch.id] = g.id; }
         }
       }
     });
@@ -5855,6 +5922,25 @@ function openReturnModal(saleId){
     s.paidAmount = Math.min(s.paidAmount, s.subtotal);
     s.balance = Math.max(0, s.subtotal - s.paidAmount);
     if(s.balance<=0) s.status='paid'; else if(s.paidAmount>0) s.status='partial'; else s.status='credit';
+    // This whole block used to only update local state — a return processed
+    // on one device never reached another (the sale kept showing its old
+    // total, and restocked quantities never came back into the shared count).
+    enqueueSync('sales','update', { id: s.id, subtotal: s.subtotal, paid_amount: s.paidAmount, balance: s.balance, status: s.status });
+    s.items.forEach((it,idx)=>{
+      const input = document.getElementById('ret-qty-'+idx);
+      const qty = input ? Number(input.value||0) : 0;
+      if(qty>0 && it.saleItemId) enqueueSync('sale_items','update', { id: it.saleItemId, returned_qty: it.returnedQty });
+    });
+    Object.keys(restockedBatches).forEach(batchId=>{
+      const g = state.goods.find(x=>x.id===restockedBatches[batchId]);
+      const b = g && g.batches.find(x=>x.id===batchId);
+      if(b) enqueueSync('good_batches','update', { id: b.id, qty_remaining: b.qtyRemaining });
+    });
+    Object.keys(restockedVariants).forEach(variantId=>{
+      const g = state.goods.find(x=>x.id===restockedVariants[variantId]);
+      const v = g && g.variants.find(x=>x.id===variantId);
+      if(v) enqueueSync('good_variants','update', { id: v.id, qty: v.qty });
+    });
     logAudit('sale_return', `Returned items worth ${fmtMoney(refundTotal)} from sale #${s.id.slice(-6).toUpperCase()}`);
     toast('Return processed ✅'); closeSheet(); render();
   });
@@ -6180,7 +6266,7 @@ function openRoomDetail(roomId){
     if(b.balance>0 && !confirm(`This guest still owes ${fmtMoney(b.balance)}. Check out anyway?`)) return;
     b.status = 'checked_out';
     b.checkedOutAt = new Date().toISOString();
-    enqueueSync('lodging_bookings','update', { id: b.id, status: 'checked_out' });
+    enqueueSync('lodging_bookings','update', { id: b.id, status: 'checked_out', checked_out_at: b.checkedOutAt });
     logAudit('lodging_checkout', `Checked out ${escapeHtml(b.guestName)} from ${r.name}`);
     toast('Guest checked out ✅'); closeSheet(); render();
   });
@@ -6353,20 +6439,24 @@ const FAQ_GROUPS = [
     { q:"I forgot my password — what do I do?", a:"Tap Forgot Password on the login screen and enter your username or email. We'll send a 6-digit code to your email on file — enter it to set a new password. If your account has no email on file, you'll need to create a new account." },
     { q:"How do multiple staff use the same device?", a:"Each staff member gets their own PIN. After the business owner logs in once, everyone unlocks their own profile with their PIN from the user-select screen — no need to log in with a password every time." },
     { q:"How do I add a new staff member?", a:"Go to More → Staff → Generate Join Code. Share the code with them; they open Zed on their device, tap Join Business, and enter it. The code expires after a set number of minutes." },
+    { q:"A staff member already has an account — how do they sign in on a second phone?", a:"On the new phone, tap Join Business, then \"I already have an account.\" They'll enter the business's Connect Code (from the Owner's Settings screen), their own phone number, and their PIN. This signs them into their existing account — it does not create a new one, so their sales history and activity stay attached to them." },
+    { q:"What is the Connect Code?", a:"A permanent code (unlike the Join Code, it doesn't expire) that lets an existing staff member sign into a second device. Find or reset it under Settings → Staff Connect Code — only the Owner can see or regenerate it. Resetting it doesn't sign anyone out; it just retires the old code." },
     { q:"What's the difference between Master, Staff, Viewer, and Super Admin?", a:"Master is the owner with full access. Staff have specific permissions you assign (sell, add goods, record cash, etc). Viewer can only look, not act. Super Admin is a staff member you've trusted to manage specific shops on your behalf." },
   ]},
   { category: "Shops & Business Setup", items: [
     { q:"Can I run more than one shop from one account?", a:"Yes. Tap the ＋ next to the shop switcher at the top to add another shop, then use the dropdown to switch between them anytime." },
     { q:"How do I change my Business Type?", a:"Go to Settings → Business Type. This changes which fields show up when you add Goods — e.g. Clothing shows sizes, Spare Parts shows compatible vehicle, Hotel/Lodging unlocks the Lodging module." },
-    { q:"What is Market Mode?", a:"A simplified, larger-text display style aimed at busy, informal selling environments like open markets. Toggle it in Settings." },
+    { q:"What is Dark Mode?", a:"A dark, lower-animation display style — easier on the eyes at night and lighter on battery. Toggle it under Settings → Dark Mode." },
   ]},
   { category: "Sales & Goods", items: [
     { q:"How do I record a sale?", a:"Go to New Sale from the bottom nav, tap items to add them to the cart, then tap Charge to complete it. Stock is deducted automatically from the oldest batch first." },
     { q:"How do I add stock for an item I already sell?", a:"Go to Goods, tap the item, then tap Add Stock. If you bought it from a supplier, you can log it from Suppliers → tap the supplier → Log a Restock instead, which also tracks what you owe them." },
-    { q:"How do I scan a barcode?", a:"Add a barcode to an item when creating it in Goods (optional). During a sale, scanning or typing that barcode into the search box finds it instantly." },
+    { q:"Can I scan a barcode?", a:"Add a barcode to an item when creating it in Goods (optional). Typing or pasting that number into the search box during a sale finds it instantly — this also works with an external USB/Bluetooth barcode scanner, since those type into the field just like a keyboard. There's currently no phone-camera scanning." },
     { q:"How do sizes/colors (variants) work?", a:"For business types like Clothing & Fashion or Shoes & Bags, adding a Good lets you set up variants (e.g. sizes S/M/L) each with their own stock count, under one item." },
     { q:"What happens to stock that's about to expire?", a:"Goods flags batches expiring within 7 days. You can start a 30% Auction discount on that batch straight from the item page to move it before it goes to waste." },
     { q:"How do I give a customer group a different price?", a:"Set up Customer Groups under Customers, then add a group price when creating or editing a Good. Anyone in that group is charged that price automatically at sale time." },
+    { q:"A customer returned an item — how do I process that?", a:"Open the sale from History or the customer's record, and tap Return Item(s). Choose the quantity being returned — the sale total, any balance owed, and your stock count all update automatically." },
+    { q:"I made a mistake on a sale — can I cancel it?", a:"Yes, void it from the sale's detail view. A voided sale is kept for your records but no longer counts toward totals or stock." },
   ]},
   { category: "Hotel / Lodging", items: [
     { q:"How do I track food, drinks, or meat stock?", a:"The same way as any other item — through Goods. Batches with expiry dates work well for perishables like meat, drinks, and cooked food, and you'll get a low-stock or expiring alert automatically." },
@@ -6378,7 +6468,7 @@ const FAQ_GROUPS = [
   ]},
   { category: "Customers & Credit", items: [
     { q:"How do I sell to a customer on credit?", a:"During a sale, choose the customer (or add a walk-in), and enter a smaller Amount Paid than the total. The rest is tracked as credit under More → Credit Ledger with a due date." },
-    { q:"How do I see who owes me money?", a:"Go to More → Credit Ledger. It lists every unpaid or partly-paid sale with balances and due dates, and lets you send WhatsApp payment reminders." },
+    { q:"How do I see who owes me money?", a:"Go to More → Credit Ledger. It lists every unpaid or partly-paid sale with balances and due dates, and lets you send WhatsApp or SMS payment reminders — these open your own phone's WhatsApp/SMS app with the message pre-filled for you to send, nothing is sent automatically." },
   ]},
   { category: "Suppliers & Expenses", items: [
     { q:"What's the difference between Goods and Suppliers?", a:"Goods is your shelf inventory — what you have to sell, in batches with cost, price, and expiry. Suppliers tracks who you buy stock from and what you still owe them, separate from your sales and profit reports." },
@@ -6386,20 +6476,34 @@ const FAQ_GROUPS = [
     { q:"How do I record business expenses like rent or transport?", a:"Go to More → Expenses and log the amount, category, and description. These are subtracted from your gross profit in Profit Reports to show real net profit." },
   ]},
   { category: "Staff & Payroll", items: [
-    { q:"Can staff see everything I see?", a:"No. Staff permissions are set individually under More → Staff — you control what each person can do, like recording sales, adding goods, or handling cash." },
+    { q:"Can staff see everything I see?", a:"No. Staff permissions are set individually under More → Staff — you control what each person can do, like recording sales, adding goods, or handling cash. Changes take effect on their device as soon as it's next online." },
     { q:"How do I record salary payments or employment letters?", a:"Go to More → Staff, tap a staff member, and you'll find options to log salary payments and generate employment/offer letters tied to their record." },
+    { q:"Can I update a staff member's salary or terms later?", a:"Yes — open their Employment Record and edit it. The previous terms are automatically saved to that record's history, along with who changed it and an optional reason, so nothing about past terms is lost." },
     { q:"What is \"Record-Only\" staff?", a:"People you want to keep employment records for (like salary history) without giving them a login or access to the app itself." },
   ]},
   { category: "Reports & Receipts", items: [
     { q:"How do I see my profit, not just my revenue?", a:"Go to More → Profit Reports. It shows revenue, cost of goods sold, and expenses together so you see real profit, not just what came in." },
     { q:"How do I share a receipt with a customer or guest?", a:"Open the sale or booking, tap Share Receipt, and your phone's share sheet opens with the receipt image attached — pick WhatsApp, email, or any app you like. You can also Download it as a PNG." },
     { q:"Can I customize the text at the bottom of receipts?", a:"Yes — go to Settings and edit the Receipt Footer and Receipt Terms fields. They appear on every sales and lodging receipt you generate." },
-    { q:"How do I close out my day?", a:"Go to More → Close Day (or Close My Shift for staff). It totals the day's sales and cash so you can confirm everything matches before locking it in." },
+    { q:"Can I put my logo on receipts?", a:"Yes — go to Settings → Business Logo to upload one. It'll appear on every receipt you generate from then on." },
+    { q:"How do I close out my day?", a:"Go to More → Close Day (or Close My Shift for staff). It totals the day's sales and cash so you can confirm everything matches before locking it in. You can also leave a note for whoever opens next — handy for handing off between shifts." },
     { q:"What is the Audit Log?", a:"A running history of key actions across your business — restocks, payments, staff changes, check-ins — visible to the Master account under More → Audit Log." },
+    { q:"What are Notes for?", a:"A place to jot down anything worth remembering for your shop — a supplier's contact, a reminder, anything. Go to More → Notes. Marking a note as a handover note also surfaces it as a banner on the Home screen for the next person who logs in, until they dismiss it." },
+  ]},
+  { category: "Home Screen", items: [
+    { q:"What's the \"Today's Snapshot\" section on my Home screen?", a:"A quick summary of expenses and credit given out today, calculated entirely from your own device — nothing is sent anywhere to generate it. Only the Owner sees this." },
+    { q:"What's \"Recent Activity\" on my Home screen?", a:"A live feed of what your staff have been doing — sales, restocks, edits — across every device, not just the one you're holding. Only the Owner sees this." },
+    { q:"What does the small dot next to the bell icon mean?", a:"It shows your sync status at a glance: green means everything's up to date, amber means changes are waiting to reach the cloud (normal if you've just gone offline), and red means something's stuck and worth checking your connection for." },
   ]},
   { category: "Notifications & Data", items: [
-    { q:"What do the alerts on the bell icon mean?", a:"The bell shows counts for stock expiring soon, low/out-of-stock items, and credit sales that are due soon — tap it to jump straight to the relevant screen." },
-    { q:"Is my data backed up anywhere?", a:"Your data is stored on this device. Use Settings to review backup/export options for your business." },
+    { q:"What do the alerts on the bell icon mean?", a:"The bell shows counts for stock expiring soon, low/out-of-stock items, and credit sales that are overdue or due soon — tap it to jump straight to the relevant screen." },
+    { q:"Can I turn notifications on or off?", a:"Yes — go to Settings and use Enable/Turn Off Notifications." },
+    { q:"Is my data backed up anywhere?", a:"Yes. Whenever your device is online, everything syncs to the cloud automatically in the background — you don't need to do anything for this to happen. It also works fully offline; anything you do while offline is saved on your device and syncs the moment you're back online. You can also export your data as a spreadsheet anytime from Settings → Export Data." },
+  ]},
+  { category: "Plans & Billing", items: [
+    { q:"What's the difference between the Free, Pro, and Boss plans?", a:"Free covers up to 2 shops, 100 goods, 50 customers, and 2 staff. Pro raises that to 3 shops, 1,000 goods, unlimited customers, and 5 staff. Boss removes every limit. Cloud sync, offline support, and everything else in this FAQ work the same on every plan — the plans only affect these limits." },
+    { q:"How do I upgrade my plan?", a:"Go to Settings → your current plan, and choose Pro or Boss, monthly or yearly. Payment is handled by Flutterwave." },
+    { q:"I upgraded but it still shows my old plan — what do I do?", a:"Give it a moment to sync, or reopen the app. If it's been a while and it still hasn't updated, reach out to support with your business name." },
   ]},
 ];
 let openFaqKey = null;

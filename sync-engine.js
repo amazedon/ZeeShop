@@ -240,6 +240,45 @@ async function pullSync(){
     let changed = false;
     const bizId = state.business && state.business.id;
 
+    // The business row itself (plan, expiry, connect code, active status)
+    // needs an actual UPDATE every pull, not just "add if missing" like
+    // everything below — it's a singleton that already exists locally, so
+    // mergeFlat's insert-only logic would never apply an admin-side change
+    // (e.g. a plan grant from the super-admin panel) to it. This was why
+    // plan changes showed in the admin panel but never reached the owner's
+    // own device until they fully logged out and back in.
+    if(bizId){
+      try{
+        const res = await fetch(`${SYNC_SUPABASE_URL}/rest/v1/businesses?id=eq.${bizId}&select=*`, { headers });
+        if(res.ok){
+          const rows = await res.json();
+          if(rows[0]){
+            const b = rows[0];
+            const fresh = {
+              subscriptionPlan: b.subscription_plan || 'free',
+              subscriptionExpiresAt: b.subscription_expires_at || null,
+              connectCode: b.connect_code || null,
+              isActive: b.is_active !== false,
+              name: b.name, country: b.country, currency: b.currency,
+              autoRenewEnabled: b.auto_renew_enabled || false,
+              autoRenewPlan: b.auto_renew_plan || null,
+              autoRenewInterval: b.auto_renew_interval || null
+            };
+            if(JSON.stringify(fresh) !== JSON.stringify({
+              subscriptionPlan: state.business.subscriptionPlan, subscriptionExpiresAt: state.business.subscriptionExpiresAt,
+              connectCode: state.business.connectCode, isActive: state.business.isActive,
+              name: state.business.name, country: state.business.country, currency: state.business.currency,
+              autoRenewEnabled: state.business.autoRenewEnabled, autoRenewPlan: state.business.autoRenewPlan,
+              autoRenewInterval: state.business.autoRenewInterval
+            })){
+              Object.assign(state.business, fresh);
+              changed = true;
+            }
+          }
+        }
+      }catch(e){ /* best-effort — don't let this block the rest of the pull */ }
+    }
+
     // Scope every query to this business explicitly rather than depending
     // solely on RLS — belt-and-braces so a policy gap can't leak another
     // business's rows onto this device. Tables without a business_id column
@@ -254,115 +293,220 @@ async function pullSync(){
       }catch(e){ return []; }
     }
 
-    function mergeFlat(rows, arr, mapFn){
+    // Pending-edit guard: if THIS device has a not-yet-pushed local change
+    // queued for a given table+id, a pull must not overwrite it with the
+    // (now stale, pre-change) server copy — that would silently discard the
+    // user's own edit until it got overwritten again by their own eventual
+    // push. Once the push succeeds, the next pull correctly picks up the
+    // server's now-current copy like anything else.
+    const pendingByTable = {};
+    loadSyncQueue().forEach(item=>{
+      if(!pendingByTable[item.table]) pendingByTable[item.table] = new Set();
+      if(item.payload && item.payload.id) pendingByTable[item.table].add(item.payload.id);
+    });
+    function isPending(table, id){ return !!(pendingByTable[table] && pendingByTable[table].has(id)); }
+
+    // Replaces the old insert-only mergeFlat: a row that already exists
+    // locally now gets its fields REFRESHED from the server (unless a local
+    // edit for that same id is still queued, per isPending above), not just
+    // left alone forever. This is what makes things like "mark a credit sale
+    // paid on one device" or "deactivate a staff member" actually show up on
+    // every other device, instead of only in whichever device made the change.
+    function mergeUpdate(table, rows, arr, mapFn){
       rows.forEach(row=>{
-        if(!arr.some(x=>x.id===row.id)){
-          arr.push(mapFn(row));
+        if(isPending(table, row.id)) return;
+        const mapped = mapFn(row);
+        const idx = arr.findIndex(x=>x.id===row.id);
+        if(idx === -1){
+          arr.push(mapped);
+          changed = true;
+        } else if(JSON.stringify(arr[idx]) !== JSON.stringify(mapped)){
+          arr[idx] = mapped;
           changed = true;
         }
       });
     }
 
+    // Fetch shops FIRST and separately — everything shop-scoped below
+    // (goods, sales) needs the resulting shop id list to filter by, since
+    // neither of those tables has its own business_id column to filter on
+    // directly. Previously goods and sales were fetched with NO scoping
+    // filter at all ("false" meant "joined onto an already-scoped parent
+    // below" for batches/variants/sale_items, which is true — but goods and
+    // sales themselves were never actually scoped by anything, client-side,
+    // meaning this device relied 100% on RLS alone to keep every OTHER
+    // business's product catalog and sales out of its local storage. Same
+    // belt-and-braces standard as the rest of this function now applies here.
+    const shopsRes = await fetchTable('shops', true);
+    mergeUpdate('shops', shopsRes, state.shops, r=>({
+      id:r.id, businessId:r.business_id, name:r.name, address:r.address||'', phone:r.phone||'', email:r.email||'',
+      receiptFooter:r.receipt_footer||'Thank you for your business!', receiptTerms:r.receipt_terms||'',
+      auctionDiscountDefault:r.auction_discount_default!=null?r.auction_discount_default:30
+    }));
+    const myShopIds = state.shops.filter(s=>s.businessId===bizId).map(s=>s.id);
+    async function fetchByShop(table){
+      if(myShopIds.length===0) return [];
+      try{
+        const res = await fetch(`${SYNC_SUPABASE_URL}/rest/v1/${table}?select=*&shop_id=in.(${myShopIds.join(',')})`, { headers });
+        if(!res.ok) return [];
+        return await res.json();
+      }catch(e){ return []; }
+    }
+
     const [
-      shops, users, groups, customers, goods, batches, variants,
+      users, groups, customers, goods, batches, variants,
       suppliers, purchases, expenses, salaries, emp, ros, notes,
-      rooms, bookings, comms, sales, saleItems, auditRows
+      rooms, bookings, comms, sales, saleItems, auditRows, empHistory
     ] = await Promise.all([
-      fetchTable('shops', true), fetchTable('app_users', true), fetchTable('customer_groups', true), fetchTable('customers', true),
-      fetchTable('goods', false), fetchTable('good_batches', false), fetchTable('good_variants', false),
+      fetchTable('app_users', true), fetchTable('customer_groups', true), fetchTable('customers', true),
+      fetchByShop('goods'), fetchTable('good_batches', false), fetchTable('good_variants', false),
       fetchTable('suppliers', true), fetchTable('supplier_purchases', true), fetchTable('expenses', true), fetchTable('salary_payments', true),
       fetchTable('employment_records', true), fetchTable('record_only_staff', true), fetchTable('shop_notes', true),
       fetchTable('rooms', true), fetchTable('lodging_bookings', true), fetchTable('communication_log', true),
-      fetchTable('sales', false), fetchTable('sale_items', false), fetchTable('audit_log', true)
+      fetchByShop('sales'), fetchTable('sale_items', false), fetchTable('audit_log', true), fetchTable('employment_record_history', true)
     ]);
 
-    mergeFlat(shops, state.shops, r=>({
-      id:r.id, businessId:r.business_id, name:r.name, address:r.address||'', phone:r.phone||'', email:r.email||''
-    }));
-
-    mergeFlat(users, state.users, r=>({
+    mergeUpdate('app_users', users, state.users, r=>({
       id:r.id, businessId:r.business_id, username:r.username, email:r.email, phone:r.phone||'',
       firstName:r.first_name, lastName:r.last_name||'', role:r.role, isActive:r.is_active, canAddGoods:r.can_add_goods,
+      // These five were missing from this mapping entirely — mergeUpdate
+      // does a full object replacement on update, not a field-by-field
+      // merge, so leaving them out didn't just fail to refresh them: it
+      // would have silently WIPED them from the local user record the
+      // first time any app_users update pulled in on another device
+      // (e.g. right after the deactivate/permissions fixes we just made).
+      canSell:r.can_sell, canSellCredit:r.can_sell_credit, canRecordCash:r.can_record_cash,
+      canVoidReturn:r.can_void_return, isSuperAdmin:r.is_super_admin||false, managesShopIds:r.manages_shop_ids||[],
       passwordHash:r.password_hash||null, pinHash:r.pin_hash||null, pinLength:r.pin_length||null
     }));
 
-    mergeFlat(groups, state.customerGroups, r=>({ id:r.id, businessId:r.business_id, name:r.name }));
+    mergeUpdate('customer_groups', groups, state.customerGroups, r=>({ id:r.id, businessId:r.business_id, name:r.name }));
 
-    mergeFlat(customers, state.customers, r=>({
+    mergeUpdate('customers', customers, state.customers, r=>({
       id:r.id, businessId:r.business_id, groupId:r.group_id, fullName:r.full_name, country:r.country,
       phoneE164:r.phone_e164||'', whatsappNumber:r.whatsapp_number||'', email:r.email||'', address:r.address||'',
       notes:r.notes||'', consentGiven:r.consent_given, createdByUserId:r.created_by_user_id
     }));
 
     goods.forEach(r=>{
-      if(!state.goods.some(x=>x.id===r.id)){
+      const existing = state.goods.find(x=>x.id===r.id);
+      const remoteBatches = batches.filter(b=>b.good_id===r.id).map(b=>({
+        id:b.id, qtyRemaining:b.qty_remaining, expiryDate:b.expiry_date, costPrice:b.cost_price,
+        batchNo:b.batch_no, auctionActive:b.auction_active, auctionPrice:b.auction_price, auctionDiscount:b.auction_discount
+      }));
+      const remoteVariants = variants.filter(v=>v.good_id===r.id).map(v=>({
+        id:v.id, size:v.size, color:v.color, label:v.label, qty:v.qty
+      }));
+
+      if(!existing){
         const g = {
           id:r.id, shopId:r.shop_id, name:r.name, basePrice:r.base_price, costPrice:r.cost_price,
           emoji:'🛍️', groupPrices:[], barcode:r.barcode||null, reorderLevel:r.reorder_level, hasVariants:r.has_variants,
-          batches: batches.filter(b=>b.good_id===r.id).map(b=>({
-            id:b.id, qtyRemaining:b.qty_remaining, expiryDate:b.expiry_date, costPrice:b.cost_price,
-            batchNo:b.batch_no, auctionActive:b.auction_active, auctionPrice:b.auction_price, auctionDiscount:b.auction_discount
-          })),
-          variants: variants.filter(v=>v.good_id===r.id).map(v=>({
-            id:v.id, size:v.size, color:v.color, label:v.label, qty:v.qty
-          }))
+          batches: remoteBatches, variants: remoteVariants
         };
         if(r.spec){ g.spec = r.spec; g.specLabel = r.spec_label; }
         if(r.dimension_value){ g.dimension = { value:r.dimension_value, unit:r.dimension_unit }; }
         state.goods.push(g);
         changed = true;
+        return;
       }
+
+      // Good already known locally — refresh its own fields (name, price,
+      // reorder level, etc.) unless this device has an unpushed edit queued.
+      if(!isPending('goods', r.id)){
+        const fresh = { name:r.name, basePrice:r.base_price, costPrice:r.cost_price, barcode:r.barcode||null, reorderLevel:r.reorder_level, hasVariants:r.has_variants };
+        Object.assign(existing, fresh);
+        changed = true;
+      }
+      // Batches and variants are pushed as their OWN queue items (see
+      // syncSaleInsert's stock deduction and sale-return handling), so each
+      // one needs its own pending check — otherwise, say, one still-queued
+      // batch decrement would block every OTHER batch on the same good from
+      // ever refreshing, or vice versa.
+      remoteBatches.forEach(rb=>{
+        if(isPending('good_batches', rb.id)) return;
+        const idx = existing.batches.findIndex(x=>x.id===rb.id);
+        if(idx===-1){ existing.batches.push(rb); changed = true; }
+        else if(JSON.stringify(existing.batches[idx]) !== JSON.stringify(rb)){ existing.batches[idx] = rb; changed = true; }
+      });
+      remoteVariants.forEach(rv=>{
+        if(isPending('good_variants', rv.id)) return;
+        const idx = existing.variants.findIndex(x=>x.id===rv.id);
+        if(idx===-1){ existing.variants.push(rv); changed = true; }
+        else if(JSON.stringify(existing.variants[idx]) !== JSON.stringify(rv)){ existing.variants[idx] = rv; changed = true; }
+      });
     });
 
-    mergeFlat(suppliers, state.suppliers, r=>({
+    mergeUpdate('suppliers', suppliers, state.suppliers, r=>({
       id:r.id, businessId:r.business_id, name:r.name, country:r.country, phone:r.phone||'',
       suppliesWhat:r.supplies_what||'', notes:r.notes||'', createdByUserId:r.created_by_user_id
     }));
 
-    mergeFlat(purchases, state.supplierPurchases, r=>({
+    mergeUpdate('supplier_purchases', purchases, state.supplierPurchases, r=>({
       id:r.id, businessId:r.business_id, supplierId:r.supplier_id, shopId:r.shop_id, goodId:r.good_id,
       itemName:r.item_name, qty:r.qty, costPrice:r.cost_price, totalAmount:r.total_amount,
       paidAmount:r.paid_amount, balance:r.balance, date:r.date, createdByUserId:r.created_by_user_id, createdAt:r.created_at
     }));
 
-    mergeFlat(expenses, state.expenses, r=>({
+    mergeUpdate('expenses', expenses, state.expenses, r=>({
       id:r.id, businessId:r.business_id, shopId:r.shop_id, category:r.category, description:r.description||'',
       amount:r.amount, date:r.date, createdByUserId:r.created_by_user_id
     }));
 
-    mergeFlat(salaries, state.salaryPayments, r=>({
+    mergeUpdate('salary_payments', salaries, state.salaryPayments, r=>({
       id:r.id, userId:r.user_id, businessId:r.business_id, shopId:r.shop_id, amount:r.amount, date:r.date,
       note:r.note||'', recordedByUserId:r.recorded_by_user_id, createdAt:r.created_at, linkedExpenseId:r.linked_expense_id
     }));
 
-    mergeFlat(emp, state.employmentRecords, r=>({
-      id:r.id, userId:r.user_id, businessId:r.business_id, employmentType:r.employment_type,
-      resumptionDate:r.resumption_date, salaryAmount:r.salary_amount, salaryFrequency:r.salary_frequency,
-      settlementDate:r.settlement_date, settlementTerms:r.settlement_terms||'', notes:r.notes||'',
-      original:{}, history:[]
-    }));
+    mergeUpdate('employment_records', emp, state.employmentRecords, r=>{
+      const existingRec = state.employmentRecords.find(x=>x.id===r.id);
+      return {
+        id:r.id, userId:r.user_id, businessId:r.business_id, employmentType:r.employment_type,
+        resumptionDate:r.resumption_date, salaryAmount:r.salary_amount, salaryFrequency:r.salary_frequency,
+        settlementDate:r.settlement_date, settlementTerms:r.settlement_terms||'', notes:r.notes||'',
+        // original/history are local-only concepts (no such columns exist on
+        // employment_records itself — history lives in its own table, fetched
+        // separately below) — mergeUpdate does a full replace on update, so
+        // without this, pulling an amendment made on another device would
+        // silently WIPE this device's copy of the amendment trail instead of
+        // extending it.
+        original: existingRec ? existingRec.original : { employmentType:r.employment_type, resumptionDate:r.resumption_date, salaryAmount:r.salary_amount, salaryFrequency:r.salary_frequency, settlementDate:r.settlement_date, settlementTerms:r.settlement_terms||'', notes:r.notes||'' },
+        history: existingRec ? existingRec.history : []
+      };
+    });
 
-    mergeFlat(ros, state.recordOnlyStaff, r=>({
+    // Each amendment is its own immutable row (never updated once written),
+    // so this is insert-only merging — same pattern as audit_log.
+    empHistory.forEach(h=>{
+      const rec = state.employmentRecords.find(x=>x.id===h.employment_record_id);
+      if(!rec) return;
+      if(!rec.history.some(x=>x.id===h.id)){
+        rec.history.push({ id:h.id, changedAt:h.created_at, changedBy:h.changed_by_user_id, previousValues:h.previous_values, reason:h.reason||'' });
+        changed = true;
+      }
+    });
+
+    mergeUpdate('record_only_staff', ros, state.recordOnlyStaff, r=>({
       id:r.id, businessId:r.business_id, firstName:r.first_name, lastName:r.last_name||'', phone:r.phone||'',
-      email:r.email||'', notes:r.notes||'', isActive:r.is_active, createdByUserId:r.created_by_user_id
+      email:r.email||'', notes:r.notes||'', isActive:r.is_active, createdByUserId:r.created_by_user_id, createdAt:r.created_at
     }));
 
-    mergeFlat(notes, state.shopNotes, r=>({
+    mergeUpdate('shop_notes', notes, state.shopNotes, r=>({
       id:r.id, businessId:r.business_id, shopId:r.shop_id, authorUserId:r.author_user_id,
       title:r.title, text:r.text||'', createdAt:r.created_at, updatedAt:r.updated_at, isHandover:!!r.is_handover
     }));
 
-    mergeFlat(auditRows, state.auditLog, r=>({
+    mergeUpdate('audit_log', auditRows, state.auditLog, r=>({
       id:r.id, businessId:r.business_id, userId:r.user_id, action:r.action, details:r.details,
       timestamp:r.created_at || r.timestamp
     }));
 
-    mergeFlat(rooms, state.rooms, r=>({
+    mergeUpdate('rooms', rooms, state.rooms, r=>({
       id:r.id, businessId:r.business_id, shopId:r.shop_id, name:r.name, roomType:r.room_type||'',
       ratePerNight:r.rate_per_night, createdAt:r.created_at
     }));
 
-    mergeFlat(bookings, state.lodgingBookings, r=>({
+    mergeUpdate('lodging_bookings', bookings, state.lodgingBookings, r=>({
       id:r.id, businessId:r.business_id, shopId:r.shop_id, roomId:r.room_id, guestName:r.guest_name,
       guestPhone:r.guest_phone||'', checkIn:r.check_in, checkOut:r.check_out, nights:r.nights,
       ratePerNight:r.rate_per_night, totalAmount:r.total_amount, paidAmount:r.paid_amount, balance:r.balance,
@@ -372,47 +516,47 @@ async function pullSync(){
       checkedOutAt:r.checked_out_at
     }));
 
-    mergeFlat(comms, state.communicationLog, r=>({
+    mergeUpdate('communication_log', comms, state.communicationLog, r=>({
       id:r.id, businessId:r.business_id, customerId:r.customer_id, userId:null, type:r.channel, timestamp:r.sent_at
     }));
 
     sales.forEach(r=>{
-      if(!state.sales.some(x=>x.id===r.id)){
+      const remoteItems = saleItems.filter(si=>si.sale_id===r.id).map(si=>({
+        saleItemId:si.id, goodId:si.good_id, batchId:si.batch_id, variantId:si.variant_id, variantLabel:si.variant_label||'',
+        qty:si.qty, priceUsed:si.price_used, note:si.note||'', returnedQty:si.returned_qty||0
+      }));
+      const existing = state.sales.find(x=>x.id===r.id);
+      if(!existing){
         state.sales.push({
           id:r.id, shopId:r.shop_id, customerId:r.customer_id, walkInName:r.walk_in_name||'',
           walkInPhone:r.walk_in_phone||'', note:r.note||'', itemsSubtotal:r.items_subtotal, discount:r.discount,
           taxAmount:r.tax_amount, taxPct:r.tax_pct, subtotal:r.subtotal, paidAmount:r.paid_amount,
           balance:r.balance, dueDate:r.due_date, status:r.status, soldByUserId:r.sold_by_user_id,
-          receiptSent:r.receipt_sent, date:r.date,
-          items: saleItems.filter(si=>si.sale_id===r.id).map(si=>({
-            goodId:si.good_id, batchId:si.batch_id, variantId:si.variant_id, variantLabel:si.variant_label||'',
-            qty:si.qty, priceUsed:si.price_used, note:si.note||''
-          }))
+          receiptSent:r.receipt_sent, date:r.date, items: remoteItems
         });
         changed = true;
+        return;
       }
-    });
-
-    // Business-level fields that only the SERVER should ever be the source of
-    // truth for — a completed webhook payment, an auto-renewal charge, or a
-    // manual grant from the Super Admin panel can all change these without
-    // this device knowing, so (unlike everything else in this function)
-    // these specific fields DO get overwritten locally, not just added-if-missing.
-    try{
-      const bizRes = await fetch(`${SYNC_SUPABASE_URL}/rest/v1/businesses?select=subscription_plan,subscription_expires_at,auto_renew_enabled,auto_renew_plan,auto_renew_interval`, { headers });
-      if(bizRes.ok){
-        const bizRows = await bizRes.json();
-        if(bizRows[0] && state.business){
-          const r = bizRows[0];
-          state.business.subscriptionPlan = r.subscription_plan;
-          state.business.subscriptionExpiresAt = r.subscription_expires_at;
-          state.business.autoRenewEnabled = r.auto_renew_enabled;
-          state.business.autoRenewPlan = r.auto_renew_plan;
-          state.business.autoRenewInterval = r.auto_renew_interval;
+      // A sale already exists locally once created, but its financial
+      // fields change afterward — a credit payment collected, a return
+      // processed, a void — each pushed as its own 'sales' update. Refresh
+      // them here unless this device itself has one of those still queued.
+      if(!isPending('sales', r.id)){
+        const fresh = { subtotal:r.subtotal, paidAmount:r.paid_amount, balance:r.balance, status:r.status, receiptSent:r.receipt_sent };
+        if(JSON.stringify({ subtotal:existing.subtotal, paidAmount:existing.paidAmount, balance:existing.balance, status:existing.status, receiptSent:existing.receiptSent }) !== JSON.stringify(fresh)){
+          Object.assign(existing, fresh);
           changed = true;
         }
       }
-    }catch(e){ /* keep local copy on any failure */ }
+      remoteItems.forEach(ri=>{
+        if(!ri.saleItemId || isPending('sale_items', ri.saleItemId)) return;
+        const idx = existing.items.findIndex(x=>x.saleItemId===ri.saleItemId);
+        if(idx!==-1 && JSON.stringify(existing.items[idx]) !== JSON.stringify(ri)){
+          existing.items[idx] = ri;
+          changed = true;
+        }
+      });
+    });
 
     if(changed && typeof save === 'function'){
       save();

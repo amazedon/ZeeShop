@@ -4639,6 +4639,7 @@ function bindStaffEvents(){
     const oldName = u.firstName+' '+u.lastName;
     u.firstName = req.firstName; u.lastName = req.lastName;
     delete u.nameChangeRequest;
+    enqueueSync('app_users','update', { id: u.id, first_name: u.firstName, last_name: u.lastName, name_change_request: null });
     logAudit('name_change_approved', `Renamed ${oldName} to ${u.firstName} ${u.lastName}`);
     toast('Name updated ✅'); render();
   }));
@@ -4647,6 +4648,7 @@ function bindStaffEvents(){
     if(!canManageThisUser(u)){ toast("You don't have permission to manage this account."); return; }
     logAudit('name_change_denied', `Denied name change request from ${u.firstName} ${u.lastName}`);
     delete u.nameChangeRequest;
+    enqueueSync('app_users','update', { id: u.id, name_change_request: null });
     toast('Request denied'); render();
   }));
   const gen = document.getElementById('gen-code');
@@ -4701,8 +4703,15 @@ function bindStaffEvents(){
     const pin = prompt('New 4-6 digit PIN for '+u.firstName+':');
     if(!pin || !/^\d{4,6}$/.test(pin)){ toast('PIN must be 4-6 digits.'); return; }
     u.pinHash = hash(pin); u.pinLength = pin.length;
+    // This was local-only — the server's copy of pin_hash never changed, so
+    // a staff member could still reconnect on a NEW device using their OLD
+    // pin (since staff-device-login checks the server's value), and their
+    // own existing device would fail with "incorrect PIN" on the new one
+    // until it happened to pull the (never-sent) update — which would never
+    // arrive, since nothing ever pushed it.
+    enqueueSync('app_users','update', { id: u.id, pin_hash: u.pinHash, pin_length: u.pinLength });
     logAudit('pin_reset','Reset PIN for '+u.firstName);
-    toast('PIN reset ✅'); save();
+    toast('PIN reset ✅ — their other devices will pick it up once online.'); save();
   }));
   document.querySelectorAll('[data-toggle-active]').forEach(b=>b.addEventListener('click', ()=>{
     const u = state.users.find(x=>x.id===b.dataset.toggleActive);
@@ -4822,6 +4831,14 @@ function bindProfileEvents(){
     u.phone = phoneRaw ? '+'+toIntlDigits(phoneRaw) : '';
     const emailField = document.getElementById('pf-email');
     if(emailField) u.email = emailField.value.trim();
+    // None of this used to sync — a name, username, phone, or email change
+    // stayed on whichever device made it, invisible everywhere else
+    // (including the person's own second device, and anyone looking them
+    // up by name elsewhere in the app).
+    enqueueSync('app_users','update', {
+      id: u.id, username: u.username, first_name: u.firstName, last_name: u.lastName,
+      phone: u.phone, email: u.email
+    });
     logAudit('profile_updated', 'Updated own profile');
     toast('Profile updated ✅'); render();
   });
@@ -4833,6 +4850,11 @@ function bindProfileEvents(){
     if(!fn){ toast('First name is required.'); return; }
     if(fn===u.firstName && ln===u.lastName){ toast("That's already your current name."); return; }
     u.nameChangeRequest = { firstName: fn, lastName: ln, requestedAt: new Date().toISOString() };
+    // This one matters more than most local-only bugs: the whole point of
+    // this feature is for the OWNER to see the request, and the Owner is
+    // very rarely on the same device as the staff member submitting it. A
+    // request that never syncs is a request the Owner can never actually see.
+    enqueueSync('app_users','update', { id: u.id, name_change_request: u.nameChangeRequest });
     logAudit('name_change_requested', `${u.firstName} ${u.lastName} requested to be renamed to ${fn} ${ln}`);
     toast('Request sent to your Owner ✅'); render();
   });
@@ -4840,6 +4862,7 @@ function bindProfileEvents(){
   if(cancelReqBtn) cancelReqBtn.addEventListener('click', ()=>{
     const u = currentUser();
     delete u.nameChangeRequest;
+    enqueueSync('app_users','update', { id: u.id, name_change_request: null });
     toast('Request cancelled'); render();
   });
   const savePassBtn = document.getElementById('save-password-btn');
@@ -4849,6 +4872,7 @@ function bindProfileEvents(){
     if(p1.length<6){ toast('Password must be at least 6 characters.'); return; }
     if(p1!==p2){ toast("Passwords don't match."); return; }
     currentUser().passwordHash = hash(p1);
+    enqueueSync('app_users','update', { id: currentUser().id, password_hash: currentUser().passwordHash });
     logAudit('password_changed', 'Changed own password');
     if(currentUser().role === 'master') syncPasswordToSupabaseAuth(p1);
     toast('Password updated ✅');
@@ -4861,6 +4885,11 @@ function bindProfileEvents(){
     if(!/^\d{4,6}$/.test(p1)){ toast('PIN must be 4-6 digits.'); return; }
     if(p1!==p2){ toast("PINs don't match."); return; }
     currentUser().pinHash = hash(p1); currentUser().pinLength = p1.length;
+    // Same bug as the admin-side Reset PIN: without this, changing your own
+    // PIN only took effect on the device you changed it from. Your other
+    // device would keep rejecting the new PIN, AND reconnecting on a brand
+    // new device would still accept the OLD one, since the server never knew.
+    enqueueSync('app_users','update', { id: currentUser().id, pin_hash: currentUser().pinHash, pin_length: currentUser().pinLength });
     logAudit('pin_changed', 'Changed own PIN');
     toast('PIN updated ✅');
     document.getElementById('pf-newpin').value=''; document.getElementById('pf-newpin2').value='';
@@ -6778,6 +6807,10 @@ function openSupplierDetail(supplierId){
     if(amt<=0) return;
     p.paidAmount += amt;
     p.balance = Math.max(0, p.totalAmount - p.paidAmount);
+    // Same shape as the customer credit-payment bug fixed earlier — this
+    // stayed local-only, so a payment logged to one supplier here on one
+    // device would still show as owed on every other device.
+    enqueueSync('supplier_purchases','update', { id: p.id, paid_amount: p.paidAmount, balance: p.balance });
     logAudit('supplier_payment', `Paid ${fmtMoney(amt)} to ${sup.name}`);
     toast('Payment recorded ✅'); openSupplierDetail(supplierId);
   }));

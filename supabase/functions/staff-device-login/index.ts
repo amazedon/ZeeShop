@@ -115,6 +115,14 @@ Deno.serve(async (req: Request) => {
         id: staffUser.id, businessId: staffUser.business_id, username: staffUser.username,
         email: staffUser.email, phone: staffUser.phone, firstName: staffUser.first_name, lastName: staffUser.last_name,
         role: staffUser.role, isActive: staffUser.is_active, canAddGoods: staffUser.can_add_goods,
+        // These were missing even though staffUser already has them from the
+        // select("*") above — omitting them here isn't "no value yet" like it
+        // is for a brand-new join, it's discarding REAL permissions the owner
+        // already configured, leaving the reconnected staff member looking
+        // like they can do nothing until the next background sync catches up.
+        canSell: staffUser.can_sell, canSellCredit: staffUser.can_sell_credit, canRecordCash: staffUser.can_record_cash,
+        canVoidReturn: staffUser.can_void_return, isSuperAdmin: staffUser.is_super_admin || false,
+        managesShopIds: staffUser.manages_shop_ids || [],
         pinHash: staffUser.pin_hash, pinLength: staffUser.pin_length
       },
       business: bizFull ? {

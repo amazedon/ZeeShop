@@ -259,6 +259,7 @@ async function pullSync(){
               subscriptionExpiresAt: b.subscription_expires_at || null,
               connectCode: b.connect_code || null,
               isActive: b.is_active !== false,
+              deletionRequestedAt: b.deletion_requested_at || null,
               name: b.name, country: b.country, currency: b.currency,
               autoRenewEnabled: b.auto_renew_enabled || false,
               autoRenewPlan: b.auto_renew_plan || null,
@@ -267,6 +268,7 @@ async function pullSync(){
             if(JSON.stringify(fresh) !== JSON.stringify({
               subscriptionPlan: state.business.subscriptionPlan, subscriptionExpiresAt: state.business.subscriptionExpiresAt,
               connectCode: state.business.connectCode, isActive: state.business.isActive,
+              deletionRequestedAt: state.business.deletionRequestedAt,
               name: state.business.name, country: state.business.country, currency: state.business.currency,
               autoRenewEnabled: state.business.autoRenewEnabled, autoRenewPlan: state.business.autoRenewPlan,
               autoRenewInterval: state.business.autoRenewInterval
@@ -377,6 +379,7 @@ async function pullSync(){
       // (e.g. right after the deactivate/permissions fixes we just made).
       canSell:r.can_sell, canSellCredit:r.can_sell_credit, canRecordCash:r.can_record_cash,
       canVoidReturn:r.can_void_return, isSuperAdmin:r.is_super_admin||false, managesShopIds:r.manages_shop_ids||[],
+      nameChangeRequest:r.name_change_request||null,
       passwordHash:r.password_hash||null, pinHash:r.pin_hash||null, pinLength:r.pin_length||null
     }));
 

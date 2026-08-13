@@ -744,17 +744,23 @@ function render(){
   }
   if(state.business.isActive === false){
     // Purely an in-app lockout — no email/SMS is sent about this, matching
-    // how the rest of the app works. The business's own data stays intact
-    // locally and in Supabase; this just stops anyone (owner or staff) from
-    // using the app on this device while suspended, until reactivated from
-    // the Super Admin panel.
+    // how the rest of the app works. Two different reasons can land here:
+    // an admin-side suspension, or the owner's own deletion request — the
+    // messaging needs to tell those apart, since "contact support to find
+    // out why" is the wrong thing to show someone who did this on purpose.
+    const isDeletionPending = !!state.business.deletionRequestedAt;
     app.innerHTML = `
       <div class="center-screen">
         <div class="auth-card" style="text-align:center;">
           <div class="brand" style="justify-content:center;"><div class="brand-mark">Z</div><div class="brand-name">Zed</div></div>
-          <div style="font-size:40px;margin:10px 0;">🔒</div>
-          <h2 style="margin-bottom:8px;">This account is suspended</h2>
-          <p class="subtle">Access to ${escapeHtml(state.business.name||'this business')} has been paused. Please contact support to find out why.</p>
+          <div style="font-size:40px;margin:10px 0;">${isDeletionPending?'🗑️':'🔒'}</div>
+          ${isDeletionPending ? `
+            <h2 style="margin-bottom:8px;">This account is scheduled for deletion</h2>
+            <p class="subtle">${escapeHtml(state.business.name||'This business')} and all its data will be permanently deleted on or after ${new Date(new Date(state.business.deletionRequestedAt).getTime()+30*86400000).toLocaleDateString()}. If this wasn't intentional, contact support right away to cancel it.</p>
+          ` : `
+            <h2 style="margin-bottom:8px;">This account is suspended</h2>
+            <p class="subtle">Access to ${escapeHtml(state.business.name||'this business')} has been paused. Please contact support to find out why.</p>
+          `}
         </div>
       </div>`;
     return;
@@ -919,36 +925,39 @@ function renderLogin(){
   </div>`;
 }
 
-let joinShopMode = 'new'; // 'new' = first time joining, 'reconnect' = existing staff, new device
+let joinShopCodeInput = '';
+// Auto-detects which situation applies by length (6 digits = new hire
+// joining for the first time, 8 digits = existing staff reconnecting on a
+// new phone) so nobody has to consciously pick between two flows. The two
+// codes still exist underneath for a real reason (the 6-digit one is
+// short-lived because it creates a brand-new account with real access; the
+// 8-digit one is permanent because reconnecting needs to work anytime,
+// without the Owner having to be present to generate something fresh) —
+// this just stops that difference from being the user's problem to reason
+// about.
 function renderJoinShop(){
-  if(joinShopMode === 'reconnect'){
-    return `
-    <div class="center-screen">
-      <div class="auth-card">
-        <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">Zed</div></div>
-        <div class="tagline">Sign back in on this phone using your own phone number and PIN.</div>
-        ${authError ? `<div class="err">${authError}</div>` : ''}
-        <div class="field"><label>Business Connect Code</label><input id="reconnect-code-input" placeholder="8-digit code from your Owner" inputmode="numeric" maxlength="8"></div>
-        <div class="field"><label>Your Phone Number</label><input id="reconnect-phone-input" placeholder="The phone number on your account" inputmode="tel"></div>
-        <div class="field"><label>Your PIN</label><input id="reconnect-pin-input" type="password" placeholder="4-6 digit PIN" inputmode="numeric" maxlength="6"></div>
-        <button class="btn btn-primary" id="btn-reconnect-shop">Sign In</button>
-        <div class="link-row"><a href="#" id="go-new-join" style="color:var(--text-dim);">I'm joining for the first time</a></div>
-        <div class="link-row"><a href="#" id="go-login-from-join" style="color:var(--text-dim);">Back to log in</a></div>
-      </div>
-    </div>`;
-  }
+  const code = joinShopCodeInput || '';
+  const detected = code.length >= 7 ? 'reconnect' : code.length > 0 ? 'new' : null;
   return `
   <div class="center-screen">
     <div class="auth-card">
       <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">Zed</div></div>
-      <div class="tagline">Join your shop with the code your manager gave you.</div>
+      <div class="tagline">Enter the code your Owner or manager gave you.</div>
       ${authError ? `<div class="err">${authError}</div>` : ''}
-      <div class="field"><label>Join Code</label><input id="join-code-input" placeholder="6-digit code" inputmode="numeric" maxlength="6"></div>
-      <div class="field"><label>First Name</label><input id="join-fn-input" placeholder="Your first name"></div>
-      <div class="field"><label>Last Name</label><input id="join-ln-input" placeholder="Your last name (optional)"></div>
-      <div class="field"><label>Phone</label><input id="join-phone-input" placeholder="Your phone (optional)"></div>
-      <button class="btn btn-primary" id="btn-join-shop">Join Shop</button>
-      <div class="link-row"><a href="#" id="go-reconnect-shop" style="color:var(--text-dim);">I already have an account — sign in on this phone</a></div>
+      <div class="field"><label>Code</label><input id="join-any-code-input" placeholder="6 or 8-digit code" inputmode="numeric" maxlength="8" value="${escAttr(code)}"></div>
+      ${detected === 'new' ? `
+        <p class="subtle" style="margin:-6px 0 12px;">6-digit code — setting up your account for the first time.</p>
+        <div class="field"><label>First Name</label><input id="join-fn-input" placeholder="Your first name"></div>
+        <div class="field"><label>Last Name</label><input id="join-ln-input" placeholder="Your last name (optional)"></div>
+        <div class="field"><label>Phone</label><input id="join-phone-input" placeholder="Your phone (optional)"></div>
+        <div class="field"><label>Set a PIN for this device</label><input id="join-pin-input" type="password" placeholder="4-6 digits" inputmode="numeric" maxlength="6"></div>
+        <button class="btn btn-primary" id="btn-join-shop">Join Shop</button>
+      ` : detected === 'reconnect' ? `
+        <p class="subtle" style="margin:-6px 0 12px;">8-digit code — signing back into your existing account.</p>
+        <div class="field"><label>Your Phone Number</label><input id="reconnect-phone-input" placeholder="The phone number on your account" inputmode="tel"></div>
+        <div class="field"><label>Your PIN</label><input id="reconnect-pin-input" type="password" placeholder="4-6 digit PIN" inputmode="numeric" maxlength="6"></div>
+        <button class="btn btn-primary" id="btn-reconnect-shop">Sign In</button>
+      ` : `<button class="btn btn-primary" disabled>Enter your code above</button>`}
       <div class="link-row"><a href="#" id="go-login-from-join" style="color:var(--text-dim);">Back to log in</a></div>
     </div>
   </div>`;
@@ -1254,7 +1263,7 @@ async function loginOwnerToSupabase(email, pass){
     taxName: b.tax_name||'VAT', taxPercent: b.tax_percent||0, subscriptionPlan: b.subscription_plan||'free',
     subscriptionExpiresAt: b.subscription_expires_at||null, autoRenewEnabled: b.auto_renew_enabled||false,
     autoRenewPlan: b.auto_renew_plan||null, autoRenewInterval: b.auto_renew_interval||null,
-    connectCode: b.connect_code||null, createdAt: b.created_at
+    connectCode: b.connect_code||null, deletionRequestedAt: b.deletion_requested_at||null, createdAt: b.created_at
   };
 
   const [usersRes, shopsRes] = await Promise.all([
@@ -1298,12 +1307,22 @@ function bindAuthEvents(){
   go('go-signup', e=>{e.preventDefault(); authMode='signup'; authError=''; render();});
   go('go-login', e=>{e.preventDefault(); authMode='login'; authError=''; render();});
   go('go-forgot', e=>{e.preventDefault(); authMode='forgot'; forgotStep=1; forgotUserId=null; forgotEmail=null; forgotCode=null; forgotError=''; render();});
-  go('go-join-shop', e=>{e.preventDefault(); authMode='join-shop'; joinShopMode='new'; authError=''; render();});
+  go('go-join-shop', e=>{e.preventDefault(); authMode='join-shop'; joinShopCodeInput=''; authError=''; render();});
   go('go-login-from-join', e=>{e.preventDefault(); authMode='login'; authError=''; render();});
-  go('go-reconnect-shop', e=>{e.preventDefault(); joinShopMode='reconnect'; authError=''; render();});
-  go('go-new-join', e=>{e.preventDefault(); joinShopMode='new'; authError=''; render();});
   go('btn-join-shop', ()=>joinShopSubmit());
   go('btn-reconnect-shop', ()=>reconnectStaffDevice());
+  const codeInput = document.getElementById('join-any-code-input');
+  if(codeInput){
+    codeInput.addEventListener('input', ()=>{
+      joinShopCodeInput = codeInput.value.trim();
+      const cursorPos = codeInput.selectionStart;
+      render();
+      // Re-render rebuilds the input — restore focus and cursor position so
+      // typing doesn't get interrupted every time the field set below changes.
+      const freshInput = document.getElementById('join-any-code-input');
+      if(freshInput){ freshInput.focus(); freshInput.setSelectionRange(cursorPos, cursorPos); }
+    });
+  }
 
   go('btn-login', async ()=>{
     const idf = document.getElementById('li-user').value.trim().toLowerCase();
@@ -1725,12 +1744,14 @@ function submitPin(u){
  * that session in and pulls the whole business down locally.
  */
 async function joinShopSubmit(){
-  const code = document.getElementById('join-code-input').value.trim();
+  const code = document.getElementById('join-any-code-input').value.trim();
   const fn = document.getElementById('join-fn-input').value.trim();
   const ln = document.getElementById('join-ln-input').value.trim();
   const phone = document.getElementById('join-phone-input').value.trim();
+  const pin = document.getElementById('join-pin-input').value.trim();
   if(!/^\d{6}$/.test(code)){ authError = 'Enter the 6-digit code from your manager.'; render(); return; }
   if(!fn){ authError = 'Please enter your first name.'; render(); return; }
+  if(!/^\d{4,6}$/.test(pin)){ authError = 'Set a 4-6 digit PIN for this device.'; render(); return; }
   if(!navigator.onLine){ authError = 'You need internet the first time you join a shop.'; render(); return; }
 
   authError = '';
@@ -1762,10 +1783,10 @@ async function joinShopSubmit(){
       return;
     }
 
-    // Set a local PIN so this device works offline day-to-day from here on.
-    let pin = prompt('Set a 4-6 digit PIN for quick login on this device:');
-    while(pin && !/^\d{4,6}$/.test(pin)){ pin = prompt('PIN must be 4-6 digits — try again:'); }
-    if(!pin){ pin = String(Math.floor(1000+Math.random()*9000)); } // fallback so they're never locked out
+    // Set a local PIN so this device works offline day-to-day from here on —
+    // collected as a real form field above, not a follow-up prompt() that
+    // could be dismissed and silently leave someone with a PIN they were
+    // never shown.
 
     // Bootstrap local state from what the server gave us.
     state.business = {
@@ -1817,7 +1838,7 @@ async function joinShopSubmit(){
  * then re-authenticates that same account on this device.
  */
 async function reconnectStaffDevice(){
-  const code = document.getElementById('reconnect-code-input').value.trim();
+  const code = document.getElementById('join-any-code-input').value.trim();
   const phone = document.getElementById('reconnect-phone-input').value.trim();
   const pin = document.getElementById('reconnect-pin-input').value.trim();
   if(!/^\d{8}$/.test(code)){ authError = 'Enter the 8-digit Connect Code from your Owner.'; render(); return; }
@@ -1883,20 +1904,40 @@ async function reconnectStaffDevice(){
 // flow so this staff member gets a real Supabase Auth account and can sync —
 // previously this built a local-only user with no auth account, so their
 // account and everything they did stayed stuck on this one device forever.
-async function openJoinFlow(){
+function openJoinFlow(){
   if(!state.joinCode || Date.now() > state.joinCode.expiresAt){
     toast('No active join code. Ask the Owner to generate one from Staff settings.');
     return;
   }
-  const code = prompt('Enter the 6-digit code from your Owner:');
-  if(!code) return;
-  if(code.trim() !== state.joinCode.code){ toast('Incorrect or expired code.'); return; }
+  openSheet(`
+    <div class="sheet-head"><h3>Join This Business</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <p class="subtle" style="margin-bottom:14px;">Ask the Owner for the 6-digit code showing on their Staff screen.</p>
+    ${joinFlowError ? `<div class="err">${escapeHtml(joinFlowError)}</div>` : ''}
+    <div class="field"><label>6-Digit Code</label><input id="jf-code" placeholder="000000" inputmode="numeric" maxlength="6"></div>
+    <div class="field"><label>First Name</label><input id="jf-fn" placeholder="Your first name"></div>
+    <div class="field"><label>Last Name</label><input id="jf-ln" placeholder="Your last name (optional)"></div>
+    <div class="field"><label>Phone</label><input id="jf-phone" placeholder="Your phone (optional)"></div>
+    <div class="field"><label>Set a PIN for this device</label><input id="jf-pin" type="password" placeholder="4-6 digits" inputmode="numeric" maxlength="6"></div>
+    <button class="btn btn-primary" id="jf-submit">Join</button>
+  `);
+  bindPasswordToggles();
+  document.getElementById('jf-submit').addEventListener('click', submitOpenJoinFlow);
+}
+let joinFlowError = '';
+async function submitOpenJoinFlow(){
+  const code = document.getElementById('jf-code').value.trim();
+  const fn = document.getElementById('jf-fn').value.trim();
+  const ln = document.getElementById('jf-ln').value.trim();
+  const phone = document.getElementById('jf-phone').value.trim();
+  const pin = document.getElementById('jf-pin').value.trim();
 
-  const fn = prompt('Your first name:'); if(!fn) return;
-  const ln = prompt('Your last name:') || '';
-  const phone = prompt('Phone number (optional):') || '';
+  if(code !== state.joinCode.code){ joinFlowError = 'Incorrect or expired code.'; openJoinFlow(); return; }
+  if(!fn){ joinFlowError = 'Please enter your first name.'; openJoinFlow(); return; }
+  if(!/^\d{4,6}$/.test(pin)){ joinFlowError = 'PIN must be 4-6 digits.'; openJoinFlow(); return; }
+  joinFlowError = '';
 
-  toast('Joining…');
+  const btn = document.getElementById('jf-submit');
+  if(btn){ btn.disabled = true; btn.textContent = 'Joining…'; }
   try{
     const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/join-business`, {
       method: 'POST',
@@ -1905,7 +1946,8 @@ async function openJoinFlow(){
     });
     const result = await res.json();
     if(!res.ok || result.error){
-      toast(result.error || 'Could not join — please check the code and try again.');
+      joinFlowError = result.error || 'Could not join — please check the code and try again.';
+      openJoinFlow();
       return;
     }
 
@@ -1915,12 +1957,9 @@ async function openJoinFlow(){
     });
     if(signInErr){
       toast('Joined, but could not start your session — please try again with internet on.');
+      closeSheet();
       return;
     }
-
-    let pin = prompt('Set a 4-6 digit PIN for quick login on this device:');
-    while(pin && !/^\d{4,6}$/.test(pin)){ pin = prompt('PIN must be 4-6 digits — try again:'); }
-    if(!pin){ pin = String(Math.floor(1000+Math.random()*9000)); }
 
     const u = { ...result.user, pinHash: hash(pin), pinLength: pin.length };
     state.users.push(u);
@@ -1938,9 +1977,11 @@ async function openJoinFlow(){
     logAudit('staff_joined', fn+' '+ln+' joined as staff');
     toast('Welcome to the team, '+fn+'!');
     save();
+    closeSheet();
     render();
   }catch(e){
-    toast('Could not join — check your connection and try again.');
+    joinFlowError = 'Could not join — check your connection and try again.';
+    openJoinFlow();
   }
 }
 
@@ -2151,8 +2192,8 @@ function effectivePlan(){
   return new Date(b.subscriptionExpiresAt) > new Date() ? b.subscriptionPlan : 'free';
 }
 
-function planLimits(){
-  const plan = effectivePlan();
+function planLimits(forPlan){
+  const plan = forPlan || effectivePlan();
   if(plan==='boss') return { shops:Infinity, goods:Infinity, customers:Infinity, staff:Infinity };
   if(plan==='pro') return { shops:3, goods:1000, customers:Infinity, staff:5 };
   return { shops:2, goods:100, customers:50, staff:2 };
@@ -3826,6 +3867,17 @@ function screenStaff(){
         <p class="subtle" style="text-align:center;">Valid for ${Math.ceil((state.joinCode.expiresAt-Date.now())/60000)} more minutes. Staff opens Zed on their device → Join Business → enters this code.</p>
       ` : `<button class="btn btn-primary" id="gen-code">Generate Join Code</button>`}
     </div>
+    <div class="card">
+      <div class="t1" style="margin-bottom:6px;">Staff Connect Code</div>
+      <p class="t2" style="margin-bottom:10px;">For a staff member signing into a SECOND phone — their own account, not a new one. Anyone with this code, a staff phone number, and that person's PIN can reconnect as them, so reset it if it's ever shared somewhere it shouldn't be.</p>
+      ${business().connectCode ? `
+        <div class="code-display" style="text-align:center;padding:14px;">${business().connectCode.replace(/(\d{4})(\d{4})/,'$1 $2')}</div>
+        <div style="display:flex;gap:8px;margin-top:10px;">
+          <button class="btn btn-outline btn-sm" id="copy-connect-code" style="flex:1;">Copy</button>
+          <button class="btn btn-outline btn-sm" id="reset-connect-code" style="flex:1;">Generate New Code</button>
+        </div>
+      ` : `<button class="btn btn-outline btn-sm" id="reset-connect-code">Generate Connect Code</button>`}
+    </div>
     <button class="btn btn-outline" id="offer-letter-btn" style="width:100%;margin-bottom:14px;">📨 Send Offer Letter to a Candidate</button>
     ${pendingCount>0?`<div class="card" style="border-color:var(--marigold-dark);"><b>📝 ${pendingCount} name change request${pendingCount>1?'s':''}</b> waiting below.</div>`:''}
     <div class="section-head"><h3>Team</h3></div>
@@ -4552,6 +4604,34 @@ function openStaffPermissionsModal(userId){
   });
 }
 function bindStaffEvents(){
+  const copyCode = document.getElementById('copy-connect-code');
+  if(copyCode) copyCode.addEventListener('click', async ()=>{
+    try{ await navigator.clipboard.writeText(business().connectCode); toast('Code copied ✅'); }
+    catch(e){ toast('Could not copy — code is '+business().connectCode); }
+  });
+  const resetCode = document.getElementById('reset-connect-code');
+  if(resetCode) resetCode.addEventListener('click', async ()=>{
+    const isReset = !!business().connectCode;
+    if(isReset && !confirm('Generate a new code? The current code will stop working immediately. Staff already signed in on their devices are not affected.')) return;
+    resetCode.disabled = true; resetCode.textContent = 'Generating…';
+    try{
+      const { data: sessionData } = await window.sb.auth.getSession();
+      if(!sessionData.session){ toast('Please sign in again to do this.'); return; }
+      const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/regenerate-connect-code`, {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+sessionData.session.access_token, 'apikey': SITE_CONTENT_ANON_KEY },
+        body: JSON.stringify({ business_id: business().id })
+      });
+      const result = await res.json();
+      if(!res.ok || result.error){ toast(result.error || 'Could not generate a code.'); return; }
+      business().connectCode = result.connect_code;
+      logAudit('connect_code_reset', 'Generated a new staff connect code');
+      toast(isReset ? 'New code generated ✅' : 'Connect code created ✅');
+      render();
+    }catch(e){
+      toast('Could not reach the server — check your connection.');
+    }
+  });
   document.querySelectorAll('[data-approve-name]').forEach(b=>b.addEventListener('click', ()=>{
     const u = state.users.find(x=>x.id===b.dataset.approveName);
     if(!canManageThisUser(u)){ toast("You don't have permission to manage this account."); return; }
@@ -4814,18 +4894,6 @@ function screenSettings(){
     </div>
     ${isMaster()?`
     <div class="card">
-      <div class="t1" style="margin-bottom:6px;">Staff Connect Code</div>
-      <p class="t2" style="margin-bottom:10px;">Lets a staff member sign in on a second phone (their own account, not a new one) using this code plus their own phone number and PIN. Anyone with this code, a staff phone number, and that person's PIN can reconnect as them — reset it if it's ever shared somewhere it shouldn't be.</p>
-      ${b.connectCode ? `
-        <div class="code-display" style="text-align:center;padding:14px;">${b.connectCode.replace(/(\d{4})(\d{4})/,'$1 $2')}</div>
-        <div style="display:flex;gap:8px;margin-top:10px;">
-          <button class="btn btn-outline btn-sm" id="copy-connect-code" style="flex:1;">Copy</button>
-          <button class="btn btn-outline btn-sm" id="reset-connect-code" style="flex:1;">Generate New Code</button>
-        </div>
-      ` : `<button class="btn btn-outline btn-sm" id="reset-connect-code">Generate Connect Code</button>`}
-    </div>` : ''}
-    ${isMaster()?`
-    <div class="card">
       <div class="t1" style="margin-bottom:10px;">Business Logo <span class="subtle" style="font-weight:400;">(shows on your receipts)</span></div>
       ${b.logoDataUrl ? `
         <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;">
@@ -4885,34 +4953,6 @@ function screenSettings(){
 }
 function bindSettingsEvents(){
   bindBizTypeSelect('set-biztype');
-  const copyCode = document.getElementById('copy-connect-code');
-  if(copyCode) copyCode.addEventListener('click', async ()=>{
-    try{ await navigator.clipboard.writeText(business().connectCode); toast('Code copied ✅'); }
-    catch(e){ toast('Could not copy — code is '+business().connectCode); }
-  });
-  const resetCode = document.getElementById('reset-connect-code');
-  if(resetCode) resetCode.addEventListener('click', async ()=>{
-    const isReset = !!business().connectCode;
-    if(isReset && !confirm('Generate a new code? The current code will stop working immediately. Staff already signed in on their devices are not affected.')) return;
-    resetCode.disabled = true; resetCode.textContent = 'Generating…';
-    try{
-      const { data: sessionData } = await window.sb.auth.getSession();
-      if(!sessionData.session){ toast('Please sign in again to do this.'); return; }
-      const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/regenerate-connect-code`, {
-        method: 'POST',
-        headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+sessionData.session.access_token, 'apikey': SITE_CONTENT_ANON_KEY },
-        body: JSON.stringify({ business_id: business().id })
-      });
-      const result = await res.json();
-      if(!res.ok || result.error){ toast(result.error || 'Could not generate a code.'); return; }
-      business().connectCode = result.connect_code;
-      logAudit('connect_code_reset', 'Generated a new staff connect code');
-      toast(isReset ? 'New code generated ✅' : 'Connect code created ✅');
-      render();
-    }catch(e){
-      toast('Could not reach the server — check your connection.');
-    }
-  });
   const logoInput = document.getElementById('logo-upload-input');
   if(logoInput) logoInput.addEventListener('change', async (e)=>{
     const file = e.target.files[0];
@@ -4977,11 +5017,31 @@ function bindSettingsEvents(){
   const exp = document.getElementById('export-data');
   if(exp) exp.addEventListener('click', exportCSV);
   const del = document.getElementById('delete-biz');
-  if(del) del.addEventListener('click', ()=>{
-    if(confirm('This will permanently delete your business and all its data within 30 days, per GDPR. Continue?')){
-      localStorage.removeItem(DB_KEY);
-      state = load();
-      render();
+  if(del) del.addEventListener('click', async ()=>{
+    if(!confirm('This will permanently delete your business and all its data within 30 days, per GDPR. You and your staff will be locked out immediately. Continue?')) return;
+    // This used to only clear this one device's local storage — nothing
+    // was actually requested from the server, so the business (and every
+    // other device signed into it) kept working completely normally
+    // despite the confirmation claiming deletion had been set in motion.
+    if(!navigator.onLine){ toast("You're offline — connect to the internet to request deletion."); return; }
+    del.disabled = true; del.textContent = 'Requesting…';
+    try{
+      const { data: sessionData } = await window.sb.auth.getSession();
+      if(!sessionData.session){ toast('Please sign in again to do this.'); del.disabled=false; del.textContent='Delete Business'; return; }
+      const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/request-account-deletion`, {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+sessionData.session.access_token, 'apikey': SITE_CONTENT_ANON_KEY },
+        body: JSON.stringify({ business_id: business().id })
+      });
+      const result = await res.json();
+      if(!res.ok || result.error){ toast(result.error || 'Could not request deletion.'); del.disabled=false; del.textContent='Delete Business'; return; }
+      state.business.deletionRequestedAt = result.deletion_requested_at;
+      state.business.isActive = false;
+      save();
+      render(); // the lockout screen (with the deletion-specific message) takes over from here
+    }catch(e){
+      toast('Could not reach the server — check your connection and try again.');
+      del.disabled = false; del.textContent = 'Delete Business';
     }
   });
 }
@@ -5037,7 +5097,7 @@ async function openPlansSheet(){
         <b>Freemium</b><span class="subtle">Free forever</span>
       </div>
       <ul style="margin:8px 0 10px;padding-left:18px;font-size:12.5px;color:var(--text-dim);">
-        <li>1 Shop</li><li>100 Goods</li><li>50 Customers</li><li>1 Staff</li>
+        <li>${planLimits('free').shops} Shops</li><li>${planLimits('free').goods} Goods</li><li>${planLimits('free').customers} Customers</li><li>${planLimits('free').staff} Staff</li>
       </ul>
       ${current==='free' ? `<button class="btn btn-outline btn-sm" disabled>Current Plan</button>` : ''}
     </div>
@@ -5047,7 +5107,7 @@ async function openPlansSheet(){
         <b>Pro</b>${current==='pro'?'<span class="subtle">Current Plan</span>':''}
       </div>
       <ul style="margin:8px 0 10px;padding-left:18px;font-size:12.5px;color:var(--text-dim);">
-        <li>3 Shops</li><li>1,000 Goods</li><li>5 Staff</li><li>Profit Reports</li><li>SMS/Email templates</li><li>Cloud Backup</li>
+        <li>${planLimits('pro').shops} Shops</li><li>${planLimits('pro').goods.toLocaleString()} Goods</li><li>Unlimited Customers</li><li>${planLimits('pro').staff} Staff</li>
       </ul>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         ${pricing ? payButtonHtml('pro','monthly',pricing.proMonthly,sym,ccy) : ''}
@@ -6439,8 +6499,8 @@ const FAQ_GROUPS = [
     { q:"I forgot my password — what do I do?", a:"Tap Forgot Password on the login screen and enter your username or email. We'll send a 6-digit code to your email on file — enter it to set a new password. If your account has no email on file, you'll need to create a new account." },
     { q:"How do multiple staff use the same device?", a:"Each staff member gets their own PIN. After the business owner logs in once, everyone unlocks their own profile with their PIN from the user-select screen — no need to log in with a password every time." },
     { q:"How do I add a new staff member?", a:"Go to More → Staff → Generate Join Code. Share the code with them; they open Zed on their device, tap Join Business, and enter it. The code expires after a set number of minutes." },
-    { q:"A staff member already has an account — how do they sign in on a second phone?", a:"On the new phone, tap Join Business, then \"I already have an account.\" They'll enter the business's Connect Code (from the Owner's Settings screen), their own phone number, and their PIN. This signs them into their existing account — it does not create a new one, so their sales history and activity stay attached to them." },
-    { q:"What is the Connect Code?", a:"A permanent code (unlike the Join Code, it doesn't expire) that lets an existing staff member sign into a second device. Find or reset it under Settings → Staff Connect Code — only the Owner can see or regenerate it. Resetting it doesn't sign anyone out; it just retires the old code." },
+    { q:"A staff member already has an account — how do they sign in on a second phone?", a:"On the new phone, tap Join Business and enter the business's Connect Code (from the Owner's Staff screen) — the app recognizes it's a reconnect and asks for their phone number and PIN instead of name details. This signs them into their existing account — it does not create a new one, so their sales history and activity stay attached to them." },
+    { q:"What is the Connect Code?", a:"A permanent code (unlike the Join Code, it doesn't expire) that lets an existing staff member sign into a second device. Find or reset it under More → Staff → Staff Connect Code — only the Owner can see or regenerate it. Resetting it doesn't sign anyone out; it just retires the old code." },
     { q:"What's the difference between Master, Staff, Viewer, and Super Admin?", a:"Master is the owner with full access. Staff have specific permissions you assign (sell, add goods, record cash, etc). Viewer can only look, not act. Super Admin is a staff member you've trusted to manage specific shops on your behalf." },
   ]},
   { category: "Shops & Business Setup", items: [

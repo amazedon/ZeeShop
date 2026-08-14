@@ -4655,8 +4655,15 @@ function bindStaffEvents(){
   const gen = document.getElementById('gen-code');
   if(gen) gen.addEventListener('click', async ()=>{
     const limits = planLimits();
-    if(state.users.length >= limits.staff){
-      toast(`Your ${planLabel()} plan allows up to ${limits.staff} staff (including you). Upgrade for more.`);
+    // Two bugs here: this counted EVERY user ever created (including staff
+    // who'd been "Removed" — a deactivation, not a delete, so they never
+    // stopped counting), and it counted the Owner as one of the staff
+    // slots — but the server-side limit that actually gets enforced only
+    // ever counts active staff, never the owner. This local check could
+    // block generating a code even when the server would have allowed it.
+    const activeStaffCount = state.users.filter(x=>x.role==='staff' && x.isActive!==false).length;
+    if(activeStaffCount >= limits.staff){
+      toast(`Your ${planLabel()} plan allows up to ${limits.staff} staff. Upgrade for more, or remove someone who's no longer active.`);
       return;
     }
     if(!navigator.onLine){ toast('You need internet to generate a join code, so staff can use it on their own devices.'); return; }
@@ -6621,33 +6628,65 @@ const FAQ_GROUPS = [
   ]},
 ];
 let openFaqKey = null;
+let faqSearchQuery = '';
 function screenFAQ(){
+  const q = faqSearchQuery.trim().toLowerCase();
+  const searching = q.length > 0;
+  // While actively searching, matches are shown fully expanded — the whole
+  // point of searching is to skip tapping through categories one at a time,
+  // so still requiring a tap per result would defeat it.
+  const groups = FAQ_GROUPS.map(group => ({
+    category: group.category,
+    items: group.items.filter(item => !searching || item.q.toLowerCase().includes(q) || item.a.toLowerCase().includes(q))
+  })).filter(group => group.items.length > 0);
+
   return `
     ${subHeader("Help / FAQ")}
-    <p class="subtle" style="margin-bottom:14px;">Tap a question to see the answer.</p>
-    ${FAQ_GROUPS.map((group,gi)=>`
+    <div class="field" style="margin-bottom:4px;">
+      <input id="faq-search" placeholder="Search — e.g. \\"receipt\\", \\"credit\\", \\"staff\\"" value="${escAttr(faqSearchQuery)}">
+    </div>
+    <p class="subtle" style="margin-bottom:14px;">${searching ? `${groups.reduce((a,g)=>a+g.items.length,0)} result(s)` : 'Tap a question to see the answer.'}</p>
+    ${groups.length===0 ? `<div class="empty"><div class="ic">🔍</div><b>No matches</b>Try a different word, or browse by scrolling — nothing here mentions "${escapeHtml(faqSearchQuery)}".</div>` : ''}
+    ${groups.map((group)=>{
+      const gi = FAQ_GROUPS.findIndex(g=>g.category===group.category);
+      return `
       <div class="section-head"><h3>${escapeHtml(group.category)}</h3></div>
-      ${group.items.map((item,ii)=>{
+      ${group.items.map((item)=>{
+        const ii = FAQ_GROUPS[gi].items.indexOf(item);
         const key = gi+'-'+ii;
+        const expanded = searching || openFaqKey===key;
         return `<div class="card" data-faq-toggle="${key}" style="cursor:pointer;margin-bottom:8px;">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
             <div class="t1" style="font-weight:700;">${escapeHtml(item.q)}</div>
-            <div style="flex-shrink:0;color:var(--text-dim);">${openFaqKey===key?'−':'+'}</div>
+            ${!searching ? `<div style="flex-shrink:0;color:var(--text-dim);">${expanded?'−':'+'}</div>` : ''}
           </div>
-          ${openFaqKey===key?`<p class="subtle" style="margin-top:10px;line-height:1.5;">${escapeHtml(item.a)}</p>`:''}
+          ${expanded?`<p class="subtle" style="margin-top:10px;line-height:1.5;">${escapeHtml(item.a)}</p>`:''}
         </div>`;
       }).join('')}
-    `).join('')}
+    `;}).join('')}
     <div class="section-head"><h3>Still stuck?</h3></div>
     <p class="subtle">Use the thumbs-down button wherever you're chatting with support to send feedback, or reach out to whoever set up your Zed account.</p>
   `;
 }
 function bindFAQEvents(){
   document.querySelectorAll('[data-faq-toggle]').forEach(el=>el.addEventListener('click', ()=>{
+    if(faqSearchQuery.trim()) return; // while searching, everything's already expanded — nothing to toggle
     const key = el.dataset.faqToggle;
     openFaqKey = openFaqKey===key ? null : key;
     refreshMain();
   }));
+  const searchInput = document.getElementById('faq-search');
+  if(searchInput){
+    searchInput.addEventListener('input', ()=>{
+      faqSearchQuery = searchInput.value;
+      const cursorPos = searchInput.selectionStart;
+      refreshMain();
+      // refreshMain rebuilds the input from scratch — restore focus and
+      // cursor position so typing doesn't get interrupted on every keystroke.
+      const freshInput = document.getElementById('faq-search');
+      if(freshInput){ freshInput.focus(); freshInput.setSelectionRange(cursorPos, cursorPos); }
+    });
+  }
 }
 function screenSuppliers(){
   const suppliers = state.suppliers.filter(s=>s.businessId===business().id);

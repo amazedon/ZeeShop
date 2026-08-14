@@ -1263,7 +1263,8 @@ async function loginOwnerToSupabase(email, pass){
     taxName: b.tax_name||'VAT', taxPercent: b.tax_percent||0, subscriptionPlan: b.subscription_plan||'free',
     subscriptionExpiresAt: b.subscription_expires_at||null, autoRenewEnabled: b.auto_renew_enabled||false,
     autoRenewPlan: b.auto_renew_plan||null, autoRenewInterval: b.auto_renew_interval||null,
-    connectCode: b.connect_code||null, deletionRequestedAt: b.deletion_requested_at||null, createdAt: b.created_at
+    connectCode: b.connect_code||null, deletionRequestedAt: b.deletion_requested_at||null,
+    logoDataUrl: b.logo_data_url||null, createdAt: b.created_at
   };
 
   const [usersRes, shopsRes] = await Promise.all([
@@ -4992,6 +4993,13 @@ function bindSettingsEvents(){
       const dataUrl = await resizeLogoFile(file, 300);
       business().logoDataUrl = dataUrl;
       __logoImgCache = { dataUrl:null, img:null }; // force reload next time it's drawn
+      // None of these Settings fields synced at all before — logo, business
+      // type, registration number, tax, and shop details all only ever
+      // applied to whichever device the Owner happened to be using when
+      // they set them. A receipt printed from a different device (or a
+      // staff member's phone) would use blank/default values instead of
+      // the real, configured business identity.
+      enqueueSync('businesses','update', { id: business().id, logo_data_url: dataUrl });
       logAudit('logo_uploaded', 'Uploaded business logo');
       toast('Logo saved ✅'); render();
     } catch(err){ toast('Could not process that image.'); }
@@ -5001,6 +5009,7 @@ function bindSettingsEvents(){
     if(!confirm('Remove your business logo?')) return;
     business().logoDataUrl = null;
     __logoImgCache = { dataUrl:null, img:null };
+    enqueueSync('businesses','update', { id: business().id, logo_data_url: null });
     logAudit('logo_removed', 'Removed business logo');
     toast('Logo removed'); render();
   });
@@ -5020,11 +5029,13 @@ function bindSettingsEvents(){
   const saveBT = document.getElementById('save-biztype');
   if(saveBT) saveBT.addEventListener('click', ()=>{
     business().businessType = readBizTypeValue('set-biztype');
+    enqueueSync('businesses','update', { id: business().id, business_type: business().businessType });
     toast('Business type saved ✅'); render();
   });
   const saveRegNum = document.getElementById('save-regnumber');
   if(saveRegNum) saveRegNum.addEventListener('click', ()=>{
     business().registrationNumber = document.getElementById('set-regnumber').value.trim();
+    enqueueSync('businesses','update', { id: business().id, registration_number: business().registrationNumber });
     logAudit('registration_number_updated', 'Updated business registration number');
     toast('Registration number saved ✅'); render();
   });
@@ -5032,6 +5043,7 @@ function bindSettingsEvents(){
   if(saveTax) saveTax.addEventListener('click', ()=>{
     business().taxName = document.getElementById('set-taxname').value.trim() || 'VAT';
     business().taxPercent = Number(document.getElementById('set-taxpct').value||0);
+    enqueueSync('businesses','update', { id: business().id, tax_name: business().taxName, tax_percent: business().taxPercent });
     toast('Tax settings saved ✅'); render();
   });
   const saveShop = document.getElementById('save-shop-settings');
@@ -5041,6 +5053,7 @@ function bindSettingsEvents(){
     s.address = document.getElementById('set-address').value.trim();
     s.receiptFooter = document.getElementById('set-footer').value.trim();
     s.receiptTerms = document.getElementById('set-terms').value.trim();
+    enqueueSync('shops','update', { id: s.id, name: s.name, address: s.address, receipt_footer: s.receiptFooter, receipt_terms: s.receiptTerms });
     toast('Shop settings saved ✅'); render();
   });
   const exp = document.getElementById('export-data');
@@ -6534,8 +6547,13 @@ const FAQ_GROUPS = [
   ]},
   { category: "Shops & Business Setup", items: [
     { q:"Can I run more than one shop from one account?", a:"Yes. Tap the ＋ next to the shop switcher at the top to add another shop, then use the dropdown to switch between them anytime." },
+    { q:"How do I edit a shop's name or address?", a:"Go to Settings — the Shop section lets you edit the current shop's name, address, and receipt text. Switch shops first using the dropdown at the top if you want to edit a different one." },
     { q:"How do I change my Business Type?", a:"Go to Settings → Business Type. This changes which fields show up when you add Goods — e.g. Clothing shows sizes, Spare Parts shows compatible vehicle, Hotel/Lodging unlocks the Lodging module." },
+    { q:"Can I change my business's currency, country, or language later?", a:"Not currently — these are set once when you first create your account and can't be changed from within the app. Contact support if you genuinely need this changed." },
+    { q:"Where do I add my business registration number (like a CAC number)?", a:"Go to Settings → Registration Number. This is optional and purely for your own records — it doesn't currently appear on receipts automatically." },
+    { q:"How do I set up VAT or another tax?", a:"Go to Settings → Tax. Set the tax's name (VAT, GST, whatever applies where you are) and its percentage — it's then applied automatically wherever tax is calculated on a sale." },
     { q:"What is Dark Mode?", a:"A dark, lower-animation display style — easier on the eyes at night and lighter on battery. Toggle it under Settings → Dark Mode." },
+    { q:"What is Auto-Renewal?", a:"When it's on, your Pro or Boss plan renews itself automatically using your saved payment method, so you don't have to remember to upgrade again each month or year. Turn it on when you upgrade, or off anytime from Settings — turning it off doesn't cancel your current plan, it just stops it from renewing when it expires." },
   ]},
   { category: "Sales & Goods", items: [
     { q:"How do I record a sale?", a:"Go to New Sale from the bottom nav, tap items to add them to the cart, then tap Charge to complete it. Stock is deducted automatically from the oldest batch first." },
@@ -6566,6 +6584,9 @@ const FAQ_GROUPS = [
   ]},
   { category: "Staff & Payroll", items: [
     { q:"Can staff see everything I see?", a:"No. Staff permissions are set individually under More → Staff — you control what each person can do, like recording sales, adding goods, or handling cash. Changes take effect on their device as soon as it's next online." },
+    { q:"How does a staff member reset their password?", a:"Staff don't have a password to reset — only a PIN. If they still know their current PIN, they can change it themselves under My Profile → Change PIN. If they've genuinely forgotten it, there's no self-service recovery — the Owner needs to go to More → Staff → tap their name → Reset PIN, then tell them the new one." },
+    { q:"How do I change my own PIN?", a:"Go to More → My Profile → Change PIN. You'll need to know your current PIN to get in first — this is for when you just want a different one, not for when you're locked out." },
+    { q:"Can staff request their name be changed?", a:"Yes — under My Profile, staff can submit a name change request, which shows up for the Owner to approve or deny under Staff. Nothing changes until the Owner approves it." },
     { q:"How do I record salary payments or employment letters?", a:"Go to More → Staff, tap a staff member, and you'll find options to log salary payments and generate employment/offer letters tied to their record." },
     { q:"Can I update a staff member's salary or terms later?", a:"Yes — open their Employment Record and edit it. The previous terms are automatically saved to that record's history, along with who changed it and an optional reason, so nothing about past terms is lost." },
     { q:"What is \"Record-Only\" staff?", a:"People you want to keep employment records for (like salary history) without giving them a login or access to the app itself." },
@@ -6573,8 +6594,9 @@ const FAQ_GROUPS = [
   { category: "Reports & Receipts", items: [
     { q:"How do I see my profit, not just my revenue?", a:"Go to More → Profit Reports. It shows revenue, cost of goods sold, and expenses together so you see real profit, not just what came in." },
     { q:"How do I share a receipt with a customer or guest?", a:"Open the sale or booking, tap Share Receipt, and your phone's share sheet opens with the receipt image attached — pick WhatsApp, email, or any app you like. You can also Download it as a PNG." },
-    { q:"Can I customize the text at the bottom of receipts?", a:"Yes — go to Settings and edit the Receipt Footer and Receipt Terms fields. They appear on every sales and lodging receipt you generate." },
-    { q:"Can I put my logo on receipts?", a:"Yes — go to Settings → Business Logo to upload one. It'll appear on every receipt you generate from then on." },
+    { q:"How do I print a receipt?", a:"There's no direct print button in the app right now. Download or Share the receipt (it saves as an image), then print it from your phone's photo gallery or files app, or through whatever app you shared it to — most phones let you print an image from there if you have a printer set up. There's no dedicated thermal/receipt-printer support yet." },
+    { q:"Can I customize the text at the bottom of receipts?", a:"Yes — go to Settings and edit the Receipt Footer and Receipt Terms fields for the current shop. They appear on every sales and lodging receipt from that shop." },
+    { q:"Can I put my logo on receipts?", a:"Yes — go to Settings → Business Logo to upload one. It'll appear on every receipt you generate from then on, across all your devices." },
     { q:"How do I close out my day?", a:"Go to More → Close Day (or Close My Shift for staff). It totals the day's sales and cash so you can confirm everything matches before locking it in. You can also leave a note for whoever opens next — handy for handing off between shifts." },
     { q:"What is the Audit Log?", a:"A running history of key actions across your business — restocks, payments, staff changes, check-ins — visible to the Master account under More → Audit Log." },
     { q:"What are Notes for?", a:"A place to jot down anything worth remembering for your shop — a supplier's contact, a reminder, anything. Go to More → Notes. Marking a note as a handover note also surfaces it as a banner on the Home screen for the next person who logs in, until they dismiss it." },
@@ -6587,7 +6609,10 @@ const FAQ_GROUPS = [
   { category: "Notifications & Data", items: [
     { q:"What do the alerts on the bell icon mean?", a:"The bell shows counts for stock expiring soon, low/out-of-stock items, and credit sales that are overdue or due soon — tap it to jump straight to the relevant screen." },
     { q:"Can I turn notifications on or off?", a:"Yes — go to Settings and use Enable/Turn Off Notifications." },
-    { q:"Is my data backed up anywhere?", a:"Yes. Whenever your device is online, everything syncs to the cloud automatically in the background — you don't need to do anything for this to happen. It also works fully offline; anything you do while offline is saved on your device and syncs the moment you're back online. You can also export your data as a spreadsheet anytime from Settings → Export Data." },
+    { q:"Is my data backed up anywhere?", a:"Yes. Whenever your device is online, everything syncs to the cloud automatically in the background — you don't need to do anything for this to happen. It also works fully offline; anything you do while offline is saved on your device and syncs the moment you're back online." },
+    { q:"How do I export my data?", a:"Go to Settings → Export Data to download your business data as a spreadsheet." },
+    { q:"How do I delete my business account?", a:"Go to Settings → Delete Business. This locks everyone (including you) out of the account immediately, and your data is permanently deleted within 30 days, per GDPR. This can't be undone once the 30 days pass — contact support right away if you tap it by mistake." },
+    { q:"Why does the app say my account is suspended or scheduled for deletion?", a:"You'll see a lock screen explaining which one it is and why. A suspension means it's been paused — contact support to find out why. A scheduled deletion means someone on the account requested it — contact support immediately if that wasn't intentional." },
   ]},
   { category: "Plans & Billing", items: [
     { q:"What's the difference between the Free, Pro, and Boss plans?", a:"Free covers up to 2 shops, 100 goods, 50 customers, and 2 staff. Pro raises that to 3 shops, 1,000 goods, unlimited customers, and 5 staff. Boss removes every limit. Cloud sync, offline support, and everything else in this FAQ work the same on every plan — the plans only affect these limits." },

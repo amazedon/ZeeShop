@@ -263,7 +263,15 @@ async function pullSync(){
               name: b.name, country: b.country, currency: b.currency,
               autoRenewEnabled: b.auto_renew_enabled || false,
               autoRenewPlan: b.auto_renew_plan || null,
-              autoRenewInterval: b.auto_renew_interval || null
+              autoRenewInterval: b.auto_renew_interval || null,
+              // Added along with the fix that made these actually push in
+              // the first place — logo, business type, CAC/registration
+              // number, and tax settings previously had no pull path at
+              // all, on top of no push path, so they never reached any
+              // device except the one they were set on.
+              businessType: b.business_type || '', registrationNumber: b.registration_number || '',
+              taxName: b.tax_name || 'VAT', taxPercent: b.tax_percent || 0,
+              logoDataUrl: b.logo_data_url || null
             };
             if(JSON.stringify(fresh) !== JSON.stringify({
               subscriptionPlan: state.business.subscriptionPlan, subscriptionExpiresAt: state.business.subscriptionExpiresAt,
@@ -271,7 +279,10 @@ async function pullSync(){
               deletionRequestedAt: state.business.deletionRequestedAt,
               name: state.business.name, country: state.business.country, currency: state.business.currency,
               autoRenewEnabled: state.business.autoRenewEnabled, autoRenewPlan: state.business.autoRenewPlan,
-              autoRenewInterval: state.business.autoRenewInterval
+              autoRenewInterval: state.business.autoRenewInterval,
+              businessType: state.business.businessType, registrationNumber: state.business.registrationNumber,
+              taxName: state.business.taxName, taxPercent: state.business.taxPercent,
+              logoDataUrl: state.business.logoDataUrl
             })){
               Object.assign(state.business, fresh);
               changed = true;

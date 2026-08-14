@@ -37,7 +37,11 @@ Deno.serve(async (req: Request) => {
     const shopLimit = SHOP_LIMITS[effectivePlan] ?? 2;
 
     // Staff limit check — only count staff
-    const { count: staffCount } = await admin.from("app_users").select("id", { count: "exact", head: true }).eq("business_id", businessId).eq("role", "staff");
+    // Only ACTIVE staff count against the plan limit — otherwise a Boss who
+    // has ever let someone go (Remove is a deactivation, not a delete, since
+    // there's no hard-delete feature) would permanently lose that slot
+    // forever, even though that person has zero real access to anything.
+    const { count: staffCount } = await admin.from("app_users").select("id", { count: "exact", head: true }).eq("business_id", businessId).eq("role", "staff").eq("is_active", true);
     if ((staffCount ?? 0) >= staffLimit) {
       return json({ error: `This business's plan allows up to ${staffLimit} staff. Ask the owner to upgrade.` }, 400);
     }

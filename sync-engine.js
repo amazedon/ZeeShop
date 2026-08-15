@@ -354,7 +354,8 @@ async function pullSync(){
     mergeUpdate('shops', shopsRes, state.shops, r=>({
       id:r.id, businessId:r.business_id, name:r.name, address:r.address||'', phone:r.phone||'', email:r.email||'',
       receiptFooter:r.receipt_footer||'Thank you for your business!', receiptTerms:r.receipt_terms||'',
-      auctionDiscountDefault:r.auction_discount_default!=null?r.auction_discount_default:30
+      auctionDiscountDefault:r.auction_discount_default!=null?r.auction_discount_default:30,
+      isWarehouse:!!r.is_warehouse
     }));
     const myShopIds = state.shops.filter(s=>s.businessId===bizId).map(s=>s.id);
     async function fetchByShop(table){
@@ -369,14 +370,15 @@ async function pullSync(){
     const [
       users, groups, customers, goods, batches, variants,
       suppliers, purchases, expenses, salaries, emp, ros, notes,
-      rooms, bookings, comms, sales, saleItems, auditRows, empHistory
+      rooms, bookings, comms, sales, saleItems, auditRows, empHistory, stockAdj
     ] = await Promise.all([
       fetchTable('app_users', true), fetchTable('customer_groups', true), fetchTable('customers', true),
       fetchByShop('goods'), fetchTable('good_batches', false), fetchTable('good_variants', false),
       fetchTable('suppliers', true), fetchTable('supplier_purchases', true), fetchTable('expenses', true), fetchTable('salary_payments', true),
       fetchTable('employment_records', true), fetchTable('record_only_staff', true), fetchTable('shop_notes', true),
       fetchTable('rooms', true), fetchTable('lodging_bookings', true), fetchTable('communication_log', true),
-      fetchByShop('sales'), fetchTable('sale_items', false), fetchTable('audit_log', true), fetchTable('employment_record_history', true)
+      fetchByShop('sales'), fetchTable('sale_items', false), fetchTable('audit_log', true), fetchTable('employment_record_history', true),
+      fetchByShop('stock_adjustments')
     ]);
 
     mergeUpdate('app_users', users, state.users, r=>({
@@ -499,6 +501,15 @@ async function pullSync(){
         changed = true;
       }
     });
+
+    // Stock corrections are permanent, append-only records by design — see
+    // openStockCorrectionModal in app.html — so this is also insert-only,
+    // same reasoning as audit_log and employment history above.
+    mergeUpdate('stock_adjustments', stockAdj, state.stockAdjustments, r=>({
+      id:r.id, businessId:r.business_id, shopId:r.shop_id, goodId:r.good_id, goodName:r.good_name,
+      batchId:r.batch_id, oldQty:r.old_qty, newQty:r.new_qty, difference:r.difference, reason:r.reason||'',
+      adjustedByUserId:r.adjusted_by_user_id, adjustedAt:r.created_at
+    }));
 
     mergeUpdate('record_only_staff', ros, state.recordOnlyStaff, r=>({
       id:r.id, businessId:r.business_id, firstName:r.first_name, lastName:r.last_name||'', phone:r.phone||'',

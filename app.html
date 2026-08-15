@@ -626,6 +626,7 @@ if(!state.recordOnlyStaff) state.recordOnlyStaff = [];
 if(!state.rooms) state.rooms = [];
 if(!state.lodgingBookings) state.lodgingBookings = [];
 if(!state.dismissedHandoverIds) state.dismissedHandoverIds = [];
+if(!state.stockAdjustments) state.stockAdjustments = [];
 migratePhoneNumbers();
 function load(){
   const raw = localStorage.getItem(DB_KEY);
@@ -646,7 +647,8 @@ function load(){
     auditLog:[], communicationLog:[], shopNotes:[], expenses:[], suppliers:[], supplierPurchases:[],
     employmentRecords:[], salaryPayments:[], recordOnlyStaff:[], rooms:[], lodgingBookings:[],
     joinCode:null, marketMode:false, pinAttempts:{},
-    dismissedHandoverIds:[] /* local-only — per-device "got it" acks, never synced */ };
+    dismissedHandoverIds:[], /* local-only — per-device "got it" acks, never synced */
+    stockAdjustments:[] };
 }
 function save(){ localStorage.setItem(DB_KEY, JSON.stringify(state)); }
 function business(){ return state.business; }
@@ -2025,7 +2027,7 @@ function renderShell(){
     <div class="topbar">
       <div class="brand-mark">Z</div>
       <select class="shop-switch" id="shop-switcher">
-        ${visibleShops.length? visibleShops.map(s=>`<option value="${s.id}" ${s.id===state.currentShopId?'selected':''}>${s.name}</option>`).join('')
+        ${visibleShops.length? visibleShops.map(s=>`<option value="${s.id}" ${s.id===state.currentShopId?'selected':''}>${s.isWarehouse?'📦 ':''}${s.name}</option>`).join('')
           : `<option value="">No shops assigned yet</option>`}
       </select>
       ${isMaster() ? `<button class="icon-btn" id="add-shop-btn" title="Add shop">＋</button>`:''}
@@ -2061,6 +2063,7 @@ function renderRoute(){
     case 'history': return screenHistory();
     case 'expenses': return screenExpenses();
     case 'suppliers': return screenSuppliers();
+    case 'warehouse': return screenWarehouse();
     case 'lodging': return screenLodging();
     case 'faq': return screenFAQ();
     case 'about-us': return screenAboutUs();
@@ -2207,24 +2210,34 @@ function planLabel(){
 function handleAddShop(){
   const limits = planLimits();
   if(state.shops.length >= limits.shops){
-    toast(`Your ${planLabel()} plan allows ${limits.shops} shop${limits.shops===1?'':'s'}. Upgrade for more shops.`);
+    toast(`Your ${planLabel()} plan allows ${limits.shops} shop${limits.shops===1?'':'s'} (this includes any warehouses). Upgrade for more.`);
     return;
   }
-  const name = prompt('New shop name:');
-  if(!name) return;
-  const s = {id:uid('shop'), businessId:business().id, name, address:'', phone:'', email:'', receiptFooter:'Thank you for your business!', receiptTerms:'Goods sold in good condition. No refund after payment.', auctionDiscountDefault:30};
-  state.shops.push(s);
-  state.currentShopId = s.id;
-  // Only the VERY FIRST shop (created at signup) was ever actually pushed to
-  // the server — every shop added afterward through this "Add Shop" flow
-  // stayed local-only, invisible on every other device including the
-  // owner's own second phone.
-  enqueueSync('shops','insert', {
-    id: s.id, business_id: s.businessId, name: s.name, address: s.address, phone: s.phone, email: s.email,
-    receipt_footer: s.receiptFooter, receipt_terms: s.receiptTerms, auction_discount_default: s.auctionDiscountDefault
+  openSheet(`
+    <div class="sheet-head"><h3>Add a Location</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="field"><label>Name</label><input id="as-name" placeholder="e.g. Main Shop, Ikeja Warehouse"></div>
+    <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-bottom:16px;">
+      <input type="checkbox" id="as-warehouse"> 📦 This is a warehouse — for holding stock only, not selling directly to customers
+    </label>
+    <button class="btn btn-primary" id="as-submit">Add</button>
+  `);
+  document.getElementById('as-submit').addEventListener('click', ()=>{
+    const name = document.getElementById('as-name').value.trim();
+    if(!name){ toast('Please enter a name.'); return; }
+    const isWarehouse = document.getElementById('as-warehouse').checked;
+    const s = {id:uid('shop'), businessId:business().id, name, address:'', phone:'', email:'',
+      receiptFooter:'Thank you for your business!', receiptTerms:'Goods sold in good condition. No refund after payment.',
+      auctionDiscountDefault:30, isWarehouse};
+    state.shops.push(s);
+    state.currentShopId = s.id;
+    enqueueSync('shops','insert', {
+      id: s.id, business_id: s.businessId, name: s.name, address: s.address, phone: s.phone, email: s.email,
+      receipt_footer: s.receiptFooter, receipt_terms: s.receiptTerms, auction_discount_default: s.auctionDiscountDefault,
+      is_warehouse: s.isWarehouse
+    });
+    logAudit(isWarehouse?'warehouse_added':'shop_added', (isWarehouse?'Added warehouse: ':'Added shop: ')+name);
+    closeSheet(); render();
   });
-  logAudit('shop_added', 'Added shop: '+name);
-  render();
 }
 
 /* ============================================================
@@ -2410,6 +2423,9 @@ let saleSearch = '';
 function screenNewSale(){
   if(!canDo('canSell')){
     return `<h2 class="screen-title">New Sale</h2><div class="empty"><div class="ic">🔒</div><b>Not available to you</b>Your Owner has turned off sales access for your account. Ask them to enable it under Staff → Permissions.</div>`;
+  }
+  if(currentShop()?.isWarehouse){
+    return `<h2 class="screen-title">New Sale</h2><div class="empty"><div class="ic">📦</div><b>This is a warehouse</b>${escapeHtml(currentShop().name)} is set up for holding stock only, not selling directly. Switch to a shop using the dropdown at the top, or move stock here to a shop first under More → Warehouse.</div>`;
   }
   const goods = state.goods.filter(g=>g.shopId===state.currentShopId &&
     (!saleSearch || g.name.toLowerCase().includes(saleSearch.toLowerCase()) || (g.barcode && g.barcode===saleSearch.trim())));
@@ -2678,6 +2694,7 @@ function bindRouteEvents(){
   if(route==='history') bindHistoryEvents();
   if(route==='expenses') bindExpensesEvents();
   if(route==='suppliers') bindSuppliersEvents();
+  if(route==='warehouse') bindWarehouseEvents();
   if(route==='lodging') bindLodgingEvents();
   if(route==='faq') bindFAQEvents();
   if(route==='about-us') bindAboutUsEvents();
@@ -3380,6 +3397,7 @@ function openGoodDetail(gid){
           <div class="t2">${expired?'EXPIRED':'Expires '+fmtDate(b.expiryDate)+' ('+d+'d)'} ${b.auctionActive?' · Auction -'+b.auctionDiscount+'%':''}</div>
         </div>
         ${(isMaster() && !expired && d<=7 && b.qtyRemaining>0) ? `<button class="btn btn-sm ${b.auctionActive?'btn-outline':'btn-dark'}" data-toggle-auction="${b.id}">${b.auctionActive?'Stop Auction':'Start 30% Auction'}</button>` : ''}
+        ${canDo('canAddGoods') ? `<button class="btn btn-sm btn-outline" data-correct-count="${b.id}">🔢 Correct Count</button>` : ''}
         ${expired ? `<span class="pill pill-red">DO NOT SELL</span>` : ''}
       </div>`;
     }).join('')}
@@ -3412,9 +3430,15 @@ function openGoodDetail(gid){
       const add = Number(prompt(`Add how many units to "${v.label}"?`, '0')||0);
       if(add<=0) return;
       v.qty += add;
+      // Same missing-sync bug as everywhere else found this session — this
+      // stayed local-only, so added variant stock never reached other devices.
+      enqueueSync('good_variants','update', { id: v.id, qty: v.qty });
       logAudit('stock_added', `Added ${add} to ${g.name} (${v.label})`);
       toast('Stock added ✅'); openGoodDetail(gid);
     });
+  });
+  document.querySelectorAll('[data-correct-count]').forEach(btn=>{
+    btn.addEventListener('click', ()=>openStockCorrectionModal(gid, btn.dataset.correctCount));
   });
   const addVariantBtn = document.getElementById('add-new-variant-btn');
   if(addVariantBtn) addVariantBtn.addEventListener('click', ()=>{
@@ -3422,9 +3446,70 @@ function openGoodDetail(gid){
     const color = prompt('Color (optional):','') || '';
     if(!size && !color){ toast('Enter at least a size or color.'); return; }
     const qty = Number(prompt('Starting quantity:','0')||0);
-    g.variants.push({ id: uid('var'), size, color, qty: Math.max(0,qty), label: [size,color].filter(Boolean).join(' / ') });
+    const v = { id: uid('var'), size, color, qty: Math.max(0,qty), label: [size,color].filter(Boolean).join(' / ') };
+    g.variants.push(v);
+    // Same missing-sync bug — a brand new variant never reached the server.
+    enqueueSync('good_variants','insert', { id: v.id, good_id: g.id, size: v.size, color: v.color, qty: v.qty, label: v.label });
     logAudit('variant_added', `Added new variant to ${g.name}`);
     toast('Variant added ✅'); openGoodDetail(gid);
+  });
+}
+
+/* ============================================================
+   STOCK CORRECTION — for anything where the system's count and
+   physical reality can honestly drift apart (cooked food yields
+   being the main case, but useful for any manual recount). Every
+   correction is a permanent, append-only record — see History and
+   the Audit Log — there is no edit or delete path for one, by design.
+   ============================================================ */
+function openStockCorrectionModal(goodId, batchId){
+  const g = state.goods.find(x=>x.id===goodId);
+  const b = g.batches.find(x=>x.id===batchId);
+  openSheet(`
+    <div class="sheet-head"><h3>Correct Count</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <p class="subtle" style="margin-bottom:14px;">${escapeHtml(g.name)} — ${b.batchNo}</p>
+    <div class="stat-box" style="margin-bottom:14px;"><div class="lbl">System Currently Says</div><div class="val">${b.qtyRemaining}</div></div>
+    <div class="field"><label>What's actually there right now</label><input id="sc-actual" type="number" min="0" value="${b.qtyRemaining}"></div>
+    <div id="sc-diff" class="subtle" style="margin:-6px 0 12px;"></div>
+    <div class="field"><label>Reason <span class="subtle">(optional, but worth noting)</span></label><input id="sc-reason" placeholder="e.g. sold faster than the estimate, spillage"></div>
+    <button class="btn btn-primary" id="sc-submit">Confirm Correction</button>
+  `);
+  const actualInput = document.getElementById('sc-actual');
+  const diffLabel = document.getElementById('sc-diff');
+  const updateDiff = ()=>{
+    const actual = Number(actualInput.value||0);
+    const diff = actual - b.qtyRemaining;
+    diffLabel.textContent = diff===0 ? '' : diff>0 ? `This will increase stock by ${diff}.` : `This will reduce stock by ${Math.abs(diff)}.`;
+    diffLabel.style.color = diff<0 ? 'var(--red)' : diff>0 ? 'var(--green)' : 'var(--text-dim)';
+  };
+  actualInput.addEventListener('input', updateDiff);
+  updateDiff();
+  document.getElementById('sc-submit').addEventListener('click', ()=>{
+    const actual = Number(actualInput.value||0);
+    if(actual<0){ toast('Count cannot be negative.'); return; }
+    const oldQty = b.qtyRemaining;
+    const diff = actual - oldQty;
+    if(diff===0){ toast('No change to record.'); closeSheet(); return; }
+    const reason = document.getElementById('sc-reason').value.trim();
+    b.qtyRemaining = actual;
+    enqueueSync('good_batches','update', { id: b.id, qty_remaining: b.qtyRemaining });
+
+    const adjId = uid('adj');
+    const adj = { id: adjId, businessId: business().id, shopId: g.shopId, goodId: g.id, goodName: g.name,
+      batchId: b.id, oldQty, newQty: actual, difference: diff, reason,
+      adjustedByUserId: state.sessionUserId, adjustedAt: new Date().toISOString() };
+    state.stockAdjustments.unshift(adj);
+    // Insert-only, on purpose — an adjustment record is never edited or
+    // deleted once created, so the count history is trustworthy even if a
+    // later correction turns out to also be wrong (that becomes its own
+    // new record, not a rewrite of this one).
+    enqueueSync('stock_adjustments','insert', {
+      id: adjId, business_id: adj.businessId, shop_id: adj.shopId, good_id: adj.goodId, good_name: adj.goodName,
+      batch_id: adj.batchId, old_qty: oldQty, new_qty: actual, difference: diff, reason,
+      adjusted_by_user_id: adj.adjustedByUserId
+    });
+    logAudit('stock_corrected', `${g.name}: ${oldQty} → ${actual} (${diff>0?'+':''}${diff})${reason?' — '+reason:''}`);
+    toast('Count corrected ✅'); closeSheet(); openGoodDetail(goodId);
   });
 }
 
@@ -3721,6 +3806,7 @@ function screenMore(){
     {id:'expenses', ic:'💸', label:'Expenses', show:!isViewer()},
     {id:'lodging', ic:'🛏️', label:'Lodging', show:!isViewer() && isHotelBiz()},
     {id:'suppliers', ic:'🚚', label:'Suppliers', show:!isViewer()},
+    {id:'warehouse', ic:'📦', label:'Warehouse', show:!isViewer() && state.shops.some(s=>s.isWarehouse)},
     {id:'notes', ic:'🗒️', label:'Notes', show:true},
     {id:'reports', ic:'📊', label:'Profit Reports', show:isMaster()},
     {id:'staff', ic:'🧑‍🤝‍🧑', label:'Staff', show:canManageStaff(), badge:pendingNameReqs},
@@ -5612,6 +5698,16 @@ function screenHistory(){
     });
   });
 
+  state.stockAdjustments.filter(a=>a.shopId===shopId).forEach(a=>{
+    const adjuster = state.users.find(u=>u.id===a.adjustedByUserId);
+    events.push({
+      type:'adjustment', sourceId: a.id, date: a.adjustedAt.slice(0,10), sortAt: a.adjustedAt,
+      title: a.goodName, subtitle: `${a.oldQty} → ${a.newQty} · Correction${adjuster?' by '+adjuster.firstName:''}${a.reason?' — '+a.reason:''}`,
+      amount: null, pill: a.difference<0?`<span class="pill pill-red">${a.difference}</span>`:`<span class="pill pill-green">+${a.difference}</span>`,
+      onClick: null
+    });
+  });
+
   let filtered = events;
   if(historyFilter!=='all') filtered = filtered.filter(e=>e.type===historyFilter);
   if(historyDateFilter) filtered = filtered.filter(e=>e.date===historyDateFilter);
@@ -5621,9 +5717,10 @@ function screenHistory(){
 
   const filterOptions = [
     {id:'all', label:'All'}, {id:'sale', label:'Sales'}, {id:'credit', label:'Credit'},
-    {id:'voided', label:'Voided'}, {id:'supplier', label:'Supplier'}, {id:'expense', label:'Expenses'}
+    {id:'voided', label:'Voided'}, {id:'supplier', label:'Supplier'}, {id:'expense', label:'Expenses'},
+    {id:'adjustment', label:'Corrections'}
   ];
-  const typeIcon = {sale:'🧾', credit:'📒', voided:'🚫', supplier:'🚚', expense:'💸'};
+  const typeIcon = {sale:'🧾', credit:'📒', voided:'🚫', supplier:'🚚', expense:'💸', adjustment:'🔢'};
 
   return `
     ${subHeader("History")}
@@ -5650,7 +5747,7 @@ function screenHistory(){
             </div>
           </div>
           <div style="text-align:right;flex-shrink:0;">
-            <b>${fmtMoney(e.amount)}</b><br>${e.pill}
+            ${e.amount!=null?`<b>${fmtMoney(e.amount)}</b><br>`:''}${e.pill}
           </div>
         </div>
         <div style="display:flex;justify-content:flex-end;margin-top:8px;">
@@ -5687,11 +5784,12 @@ function bindHistoryEvents(){
    SHARE HISTORY — generates a shareable summary image of
    whatever's currently filtered/dated in the History screen.
    ============================================================ */
-const HISTORY_TYPE_LABELS = {sale:'SALE', credit:'CREDIT', voided:'VOIDED', supplier:'SUPPLIER', expense:'EXPENSE'};
+const HISTORY_TYPE_LABELS = {sale:'SALE', credit:'CREDIT', voided:'VOIDED', supplier:'SUPPLIER', expense:'EXPENSE', adjustment:'CORRECTION'};
 function openHistoryShareModal(){
   const filterOptions = [
     {id:'all', label:'All'}, {id:'sale', label:'Sales'}, {id:'credit', label:'Credit'},
-    {id:'voided', label:'Voided'}, {id:'supplier', label:'Supplier'}, {id:'expense', label:'Expenses'}
+    {id:'voided', label:'Voided'}, {id:'supplier', label:'Supplier'}, {id:'expense', label:'Expenses'},
+    {id:'adjustment', label:'Corrections'}
   ];
   const filterLabel = (filterOptions.find(f=>f.id===historyFilter)||{}).label || 'All';
   const dateLabel = historyDateFilter ? fmtDate(historyDateFilter) : 'All Time';
@@ -5766,7 +5864,7 @@ function layoutAndDrawHistory(filterLabel, dateLabel, ctx){
     T(tag, PAD, 'left', '700 9px Arial,Helvetica,sans-serif', '#9AA0AB');
     const nameWrapped = wrapPlainText(canvasSafeText(e.title), 28);
     T(nameWrapped[0]||'', PAD+38, 'left', '400 12px Arial,Helvetica,sans-serif', e.dim?'#B0B0B0':'#242B38');
-    T(fmtMoneyCanvas(e.amount), W-PAD, 'right', '700 12px Arial,Helvetica,sans-serif', e.dim?'#B0B0B0':'#242B38');
+    if(e.amount!=null) T(fmtMoneyCanvas(e.amount), W-PAD, 'right', '700 12px Arial,Helvetica,sans-serif', e.dim?'#B0B0B0':'#242B38');
     y += 15;
     T(canvasSafeText(e.subtitle)+' · '+fmtDate(e.date), PAD+38, 'left', '400 10px Arial,Helvetica,sans-serif', '#9AA0AB');
     y += 18;
@@ -5830,9 +5928,11 @@ function layoutAndDrawSingleCard(event, ctx){
   });
   T(fmtDate(event.date), PAD, 'left', '400 11.5px Arial,Helvetica,sans-serif', '#6B7280'); y += 20;
   L(PAD, y, W-PAD, y); y += 24;
-  T('AMOUNT', PAD, 'left', '700 10px Arial,Helvetica,sans-serif', '#9AA0AB');
-  T(fmtMoneyCanvas(event.amount), W-PAD, 'right', '800 15px Arial,Helvetica,sans-serif', '#12213B');
-  y += 24;
+  if(event.amount!=null){
+    T('AMOUNT', PAD, 'left', '700 10px Arial,Helvetica,sans-serif', '#9AA0AB');
+    T(fmtMoneyCanvas(event.amount), W-PAD, 'right', '800 15px Arial,Helvetica,sans-serif', '#12213B');
+    y += 24;
+  }
   return y;
 }
 function drawSingleCardToCanvas(canvas, event){
@@ -6688,6 +6788,128 @@ function bindFAQEvents(){
     });
   }
 }
+/* ============================================================
+   WAREHOUSE — a warehouse is just a shop with isWarehouse:true,
+   so it gets full batch/expiry tracking, low-stock alerts, and sync
+   for free (same Goods system every shop already uses). The one
+   genuinely new mechanic here is Stock Transfer: moving real
+   quantity from a warehouse to a shop, carrying cost price and
+   expiry over rather than creating a disconnected duplicate record.
+   ============================================================ */
+function screenWarehouse(){
+  const warehouses = state.shops.filter(s=>s.isWarehouse);
+  const activeWh = currentShop()?.isWarehouse ? currentShop() : warehouses[0];
+  if(!activeWh) return `${subHeader("Warehouse")}<div class="empty"><div class="ic">📦</div><b>No warehouse set up yet</b>Add one from the ＋ next to the shop switcher at the top, and check "This is a warehouse."</div>`;
+
+  const goods = state.goods.filter(g=>g.shopId===activeWh.id);
+  const withStock = goods.filter(g=>totalStock(g)>0);
+  const lowStock = goods.filter(g=>{ const s=totalStock(g); return s>0 && s<=(g.reorderLevel||5); }).length;
+  const shops = state.shops.filter(s=>!s.isWarehouse);
+
+  return `
+    ${subHeader("Warehouse")}
+    ${warehouses.length>1?`
+      <div class="field"><label>Viewing</label>
+        <select id="wh-picker">${warehouses.map(w=>`<option value="${w.id}" ${w.id===activeWh.id?'selected':''}>${escapeHtml(w.name)}</option>`).join('')}</select>
+      </div>`:''}
+    <div class="stat-grid" style="margin-bottom:14px;">
+      <div class="stat-box"><div class="lbl">Items in Stock</div><div class="val">${withStock.length}</div></div>
+      <div class="stat-box"><div class="lbl">Running Low</div><div class="val">${lowStock}</div></div>
+    </div>
+    <div style="display:flex;gap:10px;margin-bottom:14px;">
+      <button class="btn btn-dark" style="flex:1;" data-goto="goods">＋ Record Stock</button>
+      <button class="btn btn-outline" style="flex:1;" id="transfer-stock-btn" ${shops.length===0?'disabled':''}>↗ Move to a Shop</button>
+    </div>
+    ${shops.length===0?`<p class="subtle" style="margin:-6px 0 14px;">Add a real shop (not a warehouse) before you can move stock out.</p>`:''}
+    ${withStock.length===0?`<div class="empty"><div class="ic">📭</div><b>Nothing in stock yet</b>Tap Record Stock to log what's arrived.</div>`:
+    withStock.map(g=>`
+      <div class="list-row">
+        <div class="thumb">${g.emoji||'🛍️'}</div>
+        <div class="info"><div class="t1">${escapeHtml(g.name)}</div><div class="t2">${totalStock(g)} in stock</div></div>
+      </div>`).join('')}
+  `;
+}
+function bindWarehouseEvents(){
+  const picker = document.getElementById('wh-picker');
+  if(picker) picker.addEventListener('change', ()=>{ state.currentShopId = picker.value; save(); render(); });
+  const transferBtn = document.getElementById('transfer-stock-btn');
+  if(transferBtn) transferBtn.addEventListener('click', openStockTransferModal);
+}
+
+function openStockTransferModal(){
+  const warehouse = currentShop();
+  const goods = state.goods.filter(g=>g.shopId===warehouse.id && totalStock(g)>0);
+  const shops = state.shops.filter(s=>!s.isWarehouse);
+  if(goods.length===0){ toast('Nothing in stock here to move.'); return; }
+  openSheet(`
+    <div class="sheet-head"><h3>Move Stock to a Shop</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <p class="subtle" style="margin-bottom:14px;">From ${escapeHtml(warehouse.name)}. Oldest stock moves first automatically.</p>
+    <div class="field"><label>Item</label>
+      <select id="st-good">${goods.map(g=>`<option value="${g.id}">${escapeHtml(g.name)} (${totalStock(g)} available)</option>`).join('')}</select>
+    </div>
+    <div class="field"><label>Quantity to move</label><input id="st-qty" type="number" min="1"></div>
+    <div class="field"><label>To Shop</label>
+      <select id="st-dest">${shops.map(s=>`<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')}</select>
+    </div>
+    <button class="btn btn-primary" id="st-submit">Move Stock</button>
+  `);
+  document.getElementById('st-submit').addEventListener('click', submitStockTransfer);
+}
+function submitStockTransfer(){
+  const warehouse = currentShop();
+  const goodId = document.getElementById('st-good').value;
+  const qty = Number(document.getElementById('st-qty').value||0);
+  const destShopId = document.getElementById('st-dest').value;
+  const g = state.goods.find(x=>x.id===goodId);
+  if(!g){ toast('Item not found.'); return; }
+  const available = totalStock(g);
+  if(qty<=0 || qty>available){ toast(`Enter a quantity between 1 and ${available}.`); return; }
+
+  // Deduct FEFO across the warehouse's batches — same pattern used at sale
+  // time, so a transfer behaves exactly like stock actually leaving.
+  let remaining = qty;
+  const sourceBatches = g.batches.filter(b=>b.qtyRemaining>0).sort((a,b)=>new Date(a.expiryDate)-new Date(b.expiryDate));
+  const movedFrom = []; // {batch, qtyTaken, costPrice, expiryDate}
+  for(const b of sourceBatches){
+    if(remaining<=0) break;
+    const take = Math.min(b.qtyRemaining, remaining);
+    b.qtyRemaining -= take;
+    remaining -= take;
+    movedFrom.push({ costPrice: b.costPrice, expiryDate: b.expiryDate, qty: take, batchId: b.id, qtyRemaining: b.qtyRemaining });
+  }
+  movedFrom.forEach(m=> enqueueSync('good_batches','update', { id: m.batchId, qty_remaining: m.qtyRemaining }));
+
+  // At the destination, find a matching good by name (goods are per-shop,
+  // so the same product needs its own record there) — reuse it if it
+  // already exists, or create it fresh, carrying over price/cost so it's
+  // not a disconnected duplicate the Boss has to manually keep in sync.
+  let destGood = state.goods.find(x=>x.shopId===destShopId && x.name.toLowerCase()===g.name.toLowerCase());
+  if(!destGood){
+    destGood = { id: uid('good'), shopId: destShopId, name: g.name, basePrice: g.basePrice, costPrice: g.costPrice,
+      emoji: g.emoji||'🛍️', groupPrices: [], barcode: g.barcode||null, reorderLevel: g.reorderLevel||5,
+      hasVariants: false, batches: [] };
+    state.goods.push(destGood);
+    syncGoodInsert(destGood);
+  }
+  // One destination batch per source batch moved, so expiry dates and cost
+  // prices stay accurate rather than averaging them into a single blob.
+  movedFrom.forEach(m=>{
+    const newBatch = { id: uid('batch'), qtyRemaining: m.qty, expiryDate: m.expiryDate, costPrice: m.costPrice,
+      batchNo: 'XFER-'+Math.floor(Math.random()*9000+1000), auctionActive:false, auctionPrice:null, auctionDiscount:null };
+    destGood.batches.push(newBatch);
+    enqueueSync('good_batches','insert', {
+      id: newBatch.id, good_id: destGood.id, batch_no: newBatch.batchNo, qty_remaining: newBatch.qtyRemaining,
+      expiry_date: newBatch.expiryDate, cost_price: newBatch.costPrice,
+      auction_active: false, auction_price: null, auction_discount: null
+    });
+  });
+
+  const destShop = state.shops.find(s=>s.id===destShopId);
+  logAudit('stock_transfer', `Moved ${qty} x ${g.name} from ${warehouse.name} to ${destShop.name}`);
+  toast(`Moved ${qty} x ${g.name} to ${destShop.name} ✅`);
+  closeSheet(); render();
+}
+
 function screenSuppliers(){
   const suppliers = state.suppliers.filter(s=>s.businessId===business().id);
   const totalOwed = suppliers.reduce((a,sup)=>a+supplierBalance(sup.id),0);

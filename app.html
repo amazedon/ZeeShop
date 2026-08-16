@@ -6646,9 +6646,9 @@ function bindContactUsEvents(){
   fetchSiteContent('contact_us').then(row=>{
     if(!row){ box.innerHTML = `<div class="card"><p class="subtle">This business hasn't added contact details yet.</p></div>`; return; }
     const lines = [];
-    if(row.phone) lines.push(`<div class="t2">📞 ${escapeHtml(row.phone)}</div>`);
-    if(row.whatsapp) lines.push(`<div class="t2">💬 WhatsApp: ${escapeHtml(row.whatsapp)}</div>`);
-    if(row.email) lines.push(`<div class="t2">✉️ ${escapeHtml(row.email)}</div>`);
+    if(row.phone) lines.push(`<div class="t2">📞 <a href="tel:${escAttr(row.phone)}">${escapeHtml(row.phone)}</a></div>`);
+    if(row.whatsapp) lines.push(`<div class="t2">💬 <a href="https://wa.me/${row.whatsapp.replace(/[^\d]/g,'')}" target="_blank">WhatsApp: ${escapeHtml(row.whatsapp)}</a></div>`);
+    if(row.email) lines.push(`<div class="t2">✉️ <a href="mailto:${escAttr(row.email)}">${escapeHtml(row.email)}</a></div>`);
     if(row.address) lines.push(`<div class="t2">📍 ${escapeHtml(row.address)}</div>`);
     box.innerHTML = `<div class="card">
       <h2 style="margin:0 0 10px;color:var(--ink-text);">${escapeHtml(row.heading||'Contact Us')}</h2>
@@ -6678,6 +6678,10 @@ const FAQ_GROUPS = [
     { q:"How do I change my Business Type?", a:"Go to Settings → Business Type. This changes which fields show up when you add Goods — e.g. Clothing shows sizes, Spare Parts shows compatible vehicle, Hotel/Lodging unlocks the Lodging module." },
     { q:"Can I change my business's currency, country, or language later?", a:"Not currently — these are set once when you first create your account and can't be changed from within the app. Contact support if you genuinely need this changed." },
     { q:"Where do I add my business registration number (like a CAC number)?", a:"Go to Settings → Registration Number. This is optional and purely for your own records — it doesn't currently appear on receipts automatically." },
+    { q:"What is a Warehouse, and how do I set one up?", a:"A warehouse holds stock separately from your selling floor — for produced, imported, or bulk goods before they're moved out to a shop. Go to More → Warehouse → Create Warehouse. It gets its own stock tracking with expiry and low-stock alerts, same as any shop, but you can't ring up a sale directly from it — it's for holding stock, not selling." },
+    { q:"How do I move stock from the warehouse to a shop?", a:"Go to More → Warehouse → Move to a Shop. Pick the item, how much to move, and which shop it's going to. The oldest stock moves first automatically, and the cost price and expiry date travel with it — it's not treated as a fresh, disconnected batch at the other end." },
+    { q:"Does a warehouse count toward my plan's shop limit?", a:"Yes — a warehouse counts the same as any other shop toward your Free/Pro/Boss plan limit." },
+    { q:"Can staff access the warehouse?", a:"Any staff member with the \"Can Add Goods\" permission can view and move stock in an existing warehouse. Only the Owner can create a new one." },
     { q:"How do I set up VAT or another tax?", a:"Go to Settings → Tax. Set the tax's name (VAT, GST, whatever applies where you are) and its percentage — it's then applied automatically wherever tax is calculated on a sale." },
     { q:"What is Dark Mode?", a:"A dark, lower-animation display style — easier on the eyes at night and lighter on battery. Toggle it under Settings → Dark Mode." },
     { q:"What is Auto-Renewal?", a:"When it's on, your Pro or Boss plan renews itself automatically using your saved payment method, so you don't have to remember to upgrade again each month or year. Turn it on when you upgrade, or off anytime from Settings — turning it off doesn't cancel your current plan, it just stops it from renewing when it expires." },

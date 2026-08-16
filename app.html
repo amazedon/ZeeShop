@@ -2077,7 +2077,7 @@ function bindShellEvents(){
   const ss = document.getElementById('shop-switcher');
   if(ss) ss.addEventListener('change', ()=>{ state.currentShopId = ss.value; cart=[]; render(); });
   const addShop = document.getElementById('add-shop-btn');
-  if(addShop) addShop.addEventListener('click', handleAddShop);
+  if(addShop) addShop.addEventListener('click', ()=>handleAddShop());
   const alertsBtn = document.getElementById('alerts-btn');
   if(alertsBtn) alertsBtn.addEventListener('click', ()=>{ route='goods'; render(); toast('Showing stock needing attention'); });
 
@@ -2207,6 +2207,11 @@ function planLabel(){
   return plan==='boss' ? 'Boss' : plan==='pro' ? 'Pro' : 'Freemium';
 }
 
+// The "+" next to the shop switcher — purely for a real shop. No warehouse
+// option here at all, since mixing that choice into this flow is exactly
+// what caused the confusion: someone adding a normal shop shouldn't have to
+// even think about warehouses. That decision now only exists in its own
+// dedicated place — see createWarehouseFlow, reached only from More → Warehouse.
 function handleAddShop(){
   const limits = planLimits();
   if(state.shops.length >= limits.shops){
@@ -2214,30 +2219,45 @@ function handleAddShop(){
     return;
   }
   openSheet(`
-    <div class="sheet-head"><h3>Add a Location</h3><button class="close-x" id="sheet-close">✕</button></div>
-    <div class="field"><label>Name</label><input id="as-name" placeholder="e.g. Main Shop, Ikeja Warehouse"></div>
-    <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-bottom:16px;">
-      <input type="checkbox" id="as-warehouse"> 📦 This is a warehouse — for holding stock only, not selling directly to customers
-    </label>
+    <div class="sheet-head"><h3>Add Shop</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="field"><label>Name</label><input id="as-name" placeholder="e.g. Main Shop, Ikeja Branch"></div>
     <button class="btn btn-primary" id="as-submit">Add</button>
   `);
-  document.getElementById('as-submit').addEventListener('click', ()=>{
-    const name = document.getElementById('as-name').value.trim();
-    if(!name){ toast('Please enter a name.'); return; }
-    const isWarehouse = document.getElementById('as-warehouse').checked;
-    const s = {id:uid('shop'), businessId:business().id, name, address:'', phone:'', email:'',
-      receiptFooter:'Thank you for your business!', receiptTerms:'Goods sold in good condition. No refund after payment.',
-      auctionDiscountDefault:30, isWarehouse};
-    state.shops.push(s);
-    state.currentShopId = s.id;
-    enqueueSync('shops','insert', {
-      id: s.id, business_id: s.businessId, name: s.name, address: s.address, phone: s.phone, email: s.email,
-      receipt_footer: s.receiptFooter, receipt_terms: s.receiptTerms, auction_discount_default: s.auctionDiscountDefault,
-      is_warehouse: s.isWarehouse
-    });
-    logAudit(isWarehouse?'warehouse_added':'shop_added', (isWarehouse?'Added warehouse: ':'Added shop: ')+name);
-    closeSheet(); render();
+  document.getElementById('as-submit').addEventListener('click', ()=>saveNewLocation(false));
+}
+// Reached only from More → Warehouse → Create Warehouse. Its own separate
+// entry point, its own separate sheet — no shared form, no checkbox to
+// second-guess, since a warehouse is a distinct kind of location, not an
+// option tacked onto adding a shop.
+function createWarehouseFlow(){
+  const limits = planLimits();
+  if(state.shops.length >= limits.shops){
+    toast(`Your ${planLabel()} plan allows ${limits.shops} shop${limits.shops===1?'':'s'} (this includes any warehouses). Upgrade for more.`);
+    return;
+  }
+  openSheet(`
+    <div class="sheet-head"><h3>Create Warehouse</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <p class="subtle" style="margin-bottom:14px;">📦 For holding stock only — not for selling directly to customers.</p>
+    <div class="field"><label>Name</label><input id="as-name" placeholder="e.g. Ikeja Warehouse"></div>
+    <button class="btn btn-primary" id="as-submit">Create</button>
+  `);
+  document.getElementById('as-submit').addEventListener('click', ()=>saveNewLocation(true));
+}
+function saveNewLocation(isWarehouse){
+  const name = document.getElementById('as-name').value.trim();
+  if(!name){ toast('Please enter a name.'); return; }
+  const s = {id:uid('shop'), businessId:business().id, name, address:'', phone:'', email:'',
+    receiptFooter:'Thank you for your business!', receiptTerms:'Goods sold in good condition. No refund after payment.',
+    auctionDiscountDefault:30, isWarehouse};
+  state.shops.push(s);
+  state.currentShopId = s.id;
+  enqueueSync('shops','insert', {
+    id: s.id, business_id: s.businessId, name: s.name, address: s.address, phone: s.phone, email: s.email,
+    receipt_footer: s.receiptFooter, receipt_terms: s.receiptTerms, auction_discount_default: s.auctionDiscountDefault,
+    is_warehouse: s.isWarehouse
   });
+  logAudit(isWarehouse?'warehouse_added':'shop_added', (isWarehouse?'Added warehouse: ':'Added shop: ')+name);
+  closeSheet(); render();
 }
 
 /* ============================================================
@@ -3806,7 +3826,7 @@ function screenMore(){
     {id:'expenses', ic:'💸', label:'Expenses', show:!isViewer()},
     {id:'lodging', ic:'🛏️', label:'Lodging', show:!isViewer() && isHotelBiz()},
     {id:'suppliers', ic:'🚚', label:'Suppliers', show:!isViewer()},
-    {id:'warehouse', ic:'📦', label:'Warehouse', show:!isViewer() && state.shops.some(s=>s.isWarehouse)},
+    {id:'warehouse', ic:'📦', label:'Warehouse', show:!isViewer() && (isMaster() || canDo('canAddGoods'))},
     {id:'notes', ic:'🗒️', label:'Notes', show:true},
     {id:'reports', ic:'📊', label:'Profit Reports', show:isMaster()},
     {id:'staff', ic:'🧑‍🤝‍🧑', label:'Staff', show:canManageStaff(), badge:pendingNameReqs},
@@ -6799,7 +6819,14 @@ function bindFAQEvents(){
 function screenWarehouse(){
   const warehouses = state.shops.filter(s=>s.isWarehouse);
   const activeWh = currentShop()?.isWarehouse ? currentShop() : warehouses[0];
-  if(!activeWh) return `${subHeader("Warehouse")}<div class="empty"><div class="ic">📦</div><b>No warehouse set up yet</b>Add one from the ＋ next to the shop switcher at the top, and check "This is a warehouse."</div>`;
+  if(!activeWh){
+    if(!isMaster()){
+      return `${subHeader("Warehouse")}<div class="empty"><div class="ic">📦</div><b>No warehouse set up yet</b>Ask your Owner to set one up — once they do, you'll be able to record and move stock here.</div>`;
+    }
+    return `${subHeader("Warehouse")}
+      <div class="empty"><div class="ic">📦</div><b>No warehouse set up yet</b>A warehouse holds stock separately from your shops, so you can record what's produced or imported before it's moved out to sell.</div>
+      <button class="btn btn-primary" id="create-warehouse-btn" style="width:100%;margin-top:14px;">＋ Create Warehouse</button>`;
+  }
 
   const goods = state.goods.filter(g=>g.shopId===activeWh.id);
   const withStock = goods.filter(g=>totalStock(g)>0);
@@ -6834,6 +6861,8 @@ function bindWarehouseEvents(){
   if(picker) picker.addEventListener('change', ()=>{ state.currentShopId = picker.value; save(); render(); });
   const transferBtn = document.getElementById('transfer-stock-btn');
   if(transferBtn) transferBtn.addEventListener('click', openStockTransferModal);
+  const createBtn = document.getElementById('create-warehouse-btn');
+  if(createBtn) createBtn.addEventListener('click', createWarehouseFlow);
 }
 
 function openStockTransferModal(){

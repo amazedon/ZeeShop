@@ -88,6 +88,12 @@ input,select,textarea{font-family:inherit;}
 .btn-ghost{background:transparent;color:var(--ink);text-decoration:underline;padding:6px;font-weight:700;}
 .btn-danger{background:var(--red);color:#fff;}
 .btn-sm{padding:7px 12px;font-size:13px;border-radius:8px;}
+.calc-btn{
+  background:var(--paper);border:none;padding:20px 0;font-size:20px;font-weight:700;
+  color:var(--text);cursor:pointer;transition:background .1s;
+}
+.calc-btn:active{background:var(--paper-dim);}
+.calc-op{background:var(--paper-dim);color:var(--marigold-dark);}
 .link-row{text-align:center;margin-top:16px;font-size:13.5px;color:var(--text-dim);}
 .err{background:var(--red-bg);color:var(--red);padding:9px 12px;border-radius:8px;font-size:13px;margin-bottom:12px;font-weight:600;}
 
@@ -326,6 +332,7 @@ const DB_KEY = "zeeshop_state_v1";
 const DB_KEY_LEGACY = "dukapro_state_v1"; // old brand name — migrated below, then left alone
 
 /* ==== UI icon set (SVG, replaces emoji placeholders) ==== */
+const ICON_CALCULATOR = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="10" x2="8" y2="10.01"/><line x1="12" y1="10" x2="12" y2="10.01"/><line x1="16" y1="10" x2="16" y2="10.01"/><line x1="8" y1="14" x2="8" y2="14.01"/><line x1="12" y1="14" x2="12" y2="14.01"/><line x1="16" y1="14" x2="16" y2="14.01"/><line x1="8" y1="18" x2="8" y2="18.01"/><line x1="12" y1="18" x2="12" y2="18.01"/><line x1="16" y1="18" x2="16" y2="18.01"/></svg>`;
 const ICON_BELL = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>`;
 const ICON_CLOSE = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`;
 const ICON_LOCK = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`;
@@ -832,6 +839,7 @@ function renderAuthScreen(){
 function renderLogin(){
   return `
   <div class="center-screen">
+    <div style="width:100%;max-width:400px;">
     <div class="auth-card">
       <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">ZeeShop</div></div>
       <div class="tagline">Your Shop, In Your Pocket.</div>
@@ -852,12 +860,14 @@ function renderLogin(){
     <div style="text-align:center;margin-top:18px;font-size:11.5px;color:rgba(255,255,255,0.55);">
       <a href="privacy.html" target="_blank" rel="noopener" style="color:rgba(255,255,255,0.8);text-decoration:underline;">Privacy Policy</a>
     </div>
+  </div>
   </div>`;
 }
 
 function renderJoinShop(){
   return `
   <div class="center-screen">
+    <div style="width:100%;max-width:400px;">
     <div class="auth-card">
       <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">ZeeShop</div></div>
       <div class="tagline">Join your shop with the code your manager gave you.</div>
@@ -872,6 +882,7 @@ function renderJoinShop(){
     <div style="text-align:center;margin-top:18px;font-size:11.5px;color:rgba(255,255,255,0.55);">
       <a href="privacy.html" target="_blank" rel="noopener" style="color:rgba(255,255,255,0.8);text-decoration:underline;">Privacy Policy</a>
     </div>
+  </div>
   </div>`;
 }
 
@@ -1053,6 +1064,7 @@ function bindForgotPasswordEvents(){
 function renderSignup(){
   return `
   <div class="center-screen">
+    <div style="width:100%;max-width:400px;">
     <div class="auth-card">
       <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">ZeeShop</div></div>
       <div class="tagline">Set up your business — takes 2 minutes.</div>
@@ -1099,12 +1111,14 @@ function renderSignup(){
     <div style="text-align:center;margin-top:18px;font-size:11.5px;color:rgba(255,255,255,0.55);">
       <a href="privacy.html" target="_blank" rel="noopener" style="color:rgba(255,255,255,0.8);text-decoration:underline;">Privacy Policy</a>
     </div>
+  </div>
   </div>`;
 }
 function renderSignupVerify(){
   const email = pendingSignupData ? pendingSignupData.email : '';
   return `
   <div class="center-screen">
+    <div style="width:100%;max-width:400px;">
     <div class="auth-card">
       <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">ZeeShop</div></div>
       <div class="tagline">Verify your email to finish creating your shop.</div>
@@ -1121,6 +1135,7 @@ function renderSignupVerify(){
     <div style="text-align:center;margin-top:18px;font-size:11.5px;color:rgba(255,255,255,0.55);">
       <a href="privacy.html" target="_blank" rel="noopener" style="color:rgba(255,255,255,0.8);text-decoration:underline;">Privacy Policy</a>
     </div>
+  </div>
   </div>`;
 }
 
@@ -1767,6 +1782,7 @@ function renderRoute(){
     case 'settings': return screenSettings();
     case 'audit': return screenAudit();
     case 'notes': return screenNotes();
+    case 'calculator': return screenCalculator();
     case 'history': return screenHistory();
     case 'expenses': return screenExpenses();
     case 'suppliers': return screenSuppliers();
@@ -1985,7 +2001,7 @@ function screenDashboard(){
 function greeting(){ const h=new Date().getHours(); return h<12?'Good morning':h<17?'Good afternoon':'Good evening'; }
 function subHeader(title){
   return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
-    <button data-goto="more" style="background:var(--paper-dim);border:none;width:34px;height:34px;border-radius:10px;font-size:17px;color:var(--ink);flex-shrink:0;">←</button>
+    <button data-goto="more" style="background:var(--paper-dim);border:none;width:44px;height:44px;border-radius:12px;font-size:22px;color:var(--ink);flex-shrink:0;">←</button>
     <h2 class="screen-title" style="margin:0;">${title}</h2>
   </div>`;
 }
@@ -2273,6 +2289,7 @@ function bindRouteEvents(){
   if(route==='closeday') bindCloseDayEvents();
   if(route==='staff') bindStaffEvents();
   if(route==='notes') bindNotesEvents();
+  if(route==='calculator') bindCalculatorEvents();
   if(route==='history') bindHistoryEvents();
   if(route==='expenses') bindExpensesEvents();
   if(route==='suppliers') bindSuppliersEvents();
@@ -3313,6 +3330,7 @@ function screenMore(){
     {id:'lodging', ic:ICON_BED, label:'Lodging', show:!isViewer() && isHotelBiz()},
     {id:'suppliers', ic:ICON_TRUCK, label:'Suppliers', show:!isViewer()},
     {id:'notes', ic:ICON_NOTEBOOK, label:'Notes', show:true},
+    {id:'calculator', ic:ICON_CALCULATOR, label:'Calculator', show:true},
     {id:'reports', ic:ICON_BARCHART, label:'Profit Reports', show:isMaster()},
     {id:'staff', ic:ICON_USERS, label:'Staff', show:canManageStaff(), badge:pendingNameReqs},
     {id:'audit', ic:ICON_FILE, label:'Audit Log', show:isMaster()},
@@ -3330,6 +3348,9 @@ function screenMore(){
         ${i.badge?`<span class="pill pill-amber" style="margin-right:8px;">${i.badge}</span>`:''}
         <div>›</div>
       </div>`).join('')}
+    <div class="list-row" id="do-share-app" style="cursor:pointer;">
+      <div class="thumb">${ICON_EXPORT}</div><div class="info"><div class="t1">Share This App</div><div class="t2 subtle">Tell another shop owner about ZeeShop</div></div><div>›</div>
+    </div>
     <div class="divider"></div>
     <div class="list-row" id="do-logout" style="cursor:pointer;">
       <div class="thumb">${ICON_LOCK}</div><div class="info"><div class="t1">Lock / Switch User</div></div><div>›</div>
@@ -3340,6 +3361,21 @@ function screenMore(){
   `;
 }
 function bindMoreEvents(){
+  const shareAppBtn = document.getElementById('do-share-app');
+  if(shareAppBtn) shareAppBtn.addEventListener('click', async ()=>{
+    const shareData = {
+      title: 'ZeeShop — Your Shop, In Your Pocket',
+      text: 'I use ZeeShop to manage sales, stock and customers right from my phone. Check it out:',
+      url: window.location.origin + '/index.html'
+    };
+    if(navigator.share){
+      try{ await navigator.share(shareData); logAudit('app_shared', 'Shared the app'); }
+      catch(e){ /* user cancelled — not an error */ }
+    } else {
+      try{ await navigator.clipboard.writeText(shareData.text + ' ' + shareData.url); toast('Link copied ✅ — paste it into WhatsApp, Email, anywhere.'); }
+      catch(e){ toast("Couldn't share or copy on this browser."); }
+    }
+  });
   const lo = document.getElementById('do-logout');
   if(lo) lo.addEventListener('click', ()=>{ state.sessionUserId=null; forceFullLogin=false; route='dashboard'; render(); });
   const flo = document.getElementById('do-full-logout');
@@ -3347,6 +3383,106 @@ function bindMoreEvents(){
     if(confirm('Sign out of this business on this device?')){
       state.sessionUserId=null; forceFullLogin=true; authMode='login'; pendingSignupData=null; authError=''; route='dashboard'; render();
     }
+  });
+}
+
+/* ============================================================
+   CALCULATOR — simple standalone calculator, sequential
+   (left-to-right) evaluation like a standard pocket calculator,
+   not full operator precedence. No eval() — everything here is
+   plain arithmetic on numbers we control.
+   ============================================================ */
+let calcDisplay = '0';
+let calcStored = null;
+let calcOperator = null;
+let calcWaitingForNext = false;
+function calcInputDigit(d){
+  if(calcWaitingForNext){ calcDisplay = d; calcWaitingForNext = false; }
+  else { calcDisplay = calcDisplay==='0' ? d : calcDisplay + d; }
+}
+function calcInputDot(){
+  if(calcWaitingForNext){ calcDisplay = '0.'; calcWaitingForNext = false; return; }
+  if(!calcDisplay.includes('.')) calcDisplay += '.';
+}
+function calcApplyOp(a, b, op){
+  if(op==='+') return a+b;
+  if(op==='-') return a-b;
+  if(op==='×') return a*b;
+  if(op==='÷') return b===0 ? NaN : a/b;
+  return b;
+}
+function calcSetOperator(op){
+  const val = parseFloat(calcDisplay);
+  if(calcOperator && !calcWaitingForNext){
+    calcStored = calcApplyOp(calcStored, val, calcOperator);
+    calcDisplay = Number.isNaN(calcStored) ? 'Error' : String(roundClean(calcStored));
+  } else {
+    calcStored = val;
+  }
+  calcOperator = op;
+  calcWaitingForNext = true;
+}
+function calcEquals(){
+  if(calcOperator==null) return;
+  const val = parseFloat(calcDisplay);
+  const result = calcApplyOp(calcStored, val, calcOperator);
+  calcDisplay = Number.isNaN(result) ? 'Error' : String(roundClean(result));
+  calcStored = null; calcOperator = null; calcWaitingForNext = true;
+}
+function calcClear(){ calcDisplay='0'; calcStored=null; calcOperator=null; calcWaitingForNext=false; }
+function calcBackspace(){
+  if(calcWaitingForNext) return;
+  calcDisplay = calcDisplay.length>1 ? calcDisplay.slice(0,-1) : '0';
+}
+function calcPercent(){ calcDisplay = String(roundClean(parseFloat(calcDisplay)/100)); }
+function calcToggleSign(){ calcDisplay = String(roundClean(parseFloat(calcDisplay) * -1)); }
+function roundClean(n){ return Math.round(n*1e8)/1e8; }
+function screenCalculator(){
+  return `
+    ${subHeader('Calculator')}
+    <div class="card" style="padding:0;overflow:hidden;">
+      <div style="background:var(--ink);color:#fff;padding:28px 20px;text-align:right;font-size:40px;font-weight:800;letter-spacing:-0.02em;word-break:break-all;" id="calc-display">${escapeHtml(calcDisplay)}</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);">
+        <button class="calc-btn" data-calc="clear" style="grid-column:span 2;">C</button>
+        <button class="calc-btn" data-calc="percent">%</button>
+        <button class="calc-btn calc-op" data-calc="÷">÷</button>
+        <button class="calc-btn" data-calc="7">7</button>
+        <button class="calc-btn" data-calc="8">8</button>
+        <button class="calc-btn" data-calc="9">9</button>
+        <button class="calc-btn calc-op" data-calc="×">×</button>
+        <button class="calc-btn" data-calc="4">4</button>
+        <button class="calc-btn" data-calc="5">5</button>
+        <button class="calc-btn" data-calc="6">6</button>
+        <button class="calc-btn calc-op" data-calc="-">−</button>
+        <button class="calc-btn" data-calc="1">1</button>
+        <button class="calc-btn" data-calc="2">2</button>
+        <button class="calc-btn" data-calc="3">3</button>
+        <button class="calc-btn calc-op" data-calc="+">+</button>
+        <button class="calc-btn" data-calc="sign">±</button>
+        <button class="calc-btn" data-calc="0">0</button>
+        <button class="calc-btn" data-calc=".">.</button>
+        <button class="calc-btn calc-op" data-calc="=" style="background:var(--marigold);color:var(--ink-text);">=</button>
+        <button class="calc-btn" data-calc="back" style="grid-column:span 4;">${ICON_CLOSE} Backspace</button>
+      </div>
+    </div>
+  `;
+}
+function bindCalculatorEvents(){
+  const disp = document.getElementById('calc-display');
+  const refresh = ()=>{ if(disp) disp.textContent = calcDisplay; };
+  document.querySelectorAll('[data-calc]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const k = b.dataset.calc;
+      if(k==='clear') calcClear();
+      else if(k==='back') calcBackspace();
+      else if(k==='percent') calcPercent();
+      else if(k==='sign') calcToggleSign();
+      else if(k==='.') calcInputDot();
+      else if(k==='=') calcEquals();
+      else if(['+','-','×','÷'].includes(k)) calcSetOperator(k);
+      else calcInputDigit(k);
+      refresh();
+    });
   });
 }
 

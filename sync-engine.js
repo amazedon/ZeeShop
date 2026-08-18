@@ -1,5 +1,5 @@
 /* ============================================================
-   ZED — OFFLINE SYNC ENGINE (Phase 0 foundation)
+   ZEESHOP — OFFLINE SYNC ENGINE (Phase 0 foundation)
    ============================================================
    How it works:
    1. Every local change (create/update/delete) is recorded with
@@ -23,7 +23,7 @@
    copy and the Supabase copy consistent by itself.
    ============================================================ */
 
-const SYNC_QUEUE_KEY = 'zed_sync_queue_v1';
+const SYNC_QUEUE_KEY = 'zeeshop_sync_queue_v1';
 const SYNC_SUPABASE_URL = 'https://beypnkzrgqrkjttsxlju.supabase.co';
 
 function loadSyncQueue(){
@@ -64,7 +64,7 @@ async function registerBackgroundSync(){
   try{
     if('serviceWorker' in navigator && 'SyncManager' in window){
       const reg = await navigator.serviceWorker.ready;
-      await reg.sync.register('zed-flush-sync-queue');
+      await reg.sync.register('zeeshop-flush-sync-queue');
     }
   }catch(e){ /* not supported on this browser — the normal online/load triggers still cover it */ }
 }
@@ -75,7 +75,7 @@ async function registerBackgroundSync(){
 // itself has on most browsers.
 if('serviceWorker' in navigator){
   navigator.serviceWorker.addEventListener('message', (event)=>{
-    if(event.data && event.data.type === 'ZED_FLUSH_SYNC_QUEUE'){
+    if(event.data && event.data.type === 'ZEESHOP_FLUSH_SYNC_QUEUE'){
       flushSyncQueue();
     }
   });
@@ -87,15 +87,15 @@ let syncInProgress = false;
 // can tell WHY nothing is syncing instead of it failing completely silently.
 // This was the root cause of staff data never reaching other devices: the
 // queue blocked forever with no signal anywhere that it was blocked.
-window.__zedSyncStatus = { lastAttempt: null, lastError: null, pendingCount: 0 };
+window.__zeeshopSyncStatus = { lastAttempt: null, lastError: null, pendingCount: 0 };
 function noteSyncStatus(error){
-  window.__zedSyncStatus.lastAttempt = new Date().toISOString();
-  window.__zedSyncStatus.lastError = error || null;
-  window.__zedSyncStatus.pendingCount = loadSyncQueue().length;
-  if(error) console.warn('[zed-sync]', error);
+  window.__zeeshopSyncStatus.lastAttempt = new Date().toISOString();
+  window.__zeeshopSyncStatus.lastError = error || null;
+  window.__zeeshopSyncStatus.pendingCount = loadSyncQueue().length;
+  if(error) console.warn('[zeeshop-sync]', error);
 }
 
-const DEAD_LETTER_KEY = 'zed_sync_dead_letter_v1';
+const DEAD_LETTER_KEY = 'zeeshop_sync_dead_letter_v1';
 function moveToDeadLetter(item, reason){
   try{
     const dead = JSON.parse(localStorage.getItem(DEAD_LETTER_KEY) || '[]');

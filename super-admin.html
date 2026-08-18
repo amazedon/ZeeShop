@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Zed — Super Admin</title>
+<title>ZeeShop — Super Admin</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   :root{
@@ -71,7 +71,7 @@
 
 <div id="login-screen" class="center-screen">
   <div class="auth-card">
-    <div class="brand" style="margin-bottom:4px;color:var(--ink);"><div class="brand-mark">Z</div>Zed Super Admin</div>
+    <div class="brand" style="margin-bottom:4px;color:var(--ink);"><div class="brand-mark">Z</div>ZeeShop Super Admin</div>
     <p class="subtle">Platform-wide view — all registered businesses and their subscription status.</p>
     <div id="login-err"></div>
     <div class="field"><label>Email</label><input id="login-email" type="email" placeholder="you@business.com"></div>
@@ -90,7 +90,7 @@
 
 <div id="dashboard-screen" class="hidden">
   <div class="topbar">
-    <div class="brand"><div class="brand-mark">Z</div>Zed Super Admin</div>
+    <div class="brand"><div class="brand-mark">Z</div>ZeeShop Super Admin</div>
     <button id="logout-btn">Log Out</button>
   </div>
   <main>
@@ -135,7 +135,7 @@
 
 <div id="unauthorized-screen" class="center-screen hidden">
   <div class="auth-card unauthorized">
-    <div class="brand" style="margin-bottom:12px;color:var(--ink);justify-content:center;"><div class="brand-mark">Z</div>Zed Super Admin</div>
+    <div class="brand" style="margin-bottom:12px;color:var(--ink);justify-content:center;"><div class="brand-mark">Z</div>ZeeShop Super Admin</div>
     <div class="err">This account isn't authorized for super admin access. If this should be your account, ask an existing super admin to add you to the <code>super_admins</code> table.</div>
     <button class="btn btn-primary" id="unauthorized-back-btn" style="margin-top:6px;">Back to Log In</button>
   </div>
@@ -214,7 +214,7 @@
       unauthorizedScreen.classList.add('hidden');
       return;
     }
-    // Signing in only proves this is A valid Zed account (owner, staff,
+    // Signing in only proves this is A valid ZeeShop account (owner, staff,
     // anyone) — it does NOT prove super-admin access. That's verified here,
     // server-side, before anything privileged is shown.
     try{
@@ -427,7 +427,7 @@
     const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `zed-businesses-${new Date().toISOString().slice(0,10)}.csv`;
+    a.href = url; a.download = `zeeshop-businesses-${new Date().toISOString().slice(0,10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   });

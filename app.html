@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no">
-<title>Zed — Your Shop, In Your Pocket</title>
+<title>ZeeShop — Your Shop, In Your Pocket</title>
 <style>
 :root{
   color-scheme: light;
@@ -140,7 +140,7 @@ input,select,textarea{font-family:inherit;}
 
 /* Small always-visible sync-health dot in the topbar — quiet by default
    (nothing to see when sync is healthy), only draws attention when there's
-   something waiting or stuck. Status is written in from window.__zedSyncStatus. */
+   something waiting or stuck. Status is written in from window.__zeeshopSyncStatus. */
 .sync-dot{
   width:9px;height:9px;border-radius:50%;flex-shrink:0;background:#4CAF50;
   box-shadow:0 0 0 2px rgba(255,255,255,0.15);transition:background .2s;
@@ -371,16 +371,58 @@ if ('serviceWorker' in navigator) {
 
 <script>
 /* =====================================================================
-   ZED — client-side prototype implementing the core flows from the
-   Zed Global Micro-Retailer OS spec. Runs fully offline in localStorage.
+   ZEESHOP — client-side prototype implementing the core flows from the
+   ZeeShop Global Micro-Retailer OS spec. Runs fully offline in localStorage.
    Real deployment would sync this local store to a Postgres backend,
    run ML recognition on-device, and route push/SMS through native APIs —
    those server/native pieces can't run inside a browser file, so they
    are represented here with honest UI stubs and simulated flows.
    ===================================================================== */
 
-const DB_KEY = "zed_state_v1";
+const DB_KEY = "zeeshop_state_v1";
 const DB_KEY_LEGACY = "dukapro_state_v1"; // old brand name — migrated below, then left alone
+
+/* ==== UI icon set (SVG, replaces emoji placeholders) ==== */
+const ICON_BELL = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>`;
+const ICON_CLOSE = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`;
+const ICON_LOCK = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`;
+const ICON_EXPORT = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 8 5-5 5 5"/><path d="M5 21h14"/></svg>`;
+const ICON_BOX = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8V7a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 7v10a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 17v-1"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>`;
+const ICON_RECEIPT = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2h16v20l-3-2-2 2-2-2-2 2-2-2-2 2-3-2Z"/><path d="M8 7h8"/><path d="M8 11h8"/><path d="M8 15h5"/></svg>`;
+const ICON_PIN = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1Z"/></svg>`;
+const ICON_EDIT_NOTE = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h11"/><path d="M4 12h7"/><path d="M4 18h6"/><path d="m19 12-4 4 4 4 4-4Z" fill="none"/></svg>`;
+const ICON_CHECK_CIRCLE = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>`;
+const ICON_PENCIL = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>`;
+const ICON_PHONE = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.832 16.568a1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.734 1.6l-.46.36a1 1 0 0 0-.302 1.214 14.7 14.7 0 0 0 6.328 6.392Z"/></svg>`;
+const ICON_CASH = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M6 12h.01M18 12h.01"/></svg>`;
+const ICON_CLIPBOARD = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>`;
+const ICON_INBOX_EMPTY = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11Z"/></svg>`;
+const ICON_USER = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`;
+const ICON_SEARCH = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`;
+const ICON_BAN = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg>`;
+const ICON_MAIL = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>`;
+const ICON_TRUCK = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></svg>`;
+const ICON_CARD = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>`;
+const ICON_NOTEBOOK = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6h4"/><path d="M2 10h4"/><path d="M2 14h4"/><path d="M2 18h4"/><rect x="6" y="4" width="16" height="16" rx="2"/></svg>`;
+const ICON_SETTINGS = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>`;
+const ICON_FILE = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg>`;
+const ICON_WARNING = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>`;
+const ICON_HASH = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg>`;
+const ICON_CHAT = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>`;
+const ICON_BED = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4v16"/><path d="M2 8h18a2 2 0 0 1 2 2v10"/><path d="M2 17h20"/><path d="M6 8v9"/></svg>`;
+const ICON_CALENDAR = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/></svg>`;
+const ICON_TRASH = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
+const ICON_ALERT_DOT = `<svg width="18" height="18" viewBox="0 0 24 24" fill="#e5484d" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8" fill="#e5484d" stroke="none"/></svg>`;
+const ICON_TREND_DOWN = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 17 13.5 8.5 8.5 13.5 2 7"/><polyline points="16 17 22 17 22 11"/></svg>`;
+const ICON_USERS = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`;
+const ICON_BARCHART = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>`;
+const ICON_HANDSHAKE = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m11 17 2 2a1 1 0 1 0 3-3"/><path d="m14 14 2.5 2.5a1 1 0 1 0 3-3l-3.88-3.88a3 3 0 0 0-4.24 0l-.88.88a1 1 0 1 1-3-3l2.81-2.81a5.79 5.79 0 0 1 7.06-.87l.47.28a2 2 0 0 0 1.42.25L21 4"/><path d="m21 3 1 11h-2"/><path d="M3 3 2 14l6.5 6.5a1 1 0 1 0 3-3"/><path d="M3 4h8"/></svg>`;
+const ICON_HELP = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>`;
+const ICON_LOGOUT = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>`;
+const ICON_WALLET = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>`;
+const ICON_REFRESH = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M8 16H3v5"/></svg>`;
+const ICON_EYE = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg>`;
+const ICON_EYE_OFF = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/></svg>`;
 const CCY = {NGN:"₦",KES:"KSh",GHS:"GH₵",INR:"₹",USD:"$",PHP:"₱",MXN:"$",GBP:"£",EUR:"€",ZAR:"R",CAD:"$",AUD:"$",AED:"AED ",CNY:"¥",JPY:"¥",BRL:"R$",EGP:"E£",OTHER:""};
 // Full list of countries with their international calling codes (ITU E.164 codes).
 const COUNTRIES = [
@@ -753,8 +795,8 @@ function render(){
     app.innerHTML = `
       <div class="center-screen">
         <div class="auth-card" style="text-align:center;">
-          <div class="brand" style="justify-content:center;"><div class="brand-mark">Z</div><div class="brand-name">Zed</div></div>
-          <div style="font-size:40px;margin:10px 0;">${isDeletionPending?'🗑️':'🔒'}</div>
+          <div class="brand" style="justify-content:center;"><div class="brand-mark">Z</div><div class="brand-name">ZeeShop</div></div>
+          <div style="font-size:40px;margin:10px 0;">${isDeletionPending?ICON_TRASH:ICON_LOCK}</div>
           ${isDeletionPending ? `
             <h2 style="margin-bottom:8px;">This account is scheduled for deletion</h2>
             <p class="subtle">${escapeHtml(state.business.name||'This business')} and all its data will be permanently deleted on or after ${new Date(new Date(state.business.deletionRequestedAt).getTime()+30*86400000).toLocaleDateString()}. If this wasn't intentional, contact support right away to cancel it.</p>
@@ -800,7 +842,7 @@ function render(){
   updateSyncDot();
 }
 
-// Reflects window.__zedSyncStatus (written by sync-engine.js) as a small
+// Reflects window.__zeeshopSyncStatus (written by sync-engine.js) as a small
 // dot in the topbar — green when caught up, amber while something's
 // queued, red if a push keeps failing, gray if this device is offline.
 // Checked on every render plus a light interval, since sync happens in
@@ -808,7 +850,7 @@ function render(){
 function updateSyncDot(){
   const dot = document.getElementById('sync-dot');
   if(!dot) return;
-  const st = window.__zedSyncStatus;
+  const st = window.__zeeshopSyncStatus;
   if(!navigator.onLine){ dot.dataset.state = 'offline'; dot.title = 'Offline — will sync when back online'; return; }
   if(!st){ dot.dataset.state = ''; dot.title = 'Sync status unavailable'; return; }
   if(st.lastError && st.pendingCount > 0){ dot.dataset.state = 'error'; dot.title = st.lastError; return; }
@@ -880,7 +922,7 @@ function renderLogin(){
   return `
   <div class="center-screen">
     <div class="auth-card">
-      <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">Zed</div></div>
+      <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">ZeeShop</div></div>
       <div class="tagline">Your Shop, In Your Pocket.</div>
       ${authError ? `<div class="err">${authError}</div>` : ''}
       ${googleAuthButton()}
@@ -890,6 +932,9 @@ function renderLogin(){
       <div class="link-row"><a href="#" id="go-forgot" style="color:var(--text-dim);">Forgot password?</a></div>
       <div class="link-row">No business yet? <a href="#" id="go-signup" style="color:var(--marigold-dark);font-weight:800;">Create one free</a></div>
       <div class="link-row">Joining a shop as staff? <a href="#" id="go-join-shop" style="color:var(--teal);font-weight:800;">Enter your code</a></div>
+    </div>
+    <div style="text-align:center;margin-top:18px;font-size:11.5px;color:rgba(255,255,255,0.55);">
+      <a href="privacy.html" target="_blank" rel="noopener" style="color:rgba(255,255,255,0.8);text-decoration:underline;">Privacy Policy</a>
     </div>
   </div>`;
 }
@@ -910,7 +955,7 @@ function renderJoinShop(){
   return `
   <div class="center-screen">
     <div class="auth-card">
-      <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">Zed</div></div>
+      <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">ZeeShop</div></div>
       <div class="tagline">Enter the code your Owner or manager gave you.</div>
       ${authError ? `<div class="err">${authError}</div>` : ''}
       <div class="field"><label>Code</label><input id="join-any-code-input" placeholder="6 or 8-digit code" inputmode="numeric" maxlength="8" value="${escAttr(code)}"></div>
@@ -928,6 +973,9 @@ function renderJoinShop(){
         <button class="btn btn-primary" id="btn-reconnect-shop">Sign In</button>
       ` : `<button class="btn btn-primary" disabled>Enter your code above</button>`}
       <div class="link-row"><a href="#" id="go-login-from-join" style="color:var(--text-dim);">Back to log in</a></div>
+    </div>
+    <div style="text-align:center;margin-top:18px;font-size:11.5px;color:rgba(255,255,255,0.55);">
+      <a href="privacy.html" target="_blank" rel="noopener" style="color:rgba(255,255,255,0.8);text-decoration:underline;">Privacy Policy</a>
     </div>
   </div>`;
 }
@@ -1026,7 +1074,7 @@ function renderForgotPassword(){
   return `
   <div class="center-screen">
     <div class="auth-card">
-      <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">Zed</div></div>
+      <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">ZeeShop</div></div>
       <div class="tagline">Reset your password</div>
       ${forgotError ? `<div class="err">${forgotError}</div>` : ''}
       ${forgotStep===1? `
@@ -1137,7 +1185,7 @@ function renderSignup(){
   return `
   <div class="center-screen">
     <div class="auth-card">
-      <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">Zed</div></div>
+      <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">ZeeShop</div></div>
       <div class="tagline">Set up your business — takes 2 minutes.</div>
       ${authError ? `<div class="err">${authError}</div>` : ''}
       ${googleAuthButton()}
@@ -1169,10 +1217,13 @@ function renderSignup(){
       <div class="field"><label>Password</label><input id="su-pass" type="password" placeholder="Min 6 characters"></div>
       <label style="display:flex;gap:8px;align-items:flex-start;font-size:12px;color:var(--text-dim);margin-bottom:16px;">
         <input type="checkbox" id="su-consent" style="margin-top:2px;">
-        I agree my data is processed to run my shop, per Zed's privacy terms. I can export or delete it anytime.
+        I agree my data is processed to run my shop, per ZeeShop's <a href="privacy.html" target="_blank" rel="noopener" style="color:var(--marigold-dark);font-weight:700;">Privacy Policy</a>. I can export or delete it anytime.
       </label>
       <button class="btn btn-primary" id="btn-signup">Create My Shop — Free</button>
       <div class="link-row">Already have a business? <a href="#" id="go-login" style="color:var(--marigold-dark);font-weight:800;">Log in</a></div>
+    </div>
+    <div style="text-align:center;margin-top:18px;font-size:11.5px;color:rgba(255,255,255,0.55);">
+      <a href="privacy.html" target="_blank" rel="noopener" style="color:rgba(255,255,255,0.8);text-decoration:underline;">Privacy Policy</a>
     </div>
   </div>`;
 }
@@ -1181,7 +1232,7 @@ function renderSignupVerify(){
   return `
   <div class="center-screen">
     <div class="auth-card">
-      <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">Zed</div></div>
+      <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">ZeeShop</div></div>
       <div class="tagline">Verify your email to finish creating your shop.</div>
       ${signupOtpError ? `<div class="err">${signupOtpError}</div>` : ''}
       <p class="subtle" style="margin-bottom:16px;">We sent a 6-digit code to <b>${escapeHtml(email)}</b>. Enter it below — it expires in 5 minutes.</p>
@@ -1192,6 +1243,9 @@ function renderSignupVerify(){
         &nbsp;·&nbsp;
         <a href="#" id="back-to-signup" style="color:var(--text-dim);">Back</a>
       </div>
+    </div>
+    <div style="text-align:center;margin-top:18px;font-size:11.5px;color:rgba(255,255,255,0.55);">
+      <a href="privacy.html" target="_blank" rel="noopener" style="color:rgba(255,255,255,0.8);text-decoration:underline;">Privacy Policy</a>
     </div>
   </div>`;
 }
@@ -1725,7 +1779,7 @@ function renderUserSelect(){
   return `
   <div class="center-screen">
     <div class="auth-card" style="max-width:420px;">
-      <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">Zed</div></div>
+      <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">ZeeShop</div></div>
       <div class="tagline">${business().name} — who's on shift?</div>
       <div class="userselect-grid">
         ${users.map(u=>`
@@ -2019,7 +2073,7 @@ function openJoinFlow(){
     return;
   }
   openSheet(`
-    <div class="sheet-head"><h3>Join This Business</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Join This Business</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <p class="subtle" style="margin-bottom:14px;">Ask the Owner for the 6-digit code showing on their Staff screen.</p>
     ${joinFlowError ? `<div class="err">${escapeHtml(joinFlowError)}</div>` : ''}
     <div class="field"><label>6-Digit Code</label><input id="jf-code" placeholder="000000" inputmode="numeric" maxlength="6"></div>
@@ -2137,7 +2191,7 @@ function renderShell(){
     <div class="topbar">
       <div class="brand-mark">Z</div>
       <select class="shop-switch" id="shop-switcher">
-        ${visibleShops.length? visibleShops.map(s=>`<option value="${s.id}" ${s.id===state.currentShopId?'selected':''}>${s.isWarehouse?'📦 ':''}${s.name}</option>`).join('')
+        ${visibleShops.length? visibleShops.map(s=>`<option value="${s.id}" ${s.id===state.currentShopId?'selected':''}>${s.isWarehouse?'${ICON_BOX} ':''}${s.name}</option>`).join('')
           : `<option value="">No shops assigned yet</option>`}
       </select>
       ${isMaster() ? `<button class="icon-btn" id="add-shop-btn" title="Add shop">＋</button>`:''}
@@ -2329,7 +2383,7 @@ function handleAddShop(){
     return;
   }
   openSheet(`
-    <div class="sheet-head"><h3>Add Shop</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Add Shop</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <div class="field"><label>Name</label><input id="as-name" placeholder="e.g. Main Shop, Ikeja Branch"></div>
     <button class="btn btn-primary" id="as-submit">Add</button>
   `);
@@ -2346,8 +2400,8 @@ function createWarehouseFlow(){
     return;
   }
   openSheet(`
-    <div class="sheet-head"><h3>Create Warehouse</h3><button class="close-x" id="sheet-close">✕</button></div>
-    <p class="subtle" style="margin-bottom:14px;">📦 For holding stock only — not for selling directly to customers.</p>
+    <div class="sheet-head"><h3>Create Warehouse</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
+    <p class="subtle" style="margin-bottom:14px;">${ICON_BOX} For holding stock only — not for selling directly to customers.</p>
     <div class="field"><label>Name</label><input id="as-name" placeholder="e.g. Ikeja Warehouse"></div>
     <button class="btn btn-primary" id="as-submit">Create</button>
   `);
@@ -2410,27 +2464,27 @@ function screenDashboard(){
     ${(alerts.expiring>0 || alerts.dueSoon>0 || alerts.overdue>0 || alerts.lowStock>0 || outStock.length>0) ? `
       <div class="section-head"><h3>Needs Attention</h3></div>
       ${alerts.overdue>0 && isMaster()?`<div class="card" style="display:flex;align-items:center;gap:10px;" data-goto="credit">
-        <div style="font-size:20px;">🔴</div><div style="flex:1;"><b>${alerts.overdue} customer(s)</b> overdue on credit — worth a reminder</div>
+        <div style="font-size:20px;">${ICON_ALERT_DOT}</div><div style="flex:1;"><b>${alerts.overdue} customer(s)</b> overdue on credit — worth a reminder</div>
       </div>`:''}
       ${alerts.expiring>0?`<div class="card" style="display:flex;align-items:center;gap:10px;" data-goto="goods">
         <div style="font-size:20px;">⏰</div><div style="flex:1;"><b>${alerts.expiring} item(s)</b> expiring within 14 days</div>
       </div>`:''}
       ${alerts.lowStock>0?`<div class="card" style="display:flex;align-items:center;gap:10px;" data-goto="goods">
-        <div style="font-size:20px;">📉</div><div style="flex:1;"><b>${alerts.lowStock} item(s)</b> running low — worth restocking soon</div>
+        <div style="font-size:20px;">${ICON_TREND_DOWN}</div><div style="flex:1;"><b>${alerts.lowStock} item(s)</b> running low — worth restocking soon</div>
       </div>`:''}
       ${outStock.length>0?`<div class="card" style="display:flex;align-items:center;gap:10px;" data-goto="goods">
-        <div style="font-size:20px;">📭</div><div style="flex:1;"><b>${outStock.length} item(s)</b> out of stock</div>
+        <div style="font-size:20px;">${ICON_INBOX_EMPTY}</div><div style="flex:1;"><b>${outStock.length} item(s)</b> out of stock</div>
       </div>`:''}
       ${alerts.dueSoon>0 && isMaster()?`<div class="card" style="display:flex;align-items:center;gap:10px;" data-goto="credit">
-        <div style="font-size:20px;">💳</div><div style="flex:1;"><b>${alerts.dueSoon} customer(s)</b> owe you, due within 2 days</div>
+        <div style="font-size:20px;">${ICON_CARD}</div><div style="flex:1;"><b>${alerts.dueSoon} customer(s)</b> owe you, due within 2 days</div>
       </div>`:''}
-    ` : `<div class="empty"><div class="ic">✅</div><b>All clear</b>No urgent alerts right now.</div>`}
+    ` : `<div class="empty"><div class="ic">${ICON_CHECK_CIRCLE}</div><b>All clear</b>No urgent alerts right now.</div>`}
 
     <div class="section-head"><h3>Quick Actions</h3></div>
     <div style="display:flex;gap:10px;">
-      ${!isViewer() && canDo('canSell')?`<button class="btn btn-dark" style="flex:1;" data-goto="sale">🧾 New Sale</button>`:''}
-      ${isMaster()?`<button class="btn btn-outline" style="flex:1;" data-goto="closeday">🔒 Close Day</button>`:''}
-      ${isStaff() && canDo('canRecordCash')?`<button class="btn btn-outline" style="flex:1;" data-goto="closeday">🔒 Close My Shift</button>`:''}
+      ${!isViewer() && canDo('canSell')?`<button class="btn btn-dark" style="flex:1;" data-goto="sale">${ICON_RECEIPT} New Sale</button>`:''}
+      ${isMaster()?`<button class="btn btn-outline" style="flex:1;" data-goto="closeday">${ICON_LOCK} Close Day</button>`:''}
+      ${isStaff() && canDo('canRecordCash')?`<button class="btn btn-outline" style="flex:1;" data-goto="closeday">${ICON_LOCK} Close My Shift</button>`:''}
     </div>
 
     ${isMaster() ? staffActivityFeed() : ''}
@@ -2455,7 +2509,7 @@ function handoverNoteBanner(){
     <div class="card" style="border-color:var(--marigold-dark);background:var(--amber-bg);margin-bottom:14px;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
         <div>
-          <div style="font-weight:800;font-size:13.5px;margin-bottom:2px;">📌 ${escapeHtml(n.title)}</div>
+          <div style="font-weight:800;font-size:13.5px;margin-bottom:2px;">${ICON_PIN} ${escapeHtml(n.title)}</div>
           <div style="font-size:13px;white-space:pre-wrap;">${escapeHtml(n.text)}</div>
           <div class="subtle" style="font-size:11px;margin-top:6px;">${author?author.firstName:'A teammate'} · ${fmtDate(n.createdAt.slice(0,10))}</div>
         </div>
@@ -2499,7 +2553,7 @@ function staffActivityFeed(){
     ${entries.map(l=>{
       const actor = state.users.find(u=>u.id===l.userId);
       return `<div class="list-row">
-        <div class="thumb">👤</div>
+        <div class="thumb">${ICON_USER}</div>
         <div class="info"><div class="t1">${actor?actor.firstName+' '+(actor.lastName||''):'Someone'}</div><div class="t2">${escapeHtml(l.details||l.action)}</div></div>
         <div class="subtle" style="font-size:10.5px;flex-shrink:0;">${timeAgo(l.timestamp)}</div>
       </div>`;
@@ -2552,10 +2606,10 @@ let saleSearch = '';
 
 function screenNewSale(){
   if(!canDo('canSell')){
-    return `<h2 class="screen-title">New Sale</h2><div class="empty"><div class="ic">🔒</div><b>Not available to you</b>Your Owner has turned off sales access for your account. Ask them to enable it under Staff → Permissions.</div>`;
+    return `<h2 class="screen-title">New Sale</h2><div class="empty"><div class="ic">${ICON_LOCK}</div><b>Not available to you</b>Your Owner has turned off sales access for your account. Ask them to enable it under Staff → Permissions.</div>`;
   }
   if(currentShop()?.isWarehouse){
-    return `<h2 class="screen-title">New Sale</h2><div class="empty"><div class="ic">📦</div><b>This is a warehouse</b>${escapeHtml(currentShop().name)} is set up for holding stock only, not selling directly. Switch to a shop using the dropdown at the top, or move stock here to a shop first under More → Warehouse.</div>`;
+    return `<h2 class="screen-title">New Sale</h2><div class="empty"><div class="ic">${ICON_BOX}</div><b>This is a warehouse</b>${escapeHtml(currentShop().name)} is set up for holding stock only, not selling directly. Switch to a shop using the dropdown at the top, or move stock here to a shop first under More → Warehouse.</div>`;
   }
   const goods = state.goods.filter(g=>g.shopId===state.currentShopId &&
     (!saleSearch || g.name.toLowerCase().includes(saleSearch.toLowerCase()) || (g.barcode && g.barcode===saleSearch.trim())));
@@ -2575,16 +2629,16 @@ function screenNewSale(){
       </div>
       ${!saleCustomerId ? `
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
-        <span class="subtle">${saleWalkInName ? '📝 '+saleWalkInName+(saleWalkInPhone?' · '+saleWalkInPhone:'') : "Buying but not a saved customer? Add their name for the receipt."}</span>
+        <span class="subtle">${saleWalkInName ? '${ICON_EDIT_NOTE} '+saleWalkInName+(saleWalkInPhone?' · '+saleWalkInPhone:'') : "Buying but not a saved customer? Add their name for the receipt."}</span>
         <button class="btn btn-sm btn-outline" id="edit-walkin-btn" style="flex-shrink:0;">${saleWalkInName?'Edit':'+ Add Name'}</button>
       </div>` : ''}
       <label style="display:block;font-size:12px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Is this Cash or Credit?</label>
       <div style="display:flex;gap:10px;">
-        <button class="btn ${saleMode==='cash'?'btn-dark':'btn-outline'}" style="flex:1;" id="mode-cash">💵 Cash — Paid in full now</button>
+        <button class="btn ${saleMode==='cash'?'btn-dark':'btn-outline'}" style="flex:1;" id="mode-cash">${ICON_CASH} Cash — Paid in full now</button>
       </div>
       ${canDo('canSellCredit') ? `
       <div style="display:flex;gap:10px;margin-top:8px;">
-        <button class="btn ${saleMode==='credit'?'btn-dark':'btn-outline'}" style="flex:1;" id="mode-credit">📒 Credit — Owes some or all of it</button>
+        <button class="btn ${saleMode==='credit'?'btn-dark':'btn-outline'}" style="flex:1;" id="mode-credit">${ICON_NOTEBOOK} Credit — Owes some or all of it</button>
       </div>` : `<p class="subtle" style="margin-top:8px;">Credit sales aren't enabled for your account.</p>`}
       <div id="credit-fields" class="${saleMode==='credit' && canDo('canSellCredit')?'':'hidden'}" style="margin-top:10px;">
         <div class="row2">
@@ -2615,7 +2669,7 @@ function screenNewSale(){
           <div class="t1">${g.name}${variant?` — ${escapeHtml(variant.label)}`:''}</div>
           <div class="t2">${fmtMoney(price)} each · ${stockForLine} in stock</div>
           <button data-item-note="${key}" style="background:none;border:none;text-align:left;padding:2px 0;font-size:11px;font-weight:700;${c.note?'color:var(--marigold-dark);':'color:var(--text-dim);text-decoration:underline;'}">
-            ${c.note ? '📝 '+c.note : '+ Add size / spec / part no.'}
+            ${c.note ? '${ICON_EDIT_NOTE} '+c.note : '+ Add size / spec / part no.'}
           </button>
         </div>
         <div class="qty-stepper">
@@ -2647,7 +2701,7 @@ function screenNewSale(){
     ` : ''}
 
     <div class="section-head"><h3>Tap Goods to Add Them</h3></div>
-    <input id="sale-search" placeholder="🔍 Search by name, or scan/type a barcode…" value="${saleSearch}"
+    <input id="sale-search" placeholder="${ICON_SEARCH} Search by name, or scan/type a barcode…" value="${saleSearch}"
       style="width:100%;padding:11px 13px;border:1.5px solid var(--line);border-radius:10px;font-size:14px;margin-bottom:6px;">
     <div class="goods-grid">
       ${goods.length? goods.map(g=>{
@@ -2659,7 +2713,7 @@ function screenNewSale(){
           <div class="gname">${g.name}${inCartQty?` (${inCartQty})`:''}${g.hasVariants?' · sizes':''}</div>
           <div class="gprice">${fmtMoney(activePrice(g))}</div>
         </button>`;
-      }).join('') : `<div class="empty" style="grid-column:1/-1;"><div class="ic">📦</div><b>No goods yet</b>Add stock from the Goods tab, then come back here.</div>`}
+      }).join('') : `<div class="empty" style="grid-column:1/-1;"><div class="ic">${ICON_BOX}</div><b>No goods yet</b>Add stock from the Goods tab, then come back here.</div>`}
     </div>
     <div style="height:70px;"></div>
 
@@ -2678,7 +2732,7 @@ function variantStock(g, variantId){ const v=(g.variants||[]).find(x=>x.id===var
 function openVariantPickerModal(goodId){
   const g = state.goods.find(x=>x.id===goodId);
   openSheet(`
-    <div class="sheet-head"><h3>${g.name} — Pick One</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>${g.name} — Pick One</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     ${(g.variants||[]).map(v=>{
       const stock = Math.max(0,v.qty);
       const inCartLine = cart.find(c=>c.goodId===g.id && c.variantId===v.id);
@@ -2844,7 +2898,7 @@ function refreshMain(){
 function defaultDueDate(){ const d=new Date(); d.setDate(d.getDate()+7); return d.toISOString().slice(0,10); }
 function openWalkInModal(){
   openSheet(`
-    <div class="sheet-head"><h3>Walk-in Buyer</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Walk-in Buyer</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <p class="subtle" style="margin-bottom:14px;">Optional — a name makes the receipt look right, but this won't be saved as a full customer profile with purchase history.</p>
     <div class="field"><label>Name</label><input id="wi-name" value="${escAttr(saleWalkInName)}" placeholder="e.g. Mama Chidi"></div>
     <div class="field"><label>Phone <span class="subtle">(optional)</span></label><input id="wi-phone" value="${escAttr(saleWalkInPhone)}" placeholder="0802 730 0375"></div>
@@ -2945,12 +2999,12 @@ function openReceiptSheet(saleId){
   const cust = s.customerId ? state.customers.find(c=>c.id===s.customerId) : null;
   const seller = state.users.find(u=>u.id===s.soldByUserId);
   openSheet(`
-    <div class="sheet-head"><h3>Receipt</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Receipt</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <div style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;justify-content:center;margin-bottom:14px;">
       <canvas id="receipt-canvas" style="max-width:100%;height:auto;display:block;"></canvas>
     </div>
     <div style="display:flex;gap:10px;margin-bottom:6px;">
-      <button class="btn btn-primary" id="share-receipt-img" style="flex:1;">📤 Share Receipt</button>
+      <button class="btn btn-primary" id="share-receipt-img" style="flex:1;">${ICON_EXPORT} Share Receipt</button>
       <button class="btn btn-outline" id="download-receipt-img" style="flex:1;">⬇️ Download</button>
     </div>
     <p class="subtle" style="margin-bottom:14px;">Share opens your phone's share sheet with the actual receipt image attached — pick WhatsApp, Email, or any app there.</p>
@@ -3168,12 +3222,12 @@ function screenGoods(){
     <h2 class="screen-title">Goods &amp; Stock</h2>
     ${(isMaster() && !bizTypeSet) ? `
     <div class="card" style="border-color:var(--marigold-dark);display:flex;align-items:center;gap:10px;" data-goto="settings">
-      <div style="font-size:20px;">⚙️</div>
+      <div style="font-size:20px;">${ICON_SETTINGS}</div>
       <div style="flex:1;"><b>Set your Business Type</b><div class="t2">Get the right fields when adding goods — go to Settings to set it.</div></div>
       <div>›</div>
     </div>` : ''}
-    ${isMaster()?`<button class="btn btn-outline btn-sm" id="bulk-add-btn" style="margin-bottom:12px;">📄 Bulk Add via CSV</button>`:''}
-    ${goods.length===0? `<div class="empty"><div class="ic">📦</div><b>No goods yet</b>Tap + to add your first item.</div>` :
+    ${isMaster()?`<button class="btn btn-outline btn-sm" id="bulk-add-btn" style="margin-bottom:12px;">${ICON_FILE} Bulk Add via CSV</button>`:''}
+    ${goods.length===0? `<div class="empty"><div class="ic">${ICON_BOX}</div><b>No goods yet</b>Tap + to add your first item.</div>` :
     goods.map(g=>{
       const stock = totalStock(g);
       let flag='', pill='';
@@ -3219,7 +3273,7 @@ function bindGoodsEvents(){
 }
 function openBulkAddModal(){
   openSheet(`
-    <div class="sheet-head"><h3>Bulk Add via CSV</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Bulk Add via CSV</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <p class="subtle" style="margin-bottom:10px;">One item per line: <b>Name, Price, Cost, Quantity, Expiry(optional YYYY-MM-DD)</b></p>
     <div class="card" style="font-family:monospace;font-size:11.5px;color:var(--text-dim);margin-bottom:14px;">
       Indomie Noodles, 150, 110, 50<br>
@@ -3385,7 +3439,7 @@ function renderAddGoodSheet(){
   }
 
   openSheet(`
-    <div class="sheet-head"><h3>Add Goods</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Add Goods</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     ${bodyHTML}
     <div class="field"><label>Icon</label><select id="ag-emoji">${iconOptionsHTML()}</select></div>
     <button class="btn btn-primary" id="save-good">Save Item</button>
@@ -3494,7 +3548,7 @@ function openGoodDetail(gid){
   const extraInfo = g.spec ? `<div class="t2" style="margin-bottom:10px;">${g.specLabel||'Spec'}: ${escapeHtml(g.spec)}</div>`
     : (g.dimension && g.dimension.value) ? `<div class="t2" style="margin-bottom:10px;">${escapeHtml(g.dimension.value)} ${escapeHtml(g.dimension.unit||'')}</div>` : '';
   openSheet(`
-    <div class="sheet-head"><h3>${g.name}</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>${g.name}</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <div class="stat-grid">
       <div class="stat-box"><div class="lbl">In Stock</div><div class="val">${totalStock(g)}</div></div>
       <div class="stat-box"><div class="lbl">Price</div><div class="val" id="price-display">${fmtMoney(g.basePrice)}</div></div>
@@ -3504,13 +3558,13 @@ function openGoodDetail(gid){
       <div class="field"><label>Edit Selling Price</label><input id="edit-price" type="number" value="${g.basePrice}"></div>
       <div class="field"><label>Edit Cost Price</label><input id="edit-cost" type="number" value="${g.costPrice}"></div>
       <button class="btn btn-outline" id="save-price" style="margin-bottom:14px;">Save Changes</button>
-    ` : `<button class="btn btn-outline" id="try-edit-price" style="margin-bottom:6px;">✏️ Edit Price</button>`}
+    ` : `<button class="btn btn-outline" id="try-edit-price" style="margin-bottom:6px;">${ICON_PENCIL} Edit Price</button>`}
     <div id="lock-msg"></div>
 
     ${g.hasVariants ? `
     <div class="section-head"><h3>Sizes / Colors</h3></div>
     ${(g.variants||[]).map(v=>`<div class="list-row">
-        <div class="thumb">${v.qty<=0?'📭':'📦'}</div>
+        <div class="thumb">${v.qty<=0?ICON_INBOX_EMPTY:ICON_BOX}</div>
         <div class="info"><div class="t1">${escapeHtml(v.label)}</div><div class="t2">${v.qty} in stock</div></div>
         ${canEditPrice?`<button class="btn btn-sm btn-outline" data-add-variant-stock="${v.id}">＋ Add Stock</button>`:''}
       </div>`).join('')}
@@ -3521,13 +3575,13 @@ function openGoodDetail(gid){
       const d = daysBetween(todayISO(), b.expiryDate);
       const expired = d<0;
       return `<div class="list-row">
-        <div class="thumb">${expired?'🚫':d<=7?'⚠️':'📦'}</div>
+        <div class="thumb">${expired?ICON_BAN:d<=7?ICON_WARNING:ICON_BOX}</div>
         <div class="info">
           <div class="t1">${b.batchNo} · ${b.qtyRemaining} left</div>
           <div class="t2">${expired?'EXPIRED':'Expires '+fmtDate(b.expiryDate)+' ('+d+'d)'} ${b.auctionActive?' · Auction -'+b.auctionDiscount+'%':''}</div>
         </div>
         ${(isMaster() && !expired && d<=7 && b.qtyRemaining>0) ? `<button class="btn btn-sm ${b.auctionActive?'btn-outline':'btn-dark'}" data-toggle-auction="${b.id}">${b.auctionActive?'Stop Auction':'Start 30% Auction'}</button>` : ''}
-        ${canDo('canAddGoods') ? `<button class="btn btn-sm btn-outline" data-correct-count="${b.id}">🔢 Correct Count</button>` : ''}
+        ${canDo('canAddGoods') ? `<button class="btn btn-sm btn-outline" data-correct-count="${b.id}">${ICON_HASH} Correct Count</button>` : ''}
         ${expired ? `<span class="pill pill-red">DO NOT SELL</span>` : ''}
       </div>`;
     }).join('')}
@@ -3543,7 +3597,7 @@ function openGoodDetail(gid){
   const tryEdit = document.getElementById('try-edit-price');
   if(tryEdit) tryEdit.addEventListener('click', ()=>{
     logAudit('locked_price_attempt', u.firstName+' tried to edit price of '+g.name);
-    document.getElementById('lock-msg').innerHTML = `<div class="locked-msg">🔒 Price locked. Only your Owner can change prices. This attempt was logged.</div>`;
+    document.getElementById('lock-msg').innerHTML = `<div class="locked-msg">${ICON_LOCK} Price locked. Only your Owner can change prices. This attempt was logged.</div>`;
   });
   document.querySelectorAll('[data-toggle-auction]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
@@ -3596,7 +3650,7 @@ function openStockCorrectionModal(goodId, batchId){
   const g = state.goods.find(x=>x.id===goodId);
   const b = g.batches.find(x=>x.id===batchId);
   openSheet(`
-    <div class="sheet-head"><h3>Correct Count</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Correct Count</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <p class="subtle" style="margin-bottom:14px;">${escapeHtml(g.name)} — ${b.batchNo}</p>
     <div class="stat-box" style="margin-bottom:14px;"><div class="lbl">System Currently Says</div><div class="val">${b.qtyRemaining}</div></div>
     <div class="field"><label>What's actually there right now</label><input id="sc-actual" type="number" min="0" value="${b.qtyRemaining}"></div>
@@ -3652,9 +3706,9 @@ function screenCustomers(){
     (!customerSearch || c.fullName.toLowerCase().includes(customerSearch.toLowerCase())));
   return `
     <h2 class="screen-title">Customers</h2>
-    <input id="cust-search" placeholder="🔍 Search customers…" value="${customerSearch}"
+    <input id="cust-search" placeholder="${ICON_SEARCH} Search customers…" value="${customerSearch}"
       style="width:100%;padding:11px 13px;border:1.5px solid var(--line);border-radius:10px;font-size:14px;margin-bottom:10px;">
-    ${list.length===0? `<div class="empty"><div class="ic">👥</div><b>No customers yet</b>Tap + to add one.</div>` :
+    ${list.length===0? `<div class="empty"><div class="ic">${ICON_USERS}</div><b>No customers yet</b>Tap + to add one.</div>` :
     list.map(c=>{
       const bal = customerBalance(c.id);
       return `<div class="card" data-cust-detail="${c.id}" style="display:flex;align-items:center;gap:12px;">
@@ -3697,7 +3751,7 @@ function customerFormFields(c){
 }
 function openAddCustomerModal(){
   openSheet(`
-    <div class="sheet-head"><h3>Add Customer</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Add Customer</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     ${customerFormFields(null)}
     <button class="btn btn-primary" id="save-cust">Save Customer</button>
   `);
@@ -3706,7 +3760,7 @@ function openAddCustomerModal(){
 function openEditCustomerModal(cid){
   const c = state.customers.find(x=>x.id===cid);
   openSheet(`
-    <div class="sheet-head"><h3>Edit Customer</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Edit Customer</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     ${customerFormFields(c)}
     <div style="display:flex;gap:10px;">
       <button class="btn btn-primary" id="save-cust" style="flex:1;">Save Changes</button>
@@ -3768,8 +3822,8 @@ function openCustomerDetail(cid){
     <div class="sheet-head">
       <h3>${c.fullName}</h3>
       <div style="display:flex;gap:8px;align-items:center;">
-        <button class="btn btn-sm btn-outline" id="edit-cust-btn">✏️ Edit</button>
-        <button class="close-x" id="sheet-close">✕</button>
+        <button class="btn btn-sm btn-outline" id="edit-cust-btn">${ICON_PENCIL} Edit</button>
+        <button class="close-x" id="sheet-close">${ICON_CLOSE}</button>
       </div>
     </div>
     <div class="stat-grid">
@@ -3777,15 +3831,15 @@ function openCustomerDetail(cid){
       <div class="stat-box"><div class="lbl">Owes</div><div class="val" style="color:${bal>0?'var(--red)':'var(--green)'}">${fmtMoney(bal)}</div></div>
     </div>
     <div class="contact-btns">
-      <a href="tel:${toTelHref(c.phoneE164, c.country)}">📞 Call</a>
-      <a href="sms:${toTelHref(c.phoneE164, c.country)}">💬 SMS</a>
+      <a href="tel:${toTelHref(c.phoneE164, c.country)}">${ICON_PHONE} Call</a>
+      <a href="sms:${toTelHref(c.phoneE164, c.country)}">${ICON_CHAT} SMS</a>
       <a href="https://wa.me/${toIntlDigits(c.whatsappNumber||c.phoneE164, c.country)}" target="_blank">WhatsApp</a>
-      <a href="mailto:${c.email||''}">✉️ Email</a>
+      <a href="mailto:${c.email||''}">${ICON_MAIL} Email</a>
     </div>
     <div class="section-head"><h3>Purchase History</h3></div>
     ${sales.length===0?`<p class="subtle">No purchases yet.</p>`:sales.map(s=>`
       <div class="list-row">
-        <div class="thumb">🧾</div>
+        <div class="thumb">${ICON_RECEIPT}</div>
         <div class="info"><div class="t1">${fmtMoney(s.subtotal)}</div><div class="t2">${fmtDate(s.date)} · ${s.status}</div></div>
         ${s.balance>0?`<span class="pill pill-red">${fmtMoney(s.balance)} due</span>`:`<span class="pill pill-green">Paid</span>`}
       </div>`).join('')}
@@ -3809,7 +3863,7 @@ function screenCredit(){
     <div style="display:flex;gap:8px;margin-bottom:12px;overflow-x:auto;">
       ${['all','due2','overdue'].map(f=>`<button class="btn btn-sm ${creditFilter===f?'btn-dark':'btn-outline'}" data-filter="${f}">${f==='all'?'All':f==='due2'?'Due in 2 days':'Overdue'}</button>`).join('')}
     </div>
-    ${sales.length===0? `<div class="empty"><div class="ic">✅</div><b>Nothing here</b>No outstanding credit in this view.</div>` :
+    ${sales.length===0? `<div class="empty"><div class="ic">${ICON_CHECK_CIRCLE}</div><b>Nothing here</b>No outstanding credit in this view.</div>` :
     sales.map(s=>{
       const cust = state.customers.find(c=>c.id===s.customerId);
       const d = s.dueDate? daysBetween(todayISO(), s.dueDate) : null;
@@ -3864,7 +3918,7 @@ function bindCreditEvents(){
    ============================================================ */
 function screenCloseDay(){
   if(!canDo('canRecordCash')){
-    return `<h2 class="screen-title">Close Day</h2><div class="empty"><div class="ic">🔒</div><b>Not available to you</b>Your Owner has turned off cash recording for your account.</div>`;
+    return `<h2 class="screen-title">Close Day</h2><div class="empty"><div class="ic">${ICON_LOCK}</div><b>Not available to you</b>Your Owner has turned off cash recording for your account.</div>`;
   }
   const u = currentUser();
   const mySalesToday = state.sales.filter(s=>s.shopId===state.currentShopId && s.date===todayISO() && s.status!=='voided' &&
@@ -3877,7 +3931,7 @@ function screenCloseDay(){
     ${subHeader("Close Day")}
     ${already? `
       <div class="card">
-        <b>✅ Already closed today</b>
+        <b>${ICON_CHECK_CIRCLE} Already closed today</b>
         <div class="subtle" style="margin-top:6px;">System: ${fmtMoney(already.systemCash)} · Counted: ${fmtMoney(already.countedCash)} · Diff: ${fmtMoney(already.difference)}</div>
         ${already.note?`<div class="subtle">Note: ${already.note}</div>`:''}
       </div>
@@ -3888,14 +3942,14 @@ function screenCloseDay(){
         <div class="field"><label>Note <span class="subtle">(required if there's a shortage)</span></label><textarea id="cd-note" rows="2" placeholder="e.g. gave change from own pocket"></textarea></div>
         <button class="btn btn-danger" id="cd-submit">Submit &amp; Close</button>
       </div>
-      <button class="btn btn-outline" id="cd-handover-btn" style="margin-top:12px;">📌 Leave a note for the next shift</button>
+      <button class="btn btn-outline" id="cd-handover-btn" style="margin-top:12px;">${ICON_PIN} Leave a note for the next shift</button>
     `}
     ${isMaster() && allClosures.length>0 ? `
       <div class="section-head"><h3>Today's Closures (All Staff)</h3></div>
       ${allClosures.map(d=>{
         const st = state.users.find(u2=>u2.id===d.userId);
         return `<div class="list-row">
-          <div class="thumb">${d.difference<0?'⚠️':'✅'}</div>
+          <div class="thumb">${d.difference<0?ICON_WARNING:ICON_CHECK_CIRCLE}</div>
           <div class="info"><div class="t1">${st.firstName} ${st.lastName}</div><div class="t2">System ${fmtMoney(d.systemCash)} · Counted ${fmtMoney(d.countedCash)}</div></div>
           <div class="right"><b style="color:${d.difference<0?'var(--red)':'var(--green)'}">${d.difference>=0?'+':''}${fmtMoney(d.difference)}</b></div>
         </div>`;
@@ -3930,22 +3984,22 @@ function bindCloseDayEvents(){
 function screenMore(){
   const pendingNameReqs = canManageStaff() ? state.users.filter(u=>u.businessId===business().id && u.nameChangeRequest && canManageThisUser(u)).length : 0;
   const items = [
-    {id:'history', ic:'🧾', label:'History', show:!isViewer()},
-    {id:'credit', ic:'💳', label:'Credit Ledger', show:!isViewer()},
-    {id:'closeday', ic:'🔒', label:'Close Day', show:!isViewer() && canDo('canRecordCash')},
-    {id:'expenses', ic:'💸', label:'Expenses', show:!isViewer()},
-    {id:'lodging', ic:'🛏️', label:'Lodging', show:!isViewer() && isHotelBiz()},
-    {id:'suppliers', ic:'🚚', label:'Suppliers', show:!isViewer()},
-    {id:'warehouse', ic:'📦', label:'Warehouse', show:!isViewer() && (isMaster() || canDo('canAddGoods'))},
-    {id:'notes', ic:'🗒️', label:'Notes', show:true},
-    {id:'reports', ic:'📊', label:'Profit Reports', show:isMaster()},
-    {id:'staff', ic:'🧑‍🤝‍🧑', label:'Staff', show:canManageStaff(), badge:pendingNameReqs},
-    {id:'audit', ic:'📜', label:'Audit Log', show:isMaster()},
-    {id:'profile', ic:'👤', label:'My Profile', show:true},
-    {id:'faq', ic:'❓', label:'Help / FAQ', show:true},
-    {id:'about-us', ic:'📄', label:'About Us', show:true},
-    {id:'contact-us', ic:'📞', label:'Contact Us', show:true},
-    {id:'settings', ic:'⚙️', label:'Settings', show:true},
+    {id:'history', ic:ICON_RECEIPT, label:'History', show:!isViewer()},
+    {id:'credit', ic:ICON_CARD, label:'Credit Ledger', show:!isViewer()},
+    {id:'closeday', ic:ICON_LOCK, label:'Close Day', show:!isViewer() && canDo('canRecordCash')},
+    {id:'expenses', ic:ICON_CASH, label:'Expenses', show:!isViewer()},
+    {id:'lodging', ic:ICON_BED, label:'Lodging', show:!isViewer() && isHotelBiz()},
+    {id:'suppliers', ic:ICON_TRUCK, label:'Suppliers', show:!isViewer()},
+    {id:'warehouse', ic:ICON_BOX, label:'Warehouse', show:!isViewer() && (isMaster() || canDo('canAddGoods'))},
+    {id:'notes', ic:ICON_NOTEBOOK, label:'Notes', show:true},
+    {id:'reports', ic:ICON_BARCHART, label:'Profit Reports', show:isMaster()},
+    {id:'staff', ic:ICON_USERS, label:'Staff', show:canManageStaff(), badge:pendingNameReqs},
+    {id:'audit', ic:ICON_FILE, label:'Audit Log', show:isMaster()},
+    {id:'profile', ic:ICON_USER, label:'My Profile', show:true},
+    {id:'faq', ic:ICON_HELP, label:'Help / FAQ', show:true},
+    {id:'about-us', ic:ICON_FILE, label:'About Us', show:true},
+    {id:'contact-us', ic:ICON_PHONE, label:'Contact Us', show:true},
+    {id:'settings', ic:ICON_SETTINGS, label:'Settings', show:true},
   ].filter(i=>i.show);
   return `
     <h2 class="screen-title">More</h2>
@@ -3957,10 +4011,10 @@ function screenMore(){
       </div>`).join('')}
     <div class="divider"></div>
     <div class="list-row" id="do-logout" style="cursor:pointer;">
-      <div class="thumb">🔒</div><div class="info"><div class="t1">Lock / Switch User</div></div><div>›</div>
+      <div class="thumb">${ICON_LOCK}</div><div class="info"><div class="t1">Lock / Switch User</div></div><div>›</div>
     </div>
     <div class="list-row" id="do-full-logout" style="cursor:pointer;">
-      <div class="thumb">🚪</div><div class="info"><div class="t1">Log Out</div><div class="t2 subtle">Sign out of this business on this device</div></div><div>›</div>
+      <div class="thumb">${ICON_LOGOUT}</div><div class="info"><div class="t1">Log Out</div><div class="t2 subtle">Sign out of this business on this device</div></div><div>›</div>
     </div>
   `;
 }
@@ -4050,7 +4104,7 @@ function screenReports(){
     ${staffRows.length>1 || (staffRows.length===1) ? `
     <div class="section-head"><h3>Staff Performance</h3></div>
     ${staffRows.map(sr=>`
-      <div class="list-row"><div class="thumb">👤</div>
+      <div class="list-row"><div class="thumb">${ICON_USER}</div>
         <div class="info"><div class="t1">${sr.name}</div><div class="t2">${sr.count} sale(s)</div></div>
         <div class="right"><b>${fmtMoney(sr.total)}</b></div>
       </div>`).join('')}` : ''}
@@ -4071,7 +4125,7 @@ function topItems(sales){
 
 function screenStaff(){
   if(!canManageStaff()){
-    return `${subHeader("Staff")}<div class="empty"><div class="ic">🔒</div><b>Not available to you</b>Ask your Owner for access.</div>`;
+    return `${subHeader("Staff")}<div class="empty"><div class="ic">${ICON_LOCK}</div><b>Not available to you</b>Ask your Owner for access.</div>`;
   }
   const staff = state.users.filter(u=>u.businessId===business().id && u.id!==currentUser().id && u.role!=='master');
   const codeActive = state.joinCode && Date.now()<state.joinCode.expiresAt;
@@ -4081,7 +4135,7 @@ function screenStaff(){
     <div class="card">
       ${codeActive? `
         <div class="code-display">${state.joinCode.code}</div>
-        <p class="subtle" style="text-align:center;">Valid for ${Math.ceil((state.joinCode.expiresAt-Date.now())/60000)} more minutes. Staff opens Zed on their device → Join Business → enters this code.</p>
+        <p class="subtle" style="text-align:center;">Valid for ${Math.ceil((state.joinCode.expiresAt-Date.now())/60000)} more minutes. Staff opens ZeeShop on their device → Join Business → enters this code.</p>
       ` : `<button class="btn btn-primary" id="gen-code">Generate Join Code</button>`}
     </div>
     <div class="card">
@@ -4095,8 +4149,8 @@ function screenStaff(){
         </div>
       ` : `<button class="btn btn-outline btn-sm" id="reset-connect-code">Generate Connect Code</button>`}
     </div>
-    <button class="btn btn-outline" id="offer-letter-btn" style="width:100%;margin-bottom:14px;">📨 Send Offer Letter to a Candidate</button>
-    ${pendingCount>0?`<div class="card" style="border-color:var(--marigold-dark);"><b>📝 ${pendingCount} name change request${pendingCount>1?'s':''}</b> waiting below.</div>`:''}
+    <button class="btn btn-outline" id="offer-letter-btn" style="width:100%;margin-bottom:14px;">${ICON_MAIL} Send Offer Letter to a Candidate</button>
+    ${pendingCount>0?`<div class="card" style="border-color:var(--marigold-dark);"><b>${ICON_EDIT_NOTE} ${pendingCount} name change request${pendingCount>1?'s':''}</b> waiting below.</div>`:''}
     <div class="section-head"><h3>Team</h3></div>
     ${staff.length===0?`<p class="subtle">No staff yet. Generate a code above to invite one.</p>`:staff.map(u=>{
       const restrictions = [];
@@ -4131,7 +4185,7 @@ function screenStaff(){
         ${manageable ? `
         <div style="display:flex;gap:6px;flex-wrap:wrap;">
           ${u.role==='staff'?`<button class="btn btn-sm btn-outline" data-manage-perms="${u.id}">Permissions</button>`:''}
-          <button class="btn btn-sm btn-outline" data-employment-record="${u.id}">📋 Employment Record</button>
+          <button class="btn btn-sm btn-outline" data-employment-record="${u.id}">${ICON_CLIPBOARD} Employment Record</button>
           <button class="btn btn-sm btn-outline" data-reset-pin="${u.id}">Reset PIN</button>
           <button class="btn btn-sm ${u.isActive===false?'btn-outline':'btn-danger'}" data-toggle-active="${u.id}">${u.isActive===false?'Reactivate':'Remove'}</button>
         </div>` : `<p class="subtle">Managed by the Owner only.</p>`}
@@ -4151,7 +4205,7 @@ function screenStaff(){
           </div>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;">
-          <button class="btn btn-sm btn-outline" data-employment-record="${p.id}">📋 Employment Record</button>
+          <button class="btn btn-sm btn-outline" data-employment-record="${p.id}">${ICON_CLIPBOARD} Employment Record</button>
           <button class="btn btn-sm ${p.isActive===false?'btn-outline':'btn-danger'}" data-toggle-recordonly-active="${p.id}">${p.isActive===false?'Mark as Active':'Mark as Left'}</button>
           ${!employmentRecordFor(p.id) ? `<button class="btn btn-sm btn-outline" data-delete-recordonly="${p.id}" style="color:var(--red);">Delete</button>` : ''}
         </div>
@@ -4191,7 +4245,7 @@ function openEmploymentSetupForm(userId){
   const u = personById(userId);
   if(!u || !canManageThisUser(u)){ toast("You don't have permission to manage this account."); return; }
   openSheet(`
-    <div class="sheet-head"><h3>Set Up Employment Record</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Set Up Employment Record</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <p class="subtle" style="margin-bottom:14px;">For ${u.firstName} ${u.lastName}. Once saved, this record can be edited later, but never deleted — the original stays visible forever.</p>
     <div class="field"><label>Employment Type</label>
       <select id="er-type">${EMPLOYMENT_TYPES.map(t=>`<option value="${t.id}">${t.label}</option>`).join('')}</select>
@@ -4248,34 +4302,34 @@ function renderEmploymentRecordView(userId){
   const creator = state.users.find(x=>x.id===rec.original.createdBy);
 
   openSheet(`
-    <div class="sheet-head"><h3>${u.firstName}'s Employment Record</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>${u.firstName}'s Employment Record</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <div class="card">
       <div class="stat-grid">
         <div class="stat-box"><div class="lbl">Type</div><div class="val" style="font-size:15px;">${typeLabel}</div></div>
         <div class="stat-box"><div class="lbl">Resumed</div><div class="val" style="font-size:15px;">${fmtDate(rec.resumptionDate)}</div></div>
       </div>
       ${rec.salaryFrequency!=='none' ? `<div class="t2" style="margin-bottom:6px;"><b style="color:var(--ink-text);">${fmtMoney(rec.salaryAmount)}</b> / ${rec.salaryFrequency}</div>` : `<div class="t2" style="margin-bottom:6px;">No fixed salary</div>`}
-      ${rec.settlementDate ? `<div class="t2" style="margin-bottom:6px;">🎓 Settlement date: <b style="color:var(--ink-text);">${fmtDate(rec.settlementDate)}</b></div>` : ''}
+      ${rec.settlementDate ? `<div class="t2" style="margin-bottom:6px;">${ICON_CALENDAR} Settlement date: <b style="color:var(--ink-text);">${fmtDate(rec.settlementDate)}</b></div>` : ''}
       ${rec.settlementTerms ? `<div class="t2" style="margin-bottom:6px;">Settlement terms: ${escapeHtml(rec.settlementTerms)}</div>` : ''}
       ${rec.notes ? `<div class="t2">Notes: ${escapeHtml(rec.notes)}</div>` : ''}
-      <button class="btn btn-outline btn-sm" id="edit-er-btn" style="margin-top:12px;">✏️ Edit Record</button>
+      <button class="btn btn-outline btn-sm" id="edit-er-btn" style="margin-top:12px;">${ICON_PENCIL} Edit Record</button>
     </div>
 
     <button class="btn btn-outline" id="send-letter-btn" style="width:100%;margin-bottom:14px;">
-      ${rec.employmentType==='apprentice' ? '📜 Send Apprenticeship Agreement' : '✉️ Send Employment Letter'}
+      ${rec.employmentType==='apprentice' ? '${ICON_FILE} Send Apprenticeship Agreement' : '${ICON_MAIL} Send Employment Letter'}
     </button>
 
     <div class="section-head"><h3>Salary Payments</h3></div>
     <button class="btn btn-primary" id="record-payment-btn" style="width:100%;margin-bottom:12px;">＋ Record a Payment</button>
     ${payments.length===0?`<p class="subtle">No payments recorded yet.</p>`:payments.map(p=>`
-      <div class="list-row"><div class="thumb">💰</div>
+      <div class="list-row"><div class="thumb">${ICON_WALLET}</div>
         <div class="info"><div class="t1">${fmtMoney(p.amount)}</div><div class="t2">${fmtDate(p.date)}${p.note?' · '+escapeHtml(p.note):''}</div></div>
       </div>`).join('')}
     <p class="subtle" style="margin-top:6px;">Payments are permanent once recorded and are automatically added to Expenses — they can't be edited or deleted, only added to.</p>
 
     <div class="section-head"><h3>Record History <span class="subtle" style="font-weight:400;">(nothing here can ever be deleted)</span></h3></div>
     <div class="card" style="background:var(--paper-dim);">
-      <div class="t1" style="font-size:13px;margin-bottom:4px;">📌 Original — set ${fmtDate(rec.original.createdAt.slice(0,10))} by ${creator?creator.firstName+' '+creator.lastName:'Unknown'}</div>
+      <div class="t1" style="font-size:13px;margin-bottom:4px;">${ICON_PIN} Original — set ${fmtDate(rec.original.createdAt.slice(0,10))} by ${creator?creator.firstName+' '+creator.lastName:'Unknown'}</div>
       <div class="t2">Type: ${(EMPLOYMENT_TYPES.find(t=>t.id===rec.original.employmentType)||{}).label} · Resumed: ${fmtDate(rec.original.resumptionDate)}</div>
       <div class="t2">Salary: ${rec.original.salaryFrequency!=='none'?fmtMoney(rec.original.salaryAmount)+' / '+rec.original.salaryFrequency:'None'}</div>
       ${rec.original.settlementDate?`<div class="t2">Settlement date: ${fmtDate(rec.original.settlementDate)}</div>`:''}
@@ -4283,7 +4337,7 @@ function renderEmploymentRecordView(userId){
     ${rec.history.length===0?'':rec.history.map(h=>{
       const editor = state.users.find(x=>x.id===h.changedBy);
       return `<div class="card">
-        <div class="t1" style="font-size:13px;margin-bottom:4px;">✏️ Edited ${fmtDate(h.changedAt.slice(0,10))} by ${editor?editor.firstName+' '+editor.lastName:'Unknown'}</div>
+        <div class="t1" style="font-size:13px;margin-bottom:4px;">${ICON_PENCIL} Edited ${fmtDate(h.changedAt.slice(0,10))} by ${editor?editor.firstName+' '+editor.lastName:'Unknown'}</div>
         <div class="t2" style="color:var(--text-dim);">Previous values — Type: ${(EMPLOYMENT_TYPES.find(t=>t.id===h.previousValues.employmentType)||{}).label} · Resumed: ${fmtDate(h.previousValues.resumptionDate)}</div>
         <div class="t2" style="color:var(--text-dim);">Salary was: ${h.previousValues.salaryFrequency!=='none'?fmtMoney(h.previousValues.salaryAmount)+' / '+h.previousValues.salaryFrequency:'None'}</div>
         ${h.previousValues.settlementDate?`<div class="t2" style="color:var(--text-dim);">Settlement date was: ${fmtDate(h.previousValues.settlementDate)}</div>`:''}
@@ -4300,7 +4354,7 @@ function openEmploymentEditForm(userId){
   if(!u || !canManageThisUser(u)){ toast("You don't have permission to manage this account."); return; }
   const rec = employmentRecordFor(userId);
   openSheet(`
-    <div class="sheet-head"><h3>Edit Employment Record</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Edit Employment Record</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <p class="subtle" style="margin-bottom:14px;">The current values will be saved to this record's permanent history before your changes are applied — nothing gets erased.</p>
     <div class="field"><label>Employment Type</label>
       <select id="er-type">${EMPLOYMENT_TYPES.map(t=>`<option value="${t.id}" ${rec.employmentType===t.id?'selected':''}>${t.label}</option>`).join('')}</select>
@@ -4361,7 +4415,7 @@ function openRecordSalaryPaymentModal(userId){
   const u = personById(userId);
   if(!u || !canManageThisUser(u)){ toast("You don't have permission to manage this account."); return; }
   openSheet(`
-    <div class="sheet-head"><h3>Record Salary Payment</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Record Salary Payment</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <p class="subtle" style="margin-bottom:14px;">For ${u.firstName} ${u.lastName}. This will also be added to Expenses automatically.</p>
     <div class="row2">
       <div class="field"><label>Amount</label><input id="sp-amount" type="number" min="0"></div>
@@ -4409,7 +4463,7 @@ function openEmploymentLetterModal(userId){
   const rec = employmentRecordFor(userId);
   if(!u || !rec) return;
   openSheet(`
-    <div class="sheet-head"><h3>${rec.employmentType==='apprentice'?'Apprenticeship Agreement':'Employment Letter'}</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>${rec.employmentType==='apprentice'?'Apprenticeship Agreement':'Employment Letter'}</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <div class="card">
       <div class="t1" style="margin-bottom:10px;">Contact Info for ${u.firstName}</div>
       <div class="field"><label>Phone</label><input id="el-phone" value="${escAttr(getContactPhone(u))}" placeholder="0802 730 0375 or +234..."></div>
@@ -4420,7 +4474,7 @@ function openEmploymentLetterModal(userId){
       <canvas id="letter-canvas" style="max-width:100%;height:auto;display:block;"></canvas>
     </div>
     <div style="display:flex;gap:10px;margin-bottom:6px;">
-      <button class="btn btn-primary" id="share-letter-img" style="flex:1;">📤 Share</button>
+      <button class="btn btn-primary" id="share-letter-img" style="flex:1;">${ICON_EXPORT} Share</button>
       <button class="btn btn-outline" id="download-letter-img" style="flex:1;">⬇️ Download</button>
     </div>
     <p class="subtle" style="margin-bottom:14px;">Share opens your phone's share sheet with the document image — pick WhatsApp, Email, or any app there.</p>
@@ -4549,7 +4603,7 @@ function drawEmploymentLetterToCanvas(canvas, u, rec){
    ============================================================ */
 function openOfferLetterForm(){
   openSheet(`
-    <div class="sheet-head"><h3>Offer Letter</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Offer Letter</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <p class="subtle" style="margin-bottom:14px;">For a candidate who hasn't resumed yet — this doesn't save anything to your records.</p>
     <div class="row2">
       <div class="field"><label>First Name</label><input id="ol-fn"></div>
@@ -4666,12 +4720,12 @@ function drawOfferLetterToCanvas(canvas, offer){
 }
 function openOfferLetterPreview(offer){
   openSheet(`
-    <div class="sheet-head"><h3>Offer Letter</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Offer Letter</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <div style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;justify-content:center;margin-bottom:14px;">
       <canvas id="offer-canvas" style="max-width:100%;height:auto;display:block;"></canvas>
     </div>
     <div style="display:flex;gap:10px;margin-bottom:6px;">
-      <button class="btn btn-primary" id="share-offer-img" style="flex:1;">📤 Share</button>
+      <button class="btn btn-primary" id="share-offer-img" style="flex:1;">${ICON_EXPORT} Share</button>
       <button class="btn btn-outline" id="download-offer-img" style="flex:1;">⬇️ Download</button>
     </div>
     <p class="subtle" style="margin-bottom:14px;">Share opens your phone's share sheet with the letter image — pick WhatsApp, Email, or any app there.</p>
@@ -4717,7 +4771,7 @@ function openOfferLetterPreview(offer){
 
 function openAddRecordOnlyPersonModal(){
   openSheet(`
-    <div class="sheet-head"><h3>Add a Person (No App Access)</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Add a Person (No App Access)</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <p class="subtle" style="margin-bottom:14px;">For someone you pay or mentor but who will never log into this app — just to keep their resumption date, salary, and settlement records straight.</p>
     <div class="field"><label>First Name</label><input id="ro-fn"></div>
     <div class="field"><label>Last Name</label><input id="ro-ln"></div>
@@ -4747,7 +4801,7 @@ function openStaffPermissionsModal(userId){
   if(!canManageThisUser(u)){ toast("You don't have permission to manage this account."); return; }
   const shops = state.shops.filter(s=>s.businessId===business().id);
   openSheet(`
-    <div class="sheet-head"><h3>${u.firstName}'s Permissions</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>${u.firstName}'s Permissions</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <p class="subtle" style="margin-bottom:14px;">Turn off anything ${u.firstName} shouldn't be able to do. You can change this anytime.</p>
     ${isMaster() ? `
     <div class="card" style="background:var(--amber-bg);border-color:var(--marigold-dark);">
@@ -4962,13 +5016,13 @@ function renderMyEmploymentRecordCard(userId){
   const creator = state.users.find(x=>x.id===rec.original.createdBy);
   return `
     <div class="card">
-      <div class="t1" style="margin-bottom:8px;">📋 My Employment Record <span class="subtle" style="font-weight:400;">(read-only — managed by your Owner/Admin)</span></div>
+      <div class="t1" style="margin-bottom:8px;">${ICON_CLIPBOARD} My Employment Record <span class="subtle" style="font-weight:400;">(read-only — managed by your Owner/Admin)</span></div>
       <div class="stat-grid">
         <div class="stat-box"><div class="lbl">Type</div><div class="val" style="font-size:15px;">${typeLabel}</div></div>
         <div class="stat-box"><div class="lbl">Resumed</div><div class="val" style="font-size:15px;">${fmtDate(rec.resumptionDate)}</div></div>
       </div>
       ${rec.salaryFrequency!=='none' ? `<div class="t2" style="margin-bottom:6px;">Salary: <b style="color:var(--ink-text);">${fmtMoney(rec.salaryAmount)}</b> / ${rec.salaryFrequency}</div>` : `<div class="t2" style="margin-bottom:6px;">No fixed salary</div>`}
-      ${rec.settlementDate ? `<div class="t2" style="margin-bottom:6px;">🎓 Settlement date: <b style="color:var(--ink-text);">${fmtDate(rec.settlementDate)}</b></div>` : ''}
+      ${rec.settlementDate ? `<div class="t2" style="margin-bottom:6px;">${ICON_CALENDAR} Settlement date: <b style="color:var(--ink-text);">${fmtDate(rec.settlementDate)}</b></div>` : ''}
       ${rec.settlementTerms ? `<div class="t2" style="margin-bottom:6px;">Settlement terms: ${escapeHtml(rec.settlementTerms)}</div>` : ''}
       <div class="divider"></div>
       <div class="t2" style="font-weight:700;margin-bottom:4px;">Payments Received</div>
@@ -5006,7 +5060,7 @@ function screenProfile(){
     ${(u.role!=='master' && employmentRecordFor(u.id)) ? renderMyEmploymentRecordCard(u.id) : ''}
     ${u.role!=='master' ? (u.nameChangeRequest ? `
     <div class="card">
-      <div class="t1" style="margin-bottom:6px;">📝 Name Change Requested</div>
+      <div class="t1" style="margin-bottom:6px;">${ICON_EDIT_NOTE} Name Change Requested</div>
       <p class="t2" style="margin-bottom:12px;">You asked to be renamed to <b style="color:var(--ink-text);">${escapeHtml(u.nameChangeRequest.firstName+' '+u.nameChangeRequest.lastName)}</b>. Waiting for your Owner to approve it.</p>
       <button class="btn btn-outline btn-sm" id="cancel-name-request-btn">Cancel Request</button>
     </div>` : `
@@ -5136,12 +5190,12 @@ function screenSettings(){
       <div class="t2">${b.country} · ${b.currency}</div>
       <div class="t2" style="margin-top:6px;">Plan: <b style="color:var(--marigold-dark);text-transform:capitalize;">${effectivePlan()}</b></div>
       ${b.autoRenewEnabled ? `
-        <div class="t2" style="margin-top:6px;color:var(--green);">🔄 Auto-renewal is ON (${b.autoRenewPlan==='boss'?'Boss':'Pro'}, ${b.autoRenewInterval})</div>
+        <div class="t2" style="margin-top:6px;color:var(--green);">${ICON_REFRESH} Auto-renewal is ON (${b.autoRenewPlan==='boss'?'Boss':'Pro'}, ${b.autoRenewInterval})</div>
         ${isMaster()?`<button class="btn btn-outline btn-sm" id="disable-autorenew" style="margin-top:8px;">Turn Off Auto-Renewal</button>`:''}
       ` : ''}
       ${isMaster()?`<button class="btn btn-outline btn-sm" id="upgrade-plan" style="margin-top:10px;">View Plans</button>`:''}
       <div class="t2" style="margin-top:14px;">
-        🔔 Notifications: <b style="color:${b.pushEnabled?'var(--green)':'var(--text-dim)'};">${b.pushEnabled?'ON':'OFF'}</b>
+        ${ICON_BELL} Notifications: <b style="color:${b.pushEnabled?'var(--green)':'var(--text-dim)'};">${b.pushEnabled?'ON':'OFF'}</b>
       </div>
       <button class="btn btn-outline btn-sm" id="toggle-push" style="margin-top:6px;">${b.pushEnabled?'Turn Off Notifications':'Enable Notifications'}</button>
     </div>
@@ -5200,7 +5254,7 @@ function screenSettings(){
     </div>
     `:''}
     <div class="card">
-      <button class="btn btn-outline" id="lock-device">🔒 Lock Screen</button>
+      <button class="btn btn-outline" id="lock-device">${ICON_LOCK} Lock Screen</button>
     </div>
   `;
 }
@@ -5354,7 +5408,7 @@ async function openPlansSheet(){
   const ccy = pricing ? pricing.currency : 'USD';
 
   openSheet(`
-    <div class="sheet-head"><h3>Plans</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Plans</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     ${isExpiredPaid ? `<div class="card" style="border-color:var(--red);background:var(--red-bg);"><b style="color:var(--red);">Your ${b.subscriptionPlan==='boss'?'Boss':'Pro'} plan expired ${new Date(b.subscriptionExpiresAt).toLocaleDateString()}.</b><br><span class="subtle">You're currently on Freemium limits. Renew below to restore access.</span></div>` : ''}
 
     <div class="card" style="border-color:${current==='free'?'var(--marigold-dark)':'var(--line)'};">
@@ -5404,7 +5458,7 @@ async function openPlansSheet(){
 function launchCheckout(plan, interval, amount, currency){
   if(!navigator.onLine){ toast('You need an internet connection to upgrade your plan.'); return; }
   const u = currentUser();
-  const txRef = 'zed_' + uid('txn');
+  const txRef = 'zeeshop_' + uid('txn');
   FlutterwaveCheckout({
     public_key: FLW_PUBLIC_KEY,
     tx_ref: txRef,
@@ -5417,11 +5471,11 @@ function launchCheckout(plan, interval, amount, currency){
       interval: interval
     },
     customer: {
-      email: (u && u.email) || 'customer@zed.app',
-      name: (u ? (u.firstName+' '+(u.lastName||'')) : 'Zed Customer')
+      email: (u && u.email) || 'customer@zeeshop.app',
+      name: (u ? (u.firstName+' '+(u.lastName||'')) : 'ZeeShop Customer')
     },
     customizations: {
-      title: 'Zed ' + (plan==='pro' ? 'Pro' : 'Boss'),
+      title: 'ZeeShop ' + (plan==='pro' ? 'Pro' : 'Boss'),
       description: (plan==='pro'?'Pro':'Boss') + ' plan — ' + interval + ' billing'
     },
     callback: function(response){
@@ -5442,7 +5496,7 @@ function launchCheckout(plan, interval, amount, currency){
  */
 function offerAutoRenewOptIn(result, plan, interval, accessToken){
   openSheet(`
-    <div class="sheet-head"><h3>Enable Auto-Renewal?</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Enable Auto-Renewal?</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <p class="subtle">Save this card to automatically renew your ${plan==='boss'?'Boss':'Pro'} plan (${interval}) when it expires — no manual payment needed each time. You can turn this off anytime from Settings.</p>
     <div style="display:flex;gap:10px;margin-top:14px;">
       <button class="btn btn-outline btn-sm" id="autorenew-decline" style="flex:1;">Not now</button>
@@ -5630,7 +5684,7 @@ function exportCSV(){
   const csv = rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
   const blob = new Blob([csv],{type:'text/csv'});
   const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href=url; a.download='zed_sales_export.csv'; a.click();
+  const a = document.createElement('a'); a.href=url; a.download='zeeshop_sales_export.csv'; a.click();
   URL.revokeObjectURL(url);
   toast('Export downloaded ✅');
 }
@@ -5642,7 +5696,7 @@ function screenAudit(){
     ${logs.map(l=>{
       const u = state.users.find(x=>x.id===l.userId);
       return `<div class="list-row">
-        <div class="thumb">${l.action==='locked_price_attempt'?'🔒':'📝'}</div>
+        <div class="thumb">${l.action==='locked_price_attempt'?ICON_LOCK:ICON_EDIT_NOTE}</div>
         <div class="info"><div class="t1">${l.details}</div><div class="t2">${u?u.firstName+' '+u.lastName:'System'} · ${new Date(l.timestamp).toLocaleString()}</div></div>
       </div>`;
     }).join('') || '<p class="subtle">No activity yet.</p>'}
@@ -5658,7 +5712,7 @@ function screenNotes(){
   return `
     ${subHeader("Notes")}
     ${!isViewer() ? `<button class="btn btn-primary" id="add-note-btn" style="width:100%;margin-bottom:14px;">＋ New Note</button>` : ''}
-    ${notes.length===0 ? `<div class="empty"><div class="ic">🗒️</div><b>No notes yet</b>Jot down reminders, supplier contacts, or anything worth remembering.</div>` :
+    ${notes.length===0 ? `<div class="empty"><div class="ic">${ICON_NOTEBOOK}</div><b>No notes yet</b>Jot down reminders, supplier contacts, or anything worth remembering.</div>` :
     notes.map(n=>{
       const author = state.users.find(u=>u.id===n.authorUserId);
       const canEdit = isMaster() || n.authorUserId===state.sessionUserId;
@@ -5668,7 +5722,7 @@ function screenNotes(){
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <span class="subtle" style="font-size:11px;">${author?author.firstName:'Unknown'} · ${fmtDate(n.createdAt.slice(0,10))}</span>
           <div style="display:flex;gap:14px;">
-            <button data-share-note="${n.id}" style="background:none;border:none;color:var(--marigold-dark);font-size:12px;font-weight:700;padding:0;">📤 Share</button>
+            <button data-share-note="${n.id}" style="background:none;border:none;color:var(--marigold-dark);font-size:12px;font-weight:700;padding:0;">${ICON_EXPORT} Share</button>
             ${canEdit ? `<button data-delete-note="${n.id}" style="background:none;border:none;color:var(--red);font-size:12px;font-weight:700;padding:0;">Delete</button>` : ''}
           </div>
         </div>
@@ -5702,15 +5756,15 @@ function openShareNoteModal(noteId){
   const author = state.users.find(u=>u.id===n.authorUserId);
   const shareText = noteShareText(n, author);
   openSheet(`
-    <div class="sheet-head"><h3>Share Note</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Share Note</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <div class="card" style="max-height:340px;overflow-y:auto;">
       <div class="t1" style="margin-bottom:8px;">${escapeHtml(n.title)}</div>
       <p style="white-space:pre-wrap;font-size:13.5px;color:var(--text);line-height:1.5;">${escapeHtml(n.text)}</p>
     </div>
     <p class="subtle" style="margin:10px 0 14px;">Shared as plain text — the recipient gets a normal, readable message, not a squeezed-down image.</p>
     <div style="display:flex;gap:10px;">
-      <button class="btn btn-primary" id="share-note-text" style="flex:1;">📤 Share</button>
-      <button class="btn btn-outline" id="copy-note-text" style="flex:1;">📋 Copy Text</button>
+      <button class="btn btn-primary" id="share-note-text" style="flex:1;">${ICON_EXPORT} Share</button>
+      <button class="btn btn-outline" id="copy-note-text" style="flex:1;">${ICON_CLIPBOARD} Copy Text</button>
     </div>
   `);
   document.getElementById('share-note-text').addEventListener('click', async ()=>{
@@ -5730,11 +5784,11 @@ function openShareNoteModal(noteId){
 
 function openAddNoteModal(prefillHandover){
   openSheet(`
-    <div class="sheet-head"><h3>New Note</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>New Note</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <div class="field"><label>Title</label><input id="note-title" placeholder="e.g. Supplier contact, Restock reminder" value="${prefillHandover?'Handover note':''}"></div>
     <div class="field"><label>Details</label><textarea id="note-text" rows="6" placeholder="Write anything worth remembering..."></textarea></div>
     <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-bottom:16px;">
-      <input type="checkbox" id="note-handover" ${prefillHandover?'checked':''}> 📌 Show this to the next person who logs in (handover note)
+      <input type="checkbox" id="note-handover" ${prefillHandover?'checked':''}> ${ICON_PIN} Show this to the next person who logs in (handover note)
     </label>
     <button class="btn btn-primary" id="save-note-btn">Save Note</button>
   `);
@@ -5743,11 +5797,11 @@ function openAddNoteModal(prefillHandover){
 function openEditNoteModal(id){
   const n = state.shopNotes.find(x=>x.id===id);
   openSheet(`
-    <div class="sheet-head"><h3>Edit Note</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Edit Note</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <div class="field"><label>Title</label><input id="note-title" value="${escAttr(n.title)}"></div>
     <div class="field"><label>Details</label><textarea id="note-text" rows="6">${escapeHtml(n.text)}</textarea></div>
     <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-bottom:16px;">
-      <input type="checkbox" id="note-handover" ${n.isHandover?'checked':''}> 📌 Show this to the next person who logs in (handover note)
+      <input type="checkbox" id="note-handover" ${n.isHandover?'checked':''}> ${ICON_PIN} Show this to the next person who logs in (handover note)
     </label>
     <button class="btn btn-primary" id="save-note-btn">Save Changes</button>
   `);
@@ -5850,7 +5904,7 @@ function screenHistory(){
     {id:'voided', label:'Voided'}, {id:'supplier', label:'Supplier'}, {id:'expense', label:'Expenses'},
     {id:'adjustment', label:'Corrections'}
   ];
-  const typeIcon = {sale:'🧾', credit:'📒', voided:'🚫', supplier:'🚚', expense:'💸', adjustment:'🔢'};
+  const typeIcon = {sale:ICON_RECEIPT, credit:ICON_NOTEBOOK, voided:ICON_BAN, supplier:ICON_TRUCK, expense:ICON_CASH, adjustment:ICON_HASH};
 
   return `
     ${subHeader("History")}
@@ -5864,8 +5918,8 @@ function screenHistory(){
     <div style="display:flex;gap:8px;margin-bottom:12px;overflow-x:auto;">
       ${filterOptions.map(f=>`<button class="btn btn-sm ${historyFilter===f.id?'btn-dark':'btn-outline'}" data-hfilter="${f.id}">${f.label}</button>`).join('')}
     </div>
-    ${filtered.length>0?`<button class="btn btn-outline btn-sm" id="share-history-btn" style="margin-bottom:12px;">📤 Share This List (${filtered.length})</button>`:''}
-    ${filtered.length===0? `<div class="empty"><div class="ic">🧾</div><b>Nothing here</b>Try a different filter or date.</div>` :
+    ${filtered.length>0?`<button class="btn btn-outline btn-sm" id="share-history-btn" style="margin-bottom:12px;">${ICON_EXPORT} Share This List (${filtered.length})</button>`:''}
+    ${filtered.length===0? `<div class="empty"><div class="ic">${ICON_RECEIPT}</div><b>Nothing here</b>Try a different filter or date.</div>` :
     filtered.map((e,i)=>`
       <div class="card" ${e.onClick?`data-hist-idx="${i}" style="cursor:pointer;${e.dim?'opacity:0.55;':''}"`:`style="${e.dim?'opacity:0.55;':''}"`}>
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
@@ -5881,7 +5935,7 @@ function screenHistory(){
           </div>
         </div>
         <div style="display:flex;justify-content:flex-end;margin-top:8px;">
-          <button data-share-hist-idx="${i}" style="background:none;border:none;color:var(--marigold-dark);font-size:12px;font-weight:700;padding:2px 0;">📤 Share</button>
+          <button data-share-hist-idx="${i}" style="background:none;border:none;color:var(--marigold-dark);font-size:12px;font-weight:700;padding:2px 0;">${ICON_EXPORT} Share</button>
         </div>
       </div>`).join('')}
   `;
@@ -5924,13 +5978,13 @@ function openHistoryShareModal(){
   const filterLabel = (filterOptions.find(f=>f.id===historyFilter)||{}).label || 'All';
   const dateLabel = historyDateFilter ? fmtDate(historyDateFilter) : 'All Time';
   openSheet(`
-    <div class="sheet-head"><h3>Share History</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Share History</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <p class="subtle" style="margin-bottom:14px;">Shows the ${filterLabel} filter, ${dateLabel} — same as what's currently on screen. <b>Share</b> sends each item below as its own separate image (up to 10 at a time). <b>Download</b> saves one combined summary picture instead.</p>
     <div style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;justify-content:center;margin-bottom:14px;">
       <canvas id="history-canvas" style="max-width:100%;height:auto;display:block;"></canvas>
     </div>
     <div style="display:flex;gap:10px;">
-      <button class="btn btn-primary" id="share-history-img" style="flex:1;">📤 Share</button>
+      <button class="btn btn-primary" id="share-history-img" style="flex:1;">${ICON_EXPORT} Share</button>
       <button class="btn btn-outline" id="download-history-img" style="flex:1;">⬇️ Download</button>
     </div>
   `);
@@ -5956,7 +6010,7 @@ function openHistoryShareModal(){
         toast("This browser can't share multiple images at once — try Download for a single summary instead.");
       }
     } finally {
-      shareBtn.disabled = false; shareBtn.textContent = '📤 Share';
+      shareBtn.disabled = false; shareBtn.textContent = '${ICON_EXPORT} Share';
     }
   });
   document.getElementById('download-history-img').addEventListener('click', ()=>{
@@ -6110,12 +6164,12 @@ function openShareHistoryItemModal(idx){
   const e = __lastHistoryEvents[idx];
   if(!e){ toast('Could not find that entry.'); return; }
   openSheet(`
-    <div class="sheet-head"><h3>Share</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Share</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <div style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;justify-content:center;margin-bottom:14px;">
       <canvas id="hist-item-canvas" style="max-width:100%;height:auto;display:block;"></canvas>
     </div>
     <div style="display:flex;gap:10px;">
-      <button class="btn btn-primary" id="share-hist-item-img" style="flex:1;">📤 Share</button>
+      <button class="btn btn-primary" id="share-hist-item-img" style="flex:1;">${ICON_EXPORT} Share</button>
       <button class="btn btn-outline" id="download-hist-item-img" style="flex:1;">⬇️ Download</button>
     </div>
   `);
@@ -6152,7 +6206,7 @@ function openSaleDetail(saleId){
   const buyerName = cust ? cust.fullName : (s.walkInName || 'Walk-in customer');
   const isVoided = s.status==='voided';
   openSheet(`
-    <div class="sheet-head"><h3>Sale #${s.id.slice(-6).toUpperCase()}</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Sale #${s.id.slice(-6).toUpperCase()}</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     ${isVoided?`<div class="locked-msg" style="background:var(--paper-dim);color:var(--text-dim);margin-bottom:12px;">This sale was voided${s.voidReason?': '+escapeHtml(s.voidReason):''}.</div>`:''}
     <div class="card">
       <div class="t2">${fmtDate(s.date)} · Sold by ${seller.firstName} ${seller.lastName}</div>
@@ -6172,7 +6226,7 @@ function openSaleDetail(saleId){
     </div>
     ${(!isVoided && (isMaster() || (isStaff() && canDo('canVoidReturn') && s.soldByUserId===state.sessionUserId))) ? `
       <button class="btn btn-outline" id="open-return-sale" style="margin-bottom:10px;">↩️ Process a Return</button>
-      <button class="btn btn-danger" id="void-sale-btn">🚫 Void This Sale</button>
+      <button class="btn btn-danger" id="void-sale-btn">${ICON_BAN} Void This Sale</button>
     ` : ''}
     ${(!isVoided && isStaff() && canDo('canVoidReturn') && s.soldByUserId!==state.sessionUserId) ? `
       <p class="subtle">You can only void or return sales you personally made.</p>
@@ -6218,7 +6272,7 @@ function openReturnModal(saleId){
     toast("You don't have permission to return items from this sale."); return;
   }
   openSheet(`
-    <div class="sheet-head"><h3>Process Return</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Process Return</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <p class="subtle" style="margin-bottom:14px;">Set how many of each item are being returned. Stock is restored and the sale total is reduced automatically.</p>
     ${s.items.map((it,idx)=>{
       const g = state.goods.find(x=>x.id===it.goodId);
@@ -6301,10 +6355,10 @@ function screenExpenses(){
       <div class="stat-box"><div class="lbl">All Time</div><div class="val">${fmtMoney(total)}</div></div>
     </div>
     <button class="btn btn-primary" id="add-expense-btn" style="width:100%;margin-bottom:14px;">＋ Add Expense</button>
-    ${expenses.length===0?`<div class="empty"><div class="ic">💸</div><b>No expenses logged</b>Track rent, transport, wages, and restocking costs here.</div>`:
+    ${expenses.length===0?`<div class="empty"><div class="ic">${ICON_CASH}</div><b>No expenses logged</b>Track rent, transport, wages, and restocking costs here.</div>`:
     expenses.map(e=>`
       <div class="list-row">
-        <div class="thumb">💸</div>
+        <div class="thumb">${ICON_CASH}</div>
         <div class="info"><div class="t1">${escapeHtml(e.description||e.category)}</div><div class="t2">${e.category} · ${fmtDate(e.date)}</div></div>
         <div class="right"><b>${fmtMoney(e.amount)}</b><br>
           ${(isMaster()||e.createdByUserId===state.sessionUserId)?`<button data-delete-expense="${e.id}" style="background:none;border:none;color:var(--red);font-size:11px;font-weight:700;padding:0;">Delete</button>`:''}
@@ -6324,7 +6378,7 @@ function bindExpensesEvents(){
 }
 function openAddExpenseModal(){
   openSheet(`
-    <div class="sheet-head"><h3>Add Expense</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Add Expense</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <div class="field"><label>Category</label>
       <select id="exp-category">${EXPENSE_CATEGORIES.map(c=>`<option value="${c}">${c}</option>`).join('')}</select>
     </div>
@@ -6448,12 +6502,12 @@ function openLodgingReceiptSheet(bookingId){
   const shop = state.shops.find(x=>x.id===b.shopId);
   const seller = state.users.find(u=>u.id===b.createdByUserId) || currentUser();
   openSheet(`
-    <div class="sheet-head"><h3>Lodging Receipt</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Lodging Receipt</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <div style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;justify-content:center;margin-bottom:14px;">
       <canvas id="lodging-receipt-canvas" style="max-width:100%;height:auto;display:block;"></canvas>
     </div>
     <div style="display:flex;gap:10px;margin-bottom:6px;">
-      <button class="btn btn-primary" id="share-lodging-receipt" style="flex:1;">📤 Share Receipt</button>
+      <button class="btn btn-primary" id="share-lodging-receipt" style="flex:1;">${ICON_EXPORT} Share Receipt</button>
       <button class="btn btn-outline" id="download-lodging-receipt" style="flex:1;">⬇️ Download</button>
     </div>
     <p class="subtle" style="margin-bottom:14px;">Share opens your phone's share sheet with the receipt image attached — pick WhatsApp, Email, or any app there. ID, next-of-kin and plate number are kept internal and are not shown on this receipt.</p>
@@ -6501,7 +6555,7 @@ function screenLodging(){
       <div class="stat-box accent"><div class="lbl">Owed by Guests</div><div class="val">${fmtMoney(owed)}</div></div>
     </div>
     <button class="btn btn-primary" id="add-room-btn" style="width:100%;margin-bottom:14px;">＋ Add Room</button>
-    ${rooms.length===0?`<div class="empty"><div class="ic">🛏️</div><b>No rooms yet</b>Add each room so you can check guests in and out.</div>`:
+    ${rooms.length===0?`<div class="empty"><div class="ic">${ICON_BED}</div><b>No rooms yet</b>Add each room so you can check guests in and out.</div>`:
     rooms.map(r=>{
       const b = activeBookingForRoom(r.id);
       return `<div class="card" data-room-detail="${r.id}" style="cursor:pointer;">
@@ -6524,7 +6578,7 @@ function bindLodgingEvents(){
 }
 function openAddRoomModal(){
   openSheet(`
-    <div class="sheet-head"><h3>Add Room</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Add Room</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <div class="field"><label>Room Name / Number</label><input id="rm-name" placeholder="e.g. Room 101"></div>
     <div class="field"><label>Room Type</label><input id="rm-type" placeholder="e.g. Single, Double, Suite"></div>
     <div class="field"><label>Rate Per Night</label><input id="rm-rate" type="number" min="0"></div>
@@ -6551,7 +6605,7 @@ function openRoomDetail(roomId){
   const b = activeBookingForRoom(roomId);
   const history = state.lodgingBookings.filter(x=>x.roomId===roomId && x.status!=='active').sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
   openSheet(`
-    <div class="sheet-head"><h3>${escapeHtml(r.name)}</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>${escapeHtml(r.name)}</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <p class="subtle" style="margin-bottom:14px;">${escapeHtml(r.roomType||'Room')} · ${fmtMoney(r.ratePerNight)}/night</p>
     ${b?`
       <div class="stat-box accent" style="margin-bottom:14px;"><div class="lbl">Guest Balance</div><div class="val">${fmtMoney(b.balance)}</div></div>
@@ -6572,7 +6626,7 @@ function openRoomDetail(roomId){
         `:''}
       </div>
       <button class="btn btn-outline" id="pay-booking-btn" style="width:100%;margin-bottom:10px;">Record Payment</button>
-      <button class="btn btn-outline" id="receipt-booking-btn" data-receipt="${b.id}" style="width:100%;margin-bottom:10px;">🧾 Share Receipt</button>
+      <button class="btn btn-outline" id="receipt-booking-btn" data-receipt="${b.id}" style="width:100%;margin-bottom:10px;">${ICON_RECEIPT} Share Receipt</button>
       <button class="btn btn-dark" id="checkout-booking-btn" style="width:100%;margin-bottom:14px;">Check Out Guest</button>
     `:`
       <button class="btn btn-primary" id="checkin-btn" style="width:100%;margin-bottom:14px;">＋ Check In Guest</button>
@@ -6585,7 +6639,7 @@ function openRoomDetail(roomId){
           <div><b>${escapeHtml(h.guestName)}</b><div class="t2">${fmtDate(h.checkIn)} → ${fmtDate(h.checkOut)}</div></div>
           <div style="text-align:right;"><b>${fmtMoney(h.totalAmount)}</b></div>
         </div>
-        <button class="btn btn-sm btn-outline" data-receipt="${h.id}" style="margin-top:8px;">🧾 Share Receipt</button>
+        <button class="btn btn-sm btn-outline" data-receipt="${h.id}" style="margin-top:8px;">${ICON_RECEIPT} Share Receipt</button>
       </div>`).join('')}
   `);
   const ci = document.getElementById('checkin-btn');
@@ -6622,7 +6676,7 @@ function openCheckInModal(roomId){
   const inDate = todayISO();
   const outDate = (()=>{ const d=new Date(); d.setDate(d.getDate()+1); return d.toISOString().slice(0,10); })();
   openSheet(`
-    <div class="sheet-head"><h3>Check In — ${escapeHtml(r.name)}</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Check In — ${escapeHtml(r.name)}</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <div class="field"><label>Guest Name</label><input id="ci-name" placeholder="e.g. Mr. Adewale"></div>
     <div class="field"><label>Guest Phone</label><input id="ci-phone" placeholder="0802 730 0375"></div>
     <div class="row2">
@@ -6704,7 +6758,7 @@ function openCheckInModal(roomId){
 }
 /* ============================================================
    ABOUT US / CONTACT US — content managed centrally from the
-   Zed Admin Dashboard (Supabase), not stored on this device.
+   ZeeShop Admin Dashboard (Supabase), not stored on this device.
    ============================================================ */
 const SITE_CONTENT_URL = 'https://beypnkzrgqrkjttsxlju.supabase.co';
 const SITE_CONTENT_ANON_KEY = 'sb_publishable_m_MrYeKVF4HgUG5i5v_THg_LPbvmUK5';
@@ -6760,9 +6814,9 @@ function bindContactUsEvents(){
   fetchSiteContent('contact_us').then(row=>{
     if(!row){ box.innerHTML = `<div class="card"><p class="subtle">This business hasn't added contact details yet.</p></div>`; return; }
     const lines = [];
-    if(row.phone) lines.push(`<div class="t2">📞 <a href="tel:${escAttr(row.phone)}">${escapeHtml(row.phone)}</a></div>`);
-    if(row.whatsapp) lines.push(`<div class="t2">💬 <a href="https://wa.me/${row.whatsapp.replace(/[^\d]/g,'')}" target="_blank">WhatsApp: ${escapeHtml(row.whatsapp)}</a></div>`);
-    if(row.email) lines.push(`<div class="t2">✉️ <a href="mailto:${escAttr(row.email)}">${escapeHtml(row.email)}</a></div>`);
+    if(row.phone) lines.push(`<div class="t2">${ICON_PHONE} <a href="tel:${escAttr(row.phone)}">${escapeHtml(row.phone)}</a></div>`);
+    if(row.whatsapp) lines.push(`<div class="t2">${ICON_CHAT} <a href="https://wa.me/${row.whatsapp.replace(/[^\d]/g,'')}" target="_blank">WhatsApp: ${escapeHtml(row.whatsapp)}</a></div>`);
+    if(row.email) lines.push(`<div class="t2">${ICON_MAIL} <a href="mailto:${escAttr(row.email)}">${escapeHtml(row.email)}</a></div>`);
     if(row.address) lines.push(`<div class="t2" style="display:flex;align-items:flex-start;gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0;margin-top:3px;"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>${escapeHtml(row.address)}</div>`);
     box.innerHTML = `<div class="card">
       <h2 style="margin:0 0 10px;color:var(--ink-text);">${escapeHtml(row.heading||'Contact Us')}</h2>
@@ -6781,7 +6835,7 @@ const FAQ_GROUPS = [
     { q:"How do I create my business account?", a:"Tap Create One Free on the login screen, fill in your business and owner details, then verify your email. You can reset your password later using an emailed code, so there's no code you need to keep safe to get back in." },
     { q:"I forgot my password — what do I do?", a:"Tap Forgot Password on the login screen and enter your username or email. We'll send a 6-digit code to your email on file — enter it to set a new password. If your account has no email on file, you'll need to create a new account." },
     { q:"How do multiple staff use the same device?", a:"Each staff member gets their own PIN. After the business owner logs in once, everyone unlocks their own profile with their PIN from the user-select screen — no need to log in with a password every time." },
-    { q:"How do I add a new staff member?", a:"Go to More → Staff → Generate Join Code. Share the code with them; they open Zed on their device, tap Join Business, and enter it. The code expires after a set number of minutes." },
+    { q:"How do I add a new staff member?", a:"Go to More → Staff → Generate Join Code. Share the code with them; they open ZeeShop on their device, tap Join Business, and enter it. The code expires after a set number of minutes." },
     { q:"A staff member already has an account — how do they sign in on a second phone?", a:"On the new phone, tap Join Business and enter the business's Connect Code (from the Owner's Staff screen) — the app recognizes it's a reconnect and asks for their phone number and PIN instead of name details. This signs them into their existing account — it does not create a new one, so their sales history and activity stay attached to them." },
     { q:"What is the Connect Code?", a:"A permanent code (unlike the Join Code, it doesn't expire) that lets an existing staff member sign into a second device. Find or reset it under More → Staff → Staff Connect Code — only the Owner can see or regenerate it. Resetting it doesn't sign anyone out; it just retires the old code." },
     { q:"What's the difference between Master, Staff, Viewer, and Super Admin?", a:"Master is the owner with full access. Staff have specific permissions you assign (sell, add goods, record cash, etc). Viewer can only look, not act. Super Admin is a staff member you've trusted to manage specific shops on your behalf." },
@@ -6884,7 +6938,7 @@ function screenFAQ(){
       <input id="faq-search" placeholder="Search — e.g. \\"receipt\\", \\"credit\\", \\"staff\\"" value="${escAttr(faqSearchQuery)}">
     </div>
     <p class="subtle" style="margin-bottom:14px;">${searching ? `${groups.reduce((a,g)=>a+g.items.length,0)} result(s)` : 'Tap a question to see the answer.'}</p>
-    ${groups.length===0 ? `<div class="empty"><div class="ic">🔍</div><b>No matches</b>Try a different word, or browse by scrolling — nothing here mentions "${escapeHtml(faqSearchQuery)}".</div>` : ''}
+    ${groups.length===0 ? `<div class="empty"><div class="ic">${ICON_SEARCH}</div><b>No matches</b>Try a different word, or browse by scrolling — nothing here mentions "${escapeHtml(faqSearchQuery)}".</div>` : ''}
     ${groups.map((group)=>{
       const gi = FAQ_GROUPS.findIndex(g=>g.category===group.category);
       return `
@@ -6903,7 +6957,7 @@ function screenFAQ(){
       }).join('')}
     `;}).join('')}
     <div class="section-head"><h3>Still stuck?</h3></div>
-    <p class="subtle">Use the thumbs-down button wherever you're chatting with support to send feedback, or reach out to whoever set up your Zed account.</p>
+    <p class="subtle">Use the thumbs-down button wherever you're chatting with support to send feedback, or reach out to whoever set up your ZeeShop account.</p>
   `;
 }
 function bindFAQEvents(){
@@ -6939,10 +6993,10 @@ function screenWarehouse(){
   const activeWh = currentShop()?.isWarehouse ? currentShop() : warehouses[0];
   if(!activeWh){
     if(!isMaster()){
-      return `${subHeader("Warehouse")}<div class="empty"><div class="ic">📦</div><b>No warehouse set up yet</b>Ask your Owner to set one up — once they do, you'll be able to record and move stock here.</div>`;
+      return `${subHeader("Warehouse")}<div class="empty"><div class="ic">${ICON_BOX}</div><b>No warehouse set up yet</b>Ask your Owner to set one up — once they do, you'll be able to record and move stock here.</div>`;
     }
     return `${subHeader("Warehouse")}
-      <div class="empty"><div class="ic">📦</div><b>No warehouse set up yet</b>A warehouse holds stock separately from your shops, so you can record what's produced or imported before it's moved out to sell.</div>
+      <div class="empty"><div class="ic">${ICON_BOX}</div><b>No warehouse set up yet</b>A warehouse holds stock separately from your shops, so you can record what's produced or imported before it's moved out to sell.</div>
       <button class="btn btn-primary" id="create-warehouse-btn" style="width:100%;margin-top:14px;">＋ Create Warehouse</button>`;
   }
 
@@ -6966,7 +7020,7 @@ function screenWarehouse(){
       <button class="btn btn-outline" style="flex:1;" id="transfer-stock-btn" ${shops.length===0?'disabled':''}>↗ Move to a Shop</button>
     </div>
     ${shops.length===0?`<p class="subtle" style="margin:-6px 0 14px;">Add a real shop (not a warehouse) before you can move stock out.</p>`:''}
-    ${withStock.length===0?`<div class="empty"><div class="ic">📭</div><b>Nothing in stock yet</b>Tap Record Stock to log what's arrived.</div>`:
+    ${withStock.length===0?`<div class="empty"><div class="ic">${ICON_INBOX_EMPTY}</div><b>Nothing in stock yet</b>Tap Record Stock to log what's arrived.</div>`:
     withStock.map(g=>`
       <div class="list-row">
         <div class="thumb">${g.emoji||'🛍️'}</div>
@@ -6989,7 +7043,7 @@ function openStockTransferModal(){
   const shops = state.shops.filter(s=>!s.isWarehouse);
   if(goods.length===0){ toast('Nothing in stock here to move.'); return; }
   openSheet(`
-    <div class="sheet-head"><h3>Move Stock to a Shop</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Move Stock to a Shop</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <p class="subtle" style="margin-bottom:14px;">From ${escapeHtml(warehouse.name)}. Oldest stock moves first automatically.</p>
     <div class="field"><label>Item</label>
       <select id="st-good">${goods.map(g=>`<option value="${g.id}">${escapeHtml(g.name)} (${totalStock(g)} available)</option>`).join('')}</select>
@@ -7065,7 +7119,7 @@ function screenSuppliers(){
     ${suppliers.length>0?`<div class="stat-box accent" style="margin-bottom:14px;"><div class="lbl">You Owe Suppliers</div><div class="val">${fmtMoney(totalOwed)}</div></div>
     <p class="subtle" style="margin-bottom:14px;">Kept separate from your Profit Reports — this is what you owe, not what you earned.</p>`:''}
     <button class="btn btn-primary" id="add-supplier-btn" style="width:100%;margin-bottom:14px;">＋ Add Supplier</button>
-    ${suppliers.length===0?`<div class="empty"><div class="ic">🚚</div><b>No suppliers yet</b>Keep track of who you buy stock from.</div>`:
+    ${suppliers.length===0?`<div class="empty"><div class="ic">${ICON_TRUCK}</div><b>No suppliers yet</b>Keep track of who you buy stock from.</div>`:
     suppliers.map(sup=>{
       const owed = supplierBalance(sup.id);
       return `<div class="card" data-supplier-detail="${sup.id}" style="cursor:pointer;">
@@ -7088,7 +7142,7 @@ function bindSuppliersEvents(){
 function openAddSupplierModal(){
   const goods = state.goods.filter(g=>g.shopId===state.currentShopId && !g.hasVariants);
   openSheet(`
-    <div class="sheet-head"><h3>Add Supplier</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Add Supplier</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <div class="field"><label>Name / Business</label><input id="sup-name"></div>
     <div class="field"><label>Country</label><select id="sup-country">${countryOptionsHTML(business().country)}</select></div>
     <div class="field"><label>Phone</label><input id="sup-phone" placeholder="0802 730 0375 or +234..."></div>
@@ -7207,10 +7261,10 @@ function openSupplierDetail(supplierId){
   const purchases = state.supplierPurchases.filter(p=>p.supplierId===supplierId).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
   const owed = supplierBalance(supplierId);
   openSheet(`
-    <div class="sheet-head"><h3>${escapeHtml(sup.name)}</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>${escapeHtml(sup.name)}</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <div class="stat-box accent" style="margin-bottom:14px;"><div class="lbl">You Owe This Supplier</div><div class="val">${fmtMoney(owed)}</div></div>
     <div class="contact-btns" style="margin-bottom:14px;">
-      <a href="tel:${toTelHref(sup.phone, sup.country)}">📞 Call</a>
+      <a href="tel:${toTelHref(sup.phone, sup.country)}">${ICON_PHONE} Call</a>
       <a href="https://wa.me/${toIntlDigits(sup.phone, sup.country)}" target="_blank">WhatsApp</a>
       ${isMaster()?`<button data-delete-supplier="${sup.id}">Delete</button>`:''}
     </div>
@@ -7251,7 +7305,7 @@ function openSupplierDetail(supplierId){
 function openLogRestockModal(supplierId){
   const goods = state.goods.filter(g=>g.shopId===state.currentShopId && !g.hasVariants);
   openSheet(`
-    <div class="sheet-head"><h3>Log a Restock</h3><button class="close-x" id="sheet-close">✕</button></div>
+    <div class="sheet-head"><h3>Log a Restock</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <p class="subtle" style="margin-bottom:10px;">For items with sizes/colors, add stock to a specific variant from Goods → tap the item → Add Stock instead.</p>
     <div class="field"><label>Item</label>
       <select id="rs-item">

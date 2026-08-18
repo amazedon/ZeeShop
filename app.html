@@ -351,7 +351,6 @@ input:checked + .slider-tog::before{transform:translateX(19px);}
 
 @media(min-width:560px){.userselect-grid{grid-template-columns:repeat(4,1fr);}}
 </style>
-<script src="https://accounts.google.com/gsi/client" async defer></script>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#12213B">
 <meta name="color-scheme" content="light">
@@ -832,6 +831,7 @@ let authMode = 'login'; // 'login' | 'signup'
 let forceFullLogin = false;
 let authError = '';
 let pendingSignupData = null; // holds the form fields between "Create My Shop" and OTP entry
+let pendingGoogleAuth = null; // { authUserId, email, firstName, lastName } — set once, right after a Google sign-in with no existing business found; cleared once that business is created
 
 // ============================================================
 // TEMPORARY: set to false once Termii approves your SMTP sending.
@@ -842,59 +842,31 @@ const SKIP_SIGNUP_OTP_TEMP = false;
 let signupOtpSending = false;
 let signupOtpError = '';
 /* ============================================================
-   GOOGLE SIGN-IN
-   Replace with your own Client ID from Google Cloud Console
-   (APIs & Services → Credentials → Create OAuth client ID → Web application).
-   Add your live domain under "Authorized JavaScript origins" there.
+   GOOGLE SIGN-IN — Supabase OAuth only. No Google script, no client
+   ID in this file, no manual JWT decoding. Google is configured as an
+   OAuth provider directly in the Supabase dashboard (Authentication →
+   Providers → Google) — that's the only place any Google credentials
+   live. redirectTo uses window.location.origin so this works unchanged
+   on localhost and on the live domain, whichever one it's running on.
    ============================================================ */
-const GOOGLE_CLIENT_ID = '972386732120-jeflemnhcm58cgr49mpk4vekp647p2k4.apps.googleusercontent.com';
-
-function decodeGoogleJwt(token){
-  // Reads the payload of the JWT Google returns — no server verification,
-  // fine for pre-filling signup/login by email in this local-only app.
-  const payload = token.split('.')[1];
-  const json = decodeURIComponent(atob(payload.replace(/-/g,'+').replace(/_/g,'/'))
-    .split('').map(c=>'%'+('00'+c.charCodeAt(0).toString(16)).slice(-2)).join(''));
-  return JSON.parse(json);
+async function handleGoogleSignIn(){
+  const { error } = await window.sb.auth.signInWithOAuth({
+    provider: 'google',
+    options: { redirectTo: window.location.origin + '/app.html' }
+  });
+  if(error) toast("Couldn't start Google sign-in: " + error.message);
+  // On success there's nothing further to do here — the browser navigates
+  // to Google, then back to redirectTo, and handleOAuthRedirectIfPresent
+  // (registered near the Supabase client below) takes it from there.
 }
-function handleGoogleCredentialResponse(response){
-  let profile;
-  try{ profile = decodeGoogleJwt(response.credential); }
-  catch(e){ toast("Couldn't read Google's response. Please try again."); return; }
-  const email = profile.email;
-  const firstName = profile.given_name || profile.name || 'there';
-  const lastName = profile.family_name || '';
-  // Look for an existing account with this email, across all businesses on this device.
-  const existingUser = state.users.find(u=>u.email && u.email.toLowerCase()===email.toLowerCase());
-  if(existingUser){
-    const biz = state.business && state.business.id===existingUser.businessId ? state.business : null;
-    if(!biz){ toast("This Google account is linked to a different business than what's set up on this device."); return; }
-    state.sessionUserId = existingUser.id;
-    logAudit('google_login', 'Logged in with Google: '+email);
-    toast('Welcome back, '+firstName+' 👋');
-    render();
-  } else {
-    // No account yet — jump to signup with the fields pre-filled.
-    authMode = 'signup';
-    render();
-    setTimeout(()=>{
-      const emailEl = document.getElementById('su-email');
-      const fnEl = document.getElementById('su-fn');
-      const lnEl = document.getElementById('su-ln');
-      if(emailEl) emailEl.value = email;
-      if(fnEl) fnEl.value = firstName;
-      if(lnEl) lnEl.value = lastName;
-      toast("We've filled in your details from Google — just add your business info to finish.");
-    }, 50);
-  }
-}
-function renderGoogleButton(containerId){
-  if(!window.google || !google.accounts || !google.accounts.id) return;
-  try{
-    google.accounts.id.initialize({ client_id: GOOGLE_CLIENT_ID, callback: handleGoogleCredentialResponse });
-    const el = document.getElementById(containerId);
-    if(el) google.accounts.id.renderButton(el, { theme:'outline', size:'large', width: 320, shape:'rectangular' });
-  }catch(e){ /* Google script may not have loaded yet — button area just stays empty */ }
+const GOOGLE_G_LOGO = `<svg width="18" height="18" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6.1 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 8 3l5.7-5.7C34.5 6 29.5 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.7-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.6 15.9 18.9 13 24 13c3.1 0 5.8 1.1 8 3l5.7-5.7C34.5 6 29.5 4 24 4c-7.5 0-14 4.2-17.7 10.7z"/><path fill="#4CAF50" d="M24 44c5.4 0 10.3-1.8 14.1-5.1l-6.5-5.5c-2 1.5-4.6 2.6-7.6 2.6-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.9 39.6 16.4 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.2 4.2-4.1 5.6l6.5 5.5C41.4 36.2 44 30.6 44 24c0-1.3-.1-2.7-.4-3.5z"/></svg>`;
+function googleAuthButton(){
+  return `<button type="button" class="btn" id="google-auth-btn" style="width:100%;background:#fff;color:#3c4043;border:1.5px solid #dadce0;display:flex;align-items:center;justify-content:center;gap:10px;font-weight:600;margin-bottom:14px;">${GOOGLE_G_LOGO}Continue with Google</button>
+  <div style="display:flex;align-items:center;gap:10px;margin:14px 0;">
+    <div style="flex:1;height:1px;background:var(--line);"></div>
+    <span style="font-size:12px;color:var(--text-dim);">or</span>
+    <div style="flex:1;height:1px;background:var(--line);"></div>
+  </div>`;
 }
 
 function renderAuthScreen(){
@@ -911,16 +883,11 @@ function renderLogin(){
       <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">Zed</div></div>
       <div class="tagline">Your Shop, In Your Pocket.</div>
       ${authError ? `<div class="err">${authError}</div>` : ''}
+      ${googleAuthButton()}
       <div class="field"><label>Username or Email</label><input id="li-user" placeholder="chika_stores or you@email.com"></div>
       <div class="field"><label>Password</label><input id="li-pass" type="password" placeholder="••••••••"></div>
       <button class="btn btn-primary" id="btn-login">Log In</button>
       <div class="link-row"><a href="#" id="go-forgot" style="color:var(--text-dim);">Forgot password?</a></div>
-      <div style="display:flex;align-items:center;gap:10px;margin:16px 0;">
-        <div style="flex:1;height:1px;background:var(--line);"></div>
-        <span style="font-size:12px;color:var(--text-dim);">or</span>
-        <div style="flex:1;height:1px;background:var(--line);"></div>
-      </div>
-      <div id="google-login-btn" style="display:flex;justify-content:center;margin-bottom:10px;"></div>
       <div class="link-row">No business yet? <a href="#" id="go-signup" style="color:var(--marigold-dark);font-weight:800;">Create one free</a></div>
       <div class="link-row">Joining a shop as staff? <a href="#" id="go-join-shop" style="color:var(--teal);font-weight:800;">Enter your code</a></div>
     </div>
@@ -1173,12 +1140,7 @@ function renderSignup(){
       <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">Zed</div></div>
       <div class="tagline">Set up your business — takes 2 minutes.</div>
       ${authError ? `<div class="err">${authError}</div>` : ''}
-      <div id="google-signup-btn" style="display:flex;justify-content:center;margin-bottom:14px;"></div>
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
-        <div style="flex:1;height:1px;background:var(--line);"></div>
-        <span style="font-size:12px;color:var(--text-dim);">or fill in manually</span>
-        <div style="flex:1;height:1px;background:var(--line);"></div>
-      </div>
+      ${googleAuthButton()}
       <div class="field"><label>Business Name</label><input id="su-biz" placeholder="Chika Stores"></div>
       <div class="row2">
         <div class="field"><label>Country</label>
@@ -1245,15 +1207,14 @@ function escapeIlike(s){ return s.replace(/[%_]/g, c => '\\'+c); }
 // (goods, customers, sales, etc). See sync-engine.js's pullSync for the
 // "Known limitation" this closes. Used by both Login (with the existing
 // password) and Forgot Password (with the just-reset one).
-async function loginOwnerToSupabase(email, pass){
-  const { data: signInData, error: signInErr } = await window.sb.auth.signInWithPassword({ email, password: pass });
-  if(signInErr || !signInData.session){
-    throw new Error('Incorrect username/email or password.');
-  }
-  const accessToken = signInData.session.access_token;
+// Shared by password login AND Google OAuth login — once ANY Supabase Auth
+// session exists (however it was obtained), this is what actually pulls the
+// business, staff record, and shops down and makes the app usable. Splitting
+// this out means the Google path isn't a second, divergent copy of this logic.
+async function loadOwnerBusinessData(accessToken, authUserId, emailForLookup){
   const headers = { 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+accessToken };
 
-  const bizRes = await fetch(`${SITE_CONTENT_URL}/rest/v1/businesses?select=*&owner_auth_user_id=eq.${signInData.user.id}`, { headers });
+  const bizRes = await fetch(`${SITE_CONTENT_URL}/rest/v1/businesses?select=*&owner_auth_user_id=eq.${authUserId}`, { headers });
   const bizRows = bizRes.ok ? await bizRes.json() : [];
   if(!bizRows[0]){
     throw new Error("We couldn't find a business linked to this account.");
@@ -1270,7 +1231,7 @@ async function loginOwnerToSupabase(email, pass){
   };
 
   const [usersRes, shopsRes] = await Promise.all([
-    fetch(`${SITE_CONTENT_URL}/rest/v1/app_users?select=*&business_id=eq.${b.id}&email=ilike.${encodeURIComponent(escapeIlike(email))}`, { headers }),
+    fetch(`${SITE_CONTENT_URL}/rest/v1/app_users?select=*&business_id=eq.${b.id}&email=ilike.${encodeURIComponent(escapeIlike(emailForLookup))}`, { headers }),
     fetch(`${SITE_CONTENT_URL}/rest/v1/shops?select=*&business_id=eq.${b.id}`, { headers })
   ]);
   const userRows = usersRes.ok ? await usersRes.json() : [];
@@ -1295,18 +1256,89 @@ async function loginOwnerToSupabase(email, pass){
   state.sessionUserId = localUser.id;
   forceFullLogin = false;
   state.currentShopId = shopRows[0] ? shopRows[0].id : (state.shops[0] ? state.shops[0].id : null);
+  return localUser;
+}
+
+async function loginOwnerToSupabase(email, pass){
+  const { data: signInData, error: signInErr } = await window.sb.auth.signInWithPassword({ email, password: pass });
+  if(signInErr || !signInData.session){
+    throw new Error('Incorrect username/email or password.');
+  }
+  const localUser = await loadOwnerBusinessData(signInData.session.access_token, signInData.user.id, email);
   logAudit('login', 'Master logged in on a new device');
   toast(`Welcome back, ${localUser.firstName}!`);
   render();
-
-  // Pull everything else now that business/session exist locally.
   if(typeof pullSync === 'function') pullSync();
+}
+
+// Google OAuth already established a real Supabase session by the time this
+// runs — no signInWithPassword call needed (there's no password), just the
+// same business/staff lookup as the normal login path.
+async function loginOwnerViaGoogleSession(session){
+  const localUser = await loadOwnerBusinessData(session.access_token, session.user.id, session.user.email);
+  logAudit('login', 'Master logged in with Google');
+  toast(`Welcome back, ${localUser.firstName}!`);
+  render();
+  if(typeof pullSync === 'function') pullSync();
+}
+
+// Fired once, right after the Google OAuth redirect lands back on this page.
+// Distinguishes "just came back from Google" from every OTHER reason
+// onAuthStateChange can fire (a normal signInWithPassword() elsewhere in
+// this file also fires SIGNED_IN) by checking, once, whether the URL that
+// was loaded actually contained OAuth callback params — normal logins never
+// arrive via a URL redirect, so this never fires for those.
+// Called explicitly right after window.sb is created (further down this
+// file) — NOT run as a bare top-level statement here, since window.sb
+// doesn't exist yet at this point in the script.
+const arrivedViaGoogleRedirect = window.location.hash.includes('access_token') || new URLSearchParams(window.location.search).has('code');
+let googleRedirectHandled = false;
+function initGoogleRedirectListener(){
+  if(!arrivedViaGoogleRedirect) return;
+  window.sb.auth.onAuthStateChange(async (event, session) => {
+    if(event !== 'SIGNED_IN' || googleRedirectHandled || !session) return;
+    googleRedirectHandled = true;
+    const authUser = session.user;
+    const meta = authUser.user_metadata || {};
+    const firstName = meta.given_name || (meta.full_name||meta.name||'').split(' ')[0] || 'there';
+    const lastName = meta.family_name || (meta.full_name||meta.name||'').split(' ').slice(1).join(' ');
+
+    try{
+      await loginOwnerViaGoogleSession(session);
+    }catch(e){
+      // No business found for this Google account yet — treat it as a
+      // brand new signup, skipping straight to business details since
+      // Google already verified who they are.
+      pendingGoogleAuth = { authUserId: authUser.id, email: authUser.email, firstName, lastName };
+      authMode = 'signup';
+      render();
+      toast("Signed in with Google — just finish your business details.");
+    }
+  });
 }
 
 function bindAuthEvents(){
   const go = (id,fn)=>{ const e=document.getElementById(id); if(e) e.addEventListener('click', fn); };
-  if(document.getElementById('google-login-btn')) renderGoogleButton('google-login-btn');
-  if(document.getElementById('google-signup-btn')) renderGoogleButton('google-signup-btn');
+  go('google-auth-btn', handleGoogleSignIn);
+  // Coming back here right after Google auth, with no existing business
+  // found for that account — lock the email (it's already verified by
+  // Google, no need to ask again) and pre-fill the name from their profile.
+  if(pendingGoogleAuth){
+    const emailEl = document.getElementById('su-email');
+    const fnEl = document.getElementById('su-fn');
+    const lnEl = document.getElementById('su-ln');
+    const passField = document.getElementById('su-pass');
+    if(emailEl){ emailEl.value = pendingGoogleAuth.email; emailEl.disabled = true; }
+    if(fnEl && !fnEl.value) fnEl.value = pendingGoogleAuth.firstName;
+    if(lnEl && !lnEl.value) lnEl.value = pendingGoogleAuth.lastName;
+    // No password to set — Google already authenticated this session, and
+    // there's nothing to sign up again with. Hide the field entirely
+    // rather than ask for one that won't be used.
+    if(passField){
+      const passFieldWrap = passField.closest('.field');
+      if(passFieldWrap) passFieldWrap.style.display = 'none';
+    }
+  }
   go('go-signup', e=>{e.preventDefault(); authMode='signup'; authError=''; render();});
   go('go-login', e=>{e.preventDefault(); authMode='login'; authError=''; render();});
   go('go-forgot', e=>{e.preventDefault(); authMode='forgot'; forgotStep=1; forgotUserId=null; forgotEmail=null; forgotCode=null; forgotError=''; render();});
@@ -1380,11 +1412,11 @@ function bindAuthEvents(){
     const ln = document.getElementById('su-ln').value.trim();
     const username = document.getElementById('su-username').value.trim();
     const phone = document.getElementById('su-phone').value.trim();
-    const email = document.getElementById('su-email').value.trim();
-    const pass = document.getElementById('su-pass').value;
+    const email = pendingGoogleAuth ? pendingGoogleAuth.email : document.getElementById('su-email').value.trim();
+    const pass = pendingGoogleAuth ? null : document.getElementById('su-pass').value;
     const consent = document.getElementById('su-consent').checked;
-    if(!biz||!fn||!ln||!username||!email||!pass){ authError='Please fill in every field.'; render(); return; }
-    if(pass.length<6){ authError='Password must be at least 6 characters.'; render(); return; }
+    if(!biz||!fn||!ln||!username||!email||(!pendingGoogleAuth && !pass)){ authError='Please fill in every field.'; render(); return; }
+    if(!pendingGoogleAuth && pass.length<6){ authError='Password must be at least 6 characters.'; render(); return; }
     if(!consent){ authError='Please accept the data consent checkbox to continue.'; render(); return; }
     const uLower = username.toLowerCase(), eLower = email.toLowerCase();
     const dupe = state.users.find(x=> x.username.toLowerCase()===uLower || (x.email||'').toLowerCase()===eLower);
@@ -1398,7 +1430,22 @@ function bindAuthEvents(){
     if(signupOtpSending) return;
     signupOtpSending = true;
     const btn = document.getElementById('btn-signup');
-    if(btn){ btn.disabled = true; btn.textContent = 'Sending code…'; }
+    if(btn){ btn.disabled = true; btn.textContent = 'Creating…'; }
+
+    if(pendingGoogleAuth){
+      // Already authenticated by Google — no email to verify (Google
+      // already proved it) and no password to check, so this skips OTP
+      // entirely and goes straight to creating the business.
+      try{
+        await completeGoogleSignupAccount({ biz, country, ccy, fn, ln, username, phone, email }, pendingGoogleAuth.authUserId);
+        toast('Account created with Google ✅');
+      }catch(err){
+        authError = err.message || "Couldn't create the account. Please try again.";
+      }
+      signupOtpSending = false;
+      render();
+      return;
+    }
 
     if(SKIP_SIGNUP_OTP_TEMP){
       // Termii SMTP not approved yet — skip straight to account creation.
@@ -1563,6 +1610,65 @@ function bindSignupVerifyEvents(){
   render();
 }
 function hash(s){ let h=0; for(let i=0;i<s.length;i++){h=(h*31 + s.charCodeAt(i))|0;} return 'h'+h; }
+
+// Same shape as completeSignupAccount, for the Google path specifically:
+// no signUp() call (the session already exists — that's the whole point of
+// arriving here), no password anywhere (passwordHash stays null on purpose,
+// so a stale/fake local check can never accidentally "succeed" — if this
+// person ever wants password login too, that's what Forgot Password is for).
+// Unlike manual signup, failures here are NOT swallowed silently: manual
+// signup has a legitimate offline-first fallback (local account still works
+// even if the sync fails), but a Google account with no server-side business
+// row would be unrecoverable — no other device, and not even a local-storage
+// clear on this one, could ever get back to it. So this throws on failure
+// and lets the signup form show the real error instead.
+async function completeGoogleSignupAccount(data, ownerAuthId){
+  const { biz, country, ccy, fn, ln, username, phone, email } = data;
+  const bizId = uid('biz');
+  const userId = uid('user');
+  const shopId = uid('shop');
+
+  const { error: bizErr } = await window.sb.from('businesses').insert({
+    id: bizId, name: biz, business_type: '', registration_number: '', country, currency: ccy,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, language: 'en', tax_name: 'VAT', tax_percent: 0,
+    subscription_plan: 'free', owner_auth_user_id: ownerAuthId
+  });
+  if(bizErr) throw new Error("Couldn't create the business: " + bizErr.message);
+
+  const { error: shopErr } = await window.sb.from('shops').insert({
+    id: shopId, business_id: bizId, name: biz + " — Main Shop", address: '', phone, email
+  });
+  if(shopErr) throw new Error("Couldn't create the shop: " + shopErr.message);
+
+  const { error: userErr } = await window.sb.from('app_users').insert({
+    id: userId, business_id: bizId, username, email, phone, first_name: fn, last_name: ln,
+    role: 'master', is_active: true, can_add_goods: true, can_sell: true, can_sell_credit: true,
+    can_record_cash: true, can_void_return: true, can_share: true, password_hash: null, auth_user_id: ownerAuthId
+  });
+  if(userErr) throw new Error("Couldn't create your staff record: " + userErr.message);
+
+  const groupRetail = {id:uid('grp'),businessId:bizId,name:'Retail'};
+  const groupWholesale = {id:uid('grp'),businessId:bizId,name:'Wholesale'};
+  const groupVip = {id:uid('grp'),businessId:bizId,name:'VIP'};
+  for(const g of [groupRetail, groupWholesale, groupVip]){
+    await window.sb.from('customer_groups').insert({ id: g.id, business_id: g.businessId, name: g.name });
+  }
+
+  state.business = { id:bizId, name:biz, businessType:'', registrationNumber:'', country, currency:ccy,
+    timezone:Intl.DateTimeFormat().resolvedOptions().timeZone, language:'en', taxName:'VAT', taxPercent:0,
+    subscriptionPlan:'free', createdAt:new Date().toISOString() };
+  state.users.push({ id:userId, businessId:bizId, username, email, phone, firstName:fn, lastName:ln,
+    passwordHash: null, role:'master', isActive:true, canAddGoods:true });
+  state.shops.push({ id:shopId, businessId:bizId, name: biz+" — Main Shop", address:'', phone, email,
+    receiptFooter:'Thank you for your business!', receiptTerms:'Goods sold in good condition. No refund after payment.', auctionDiscountDefault:30 });
+  state.customerGroups.push(groupRetail, groupWholesale, groupVip);
+  state.currentShopId = shopId;
+  state.sessionUserId = userId;
+  logAudit('signup', 'Business created with Google: '+biz);
+  pendingGoogleAuth = null;
+  render();
+  if(typeof pullSync === 'function') pullSync();
+}
 
 /* ============================================================
    BUSINESS LOGO — uploaded once, shrunk down before storing so
@@ -2012,11 +2118,15 @@ function renderShell(){
   const alerts = alertCounts();
   const ICON_HOME = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V20a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V9.5"/></svg>`;
   const ICON_MORE = `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2.2"/><circle cx="12" cy="12" r="2.2"/><circle cx="19" cy="12" r="2.2"/></svg>`;
+  const ICON_SALE = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h12a1 1 0 0 1 1 1v18l-2.5-1.5-2 1.5-2-1.5-2 1.5-2-1.5L6 21V3a1 1 0 0 1 1-1z"/><line x1="8.5" y1="7" x2="15.5" y2="7"/><line x1="8.5" y1="11" x2="15.5" y2="11"/></svg>`;
+  const ICON_GOODS = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.89 1.45l8 4A2 2 0 0 1 22 7.24v9.53a2 2 0 0 1-1.11 1.79l-8 4a2 2 0 0 1-1.79 0l-8-4a2 2 0 0 1-1.1-1.8V7.24a2 2 0 0 1 1.11-1.79l8-4a2 2 0 0 1 1.78 0z"/><path d="M2.32 6.16L12 11l9.68-4.84"/><path d="M12 22.76V11"/></svg>`;
+  const ICON_CUSTOMERS = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`;
+  const ICON_BELL = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>`;
   const navItems = [
     {id:'dashboard', ic:ICON_HOME, label:'Home', roles:['master','staff','viewer']},
-    {id:'sale', ic:'🧾', label:'New Sale', roles:['master','staff']},
-    {id:'goods', ic:'📦', label:'Goods', roles:['master','staff','viewer']},
-    {id:'customers', ic:'👥', label:'Customers', roles:['master','staff']},
+    {id:'sale', ic:ICON_SALE, label:'New Sale', roles:['master','staff']},
+    {id:'goods', ic:ICON_GOODS, label:'Goods', roles:['master','staff','viewer']},
+    {id:'customers', ic:ICON_CUSTOMERS, label:'Customers', roles:['master','staff']},
     {id:'more', ic:ICON_MORE, label:'More', roles:['master','staff','viewer']},
   ].filter(n=>n.roles.includes(u.role) && (n.id!=='sale' || canDo('canSell')));
 
@@ -2032,7 +2142,7 @@ function renderShell(){
       </select>
       ${isMaster() ? `<button class="icon-btn" id="add-shop-btn" title="Add shop">＋</button>`:''}
       <span id="sync-dot" class="sync-dot" title="Sync status"></span>
-      <button class="icon-btn badge-dot" data-count="${alerts.expiring+alerts.dueSoon+alerts.overdue+alerts.lowStock}" id="alerts-btn">🔔</button>
+      <button class="icon-btn badge-dot" data-count="${alerts.expiring+alerts.dueSoon+alerts.overdue+alerts.lowStock}" id="alerts-btn">${ICON_BELL}</button>
     </div>
     <main id="main-content">${renderRoute()}</main>
     <div class="bottomnav">
@@ -6601,10 +6711,14 @@ const SITE_CONTENT_ANON_KEY = 'sb_publishable_m_MrYeKVF4HgUG5i5v_THg_LPbvmUK5';
 // Explicit auth options (rather than relying on library defaults) so the
 // session that staff/owner get at login is reliably cached and kept fresh —
 // this is what lets sync push/pull keep working across app restarts without
-// anyone having to sign in again.
+// anyone having to sign in again. detectSessionInUrl is TRUE specifically to
+// support Google OAuth (signInWithOAuth) — it's what lets the client pick up
+// the session Supabase hands back after the Google redirect lands on this
+// same page. It's a no-op on a normal page load with no OAuth params in the URL.
 window.sb = window.supabase.createClient(SITE_CONTENT_URL, SITE_CONTENT_ANON_KEY, {
-  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false }
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
 });
+initGoogleRedirectListener(); // must run after window.sb exists — see its definition for why
 async function fetchSiteContent(section){
   const res = await fetch(`${SITE_CONTENT_URL}/rest/v1/site_content?section=eq.${section}&select=*`, {
     headers: { 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+SITE_CONTENT_ANON_KEY }
@@ -6649,7 +6763,7 @@ function bindContactUsEvents(){
     if(row.phone) lines.push(`<div class="t2">📞 <a href="tel:${escAttr(row.phone)}">${escapeHtml(row.phone)}</a></div>`);
     if(row.whatsapp) lines.push(`<div class="t2">💬 <a href="https://wa.me/${row.whatsapp.replace(/[^\d]/g,'')}" target="_blank">WhatsApp: ${escapeHtml(row.whatsapp)}</a></div>`);
     if(row.email) lines.push(`<div class="t2">✉️ <a href="mailto:${escAttr(row.email)}">${escapeHtml(row.email)}</a></div>`);
-    if(row.address) lines.push(`<div class="t2">📍 ${escapeHtml(row.address)}</div>`);
+    if(row.address) lines.push(`<div class="t2" style="display:flex;align-items:flex-start;gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0;margin-top:3px;"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>${escapeHtml(row.address)}</div>`);
     box.innerHTML = `<div class="card">
       <h2 style="margin:0 0 10px;color:var(--ink-text);">${escapeHtml(row.heading||'Contact Us')}</h2>
       ${row.body?`<p style="white-space:pre-wrap;line-height:1.6;margin:0 0 14px;">${escapeHtml(row.body)}</p>`:''}

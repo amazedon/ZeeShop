@@ -371,6 +371,7 @@ if ('serviceWorker' in navigator) {
   });
 }
 </script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
 </head>
 <body>
 <div id="app"></div>
@@ -389,6 +390,7 @@ const DB_KEY = "zeeshop_state_v1";
 const DB_KEY_LEGACY = "dukapro_state_v1"; // old brand name — migrated below, then left alone
 
 /* ==== UI icon set (SVG, replaces emoji placeholders) ==== */
+const ICON_PRINTER = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>`;
 const ICON_CALCULATOR = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="10" x2="8" y2="10.01"/><line x1="12" y1="10" x2="12" y2="10.01"/><line x1="16" y1="10" x2="16" y2="10.01"/><line x1="8" y1="14" x2="8" y2="14.01"/><line x1="12" y1="14" x2="12" y2="14.01"/><line x1="16" y1="14" x2="16" y2="14.01"/><line x1="8" y1="18" x2="8" y2="18.01"/><line x1="12" y1="18" x2="12" y2="18.01"/><line x1="16" y1="18" x2="16" y2="18.01"/></svg>`;
 const ICON_BELL = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>`;
 const ICON_CLOSE = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`;
@@ -2717,8 +2719,11 @@ function screenNewSale(){
     ` : ''}
 
     <div class="section-head"><h3>Tap Goods to Add Them</h3></div>
-    <input id="sale-search" placeholder="${ICON_SEARCH} Search by name, or scan/type a barcode…" value="${saleSearch}"
-      style="width:100%;padding:11px 13px;border:1.5px solid var(--line);border-radius:10px;font-size:14px;margin-bottom:6px;">
+    <div style="display:flex;gap:8px;margin-bottom:6px;">
+      <input id="sale-search" placeholder="Search by name, or scan/type a barcode…" value="${saleSearch}"
+        style="flex:1;padding:11px 13px;border:1.5px solid var(--line);border-radius:10px;font-size:14px;">
+      <button class="btn btn-outline btn-sm" id="sale-scan-btn" style="flex-shrink:0;">${ICON_SEARCH} Scan</button>
+    </div>
     <div class="goods-grid">
       ${goods.length? goods.map(g=>{
         const stock = totalStock(g);
@@ -2812,6 +2817,25 @@ function bindRouteEvents(){
   if(route==='sale'){
     const search = document.getElementById('sale-search');
     if(search) search.addEventListener('input', e=>{ saleSearch=e.target.value; refreshMain(); });
+    const scanBtn = document.getElementById('sale-scan-btn');
+    if(scanBtn) scanBtn.addEventListener('click', ()=>{
+      openBarcodeScanner((code)=>{
+        const g = state.goods.find(x=>x.shopId===state.currentShopId && x.barcode===code);
+        if(!g){ saleSearch = code; toast("No item matches that barcode — showing search results."); refreshMain(); return; }
+        if(g.hasVariants){ openVariantPickerModal(g.id); return; }
+        const stock = totalStock(g);
+        const existing = cart.find(c=>c.goodId===g.id && !c.variantId);
+        if(existing){
+          if(existing.qty+1 > stock){ toast('Not enough stock.'); return; }
+          existing.qty++;
+        } else {
+          if(stock<=0){ toast(g.name + ' is out of stock.'); return; }
+          cart.push({goodId:g.id, variantId:null, qty:1, note:''});
+        }
+        toast(g.name + ' added ✅');
+        refreshMain();
+      });
+    });
     const custSel = document.getElementById('ns-customer');
     if(custSel) custSel.addEventListener('change', e=>{
       const v = e.target.value;
@@ -3010,6 +3034,105 @@ function confirmSale(){
 }
 
 /* ---- receipt: rendered as a real receipt image on a canvas, not just styled text ---- */
+
+/* ============================================================
+   BLUETOOTH THERMAL PRINTER — Web Bluetooth (BLE) + ESC/POS text
+   printing. Free, no API key, entirely client-side.
+
+   IMPORTANT LIMITS (can't be fixed in code, they're platform limits):
+   - Web Bluetooth does not exist on iOS Safari at all — Apple blocks
+     it. This only works on Android Chrome/Edge (and desktop Chrome).
+   - Only works with printers that support Bluetooth LE (GATT). Many
+     cheap thermal printers are classic-Bluetooth (SPP) only, which
+     no browser can talk to — there is no browser-based fix for that,
+     it would need a native app.
+   - The service/characteristic UUIDs below are the common ones used
+     by most generic 58mm/80mm BLE thermal printers sold online, but
+     printer firmware varies. If a specific model doesn't connect,
+     its UUID may need to be added to PRINTER_CANDIDATES below.
+   ============================================================ */
+const PRINTER_CANDIDATES = [
+  { service: '000018f0-0000-1000-8000-00805f9b34fb', characteristic: '00002af1-0000-1000-8000-00805f9b34fb' },
+  { service: '49535343-fe7d-4ae5-8fa9-9fafd205e455', characteristic: '49535343-8841-43f4-a8d4-ecbe34729bb3' },
+  { service: '0000ffe0-0000-1000-8000-00805f9b34fb', characteristic: '0000ffe1-0000-1000-8000-00805f9b34fb' },
+];
+let btPrinterDevice = null;
+let btPrinterCharacteristic = null;
+
+function printerSupported(){ return !!navigator.bluetooth; }
+
+async function connectPrinter(){
+  if(!printerSupported()){
+    toast("Bluetooth printing isn't available on this browser/device — it needs Android with Chrome.");
+    return false;
+  }
+  try{
+    const device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: PRINTER_CANDIDATES.map(c=>c.service)
+    });
+    const server = await device.gatt.connect();
+    let found = null;
+    for(const cand of PRINTER_CANDIDATES){
+      try{
+        const service = await server.getPrimaryService(cand.service);
+        const characteristic = await service.getCharacteristic(cand.characteristic);
+        found = characteristic;
+        break;
+      }catch(e){ /* this candidate isn't offered by this printer — try the next one */ }
+    }
+    if(!found){
+      toast("Connected, but couldn't find a printable service on this device — it may not be a supported thermal printer.");
+      device.gatt.disconnect();
+      return false;
+    }
+    device.addEventListener('gattserverdisconnected', ()=>{ btPrinterDevice=null; btPrinterCharacteristic=null; });
+    btPrinterDevice = device;
+    btPrinterCharacteristic = found;
+    return true;
+  }catch(e){
+    if(e.name !== 'NotFoundError') toast("Couldn't connect to the printer: " + e.message);
+    return false;
+  }
+}
+async function ensurePrinterConnected(){
+  if(btPrinterDevice && btPrinterDevice.gatt.connected && btPrinterCharacteristic) return true;
+  return connectPrinter();
+}
+// Cheap thermal printer firmware is usually ASCII/CP437 only — strip the
+// characters our receipts use that it can't reliably render.
+function escposSafeText(t){
+  return String(t||'')
+    .replace(/₦/g, 'NGN ')
+    .replace(/—/g, '-')
+    .replace(/[^\x00-\x7E\n]/g, '');
+}
+async function printReceiptText(rawText){
+  const ok = await ensurePrinterConnected();
+  if(!ok) return false;
+  const text = escposSafeText(rawText) + '\n\n\n\n'; // extra feed so it clears the cutter for hand-tearing
+  const ESC_INIT = new Uint8Array([0x1B, 0x40]); // ESC @ — reset printer to defaults
+  const body = new TextEncoder().encode(text);
+  const bytes = new Uint8Array(ESC_INIT.length + body.length);
+  bytes.set(ESC_INIT, 0); bytes.set(body, ESC_INIT.length);
+  const CHUNK = 100; // small chunks — cheap BLE printers have tiny input buffers
+  try{
+    for(let i=0; i<bytes.length; i+=CHUNK){
+      const chunk = bytes.slice(i, i+CHUNK);
+      if(btPrinterCharacteristic.properties.writeWithoutResponse){
+        await btPrinterCharacteristic.writeValueWithoutResponse(chunk);
+      } else {
+        await btPrinterCharacteristic.writeValue(chunk);
+      }
+      await new Promise(r=>setTimeout(r, 25)); // let the printer's buffer drain
+    }
+    return true;
+  }catch(e){
+    toast("Printing failed partway through: " + e.message);
+    return false;
+  }
+}
+
 function openReceiptSheet(saleId){
   const s = state.sales.find(x=>x.id===saleId);
   const shop = state.shops.find(x=>x.id===s.shopId);
@@ -3024,7 +3147,8 @@ function openReceiptSheet(saleId){
       <button class="btn btn-primary" id="share-receipt-img" style="flex:1;">${ICON_EXPORT} Share Receipt</button>
       <button class="btn btn-outline" id="download-receipt-img" style="flex:1;">⬇️ Download</button>
     </div>
-    <p class="subtle" style="margin-bottom:14px;">Share opens your phone's share sheet with the actual receipt image attached — pick WhatsApp, Email, or any app there.</p>
+    <button class="btn btn-outline" id="print-receipt-btn" style="width:100%;margin-bottom:6px;">${ICON_PRINTER} Print on Bluetooth Printer</button>
+    <p class="subtle" style="margin-bottom:14px;">Share opens your phone's share sheet with the actual receipt image attached — pick WhatsApp, Email, or any app there. Printing needs a Bluetooth thermal printer and works on Android only (not iPhone).</p>
   `);
   const canvas = document.getElementById('receipt-canvas');
   drawReceiptToCanvas(canvas, s, shop, cust, seller);
@@ -3060,6 +3184,18 @@ function openReceiptSheet(saleId){
       URL.revokeObjectURL(url);
       markSent('image_download');
     }, 'image/png');
+  });
+  const printBtn = document.getElementById('print-receipt-btn');
+  if(printBtn) printBtn.addEventListener('click', async ()=>{
+    if(!printerSupported()){ toast("Bluetooth printing needs Android with Chrome — not available on this device."); return; }
+    printBtn.disabled = true;
+    const originalLabel = printBtn.innerHTML;
+    printBtn.innerHTML = 'Connecting to printer…';
+    const text = receiptText(s, shop, cust);
+    const success = await printReceiptText(text);
+    printBtn.disabled = false;
+    printBtn.innerHTML = originalLabel;
+    if(success){ toast('Sent to printer ✅'); markSent('bluetooth_print'); }
   });
 }
 // A faint diagonal repeating watermark across the receipt background — a
@@ -3390,7 +3526,7 @@ function renderAddGoodSheet(){
       <button class="btn btn-outline btn-sm" id="add-variant-row" style="margin-bottom:14px;">＋ Add Size/Color</button>
       <div class="row2">
         <div class="field"><label>Reorder Alert Level</label><input id="ag-reorder" type="number" min="0" value="5"></div>
-        <div class="field"><label>Barcode <span class="subtle">(optional)</span></label><input id="ag-barcode" placeholder="Scan or type"></div>
+        <div class="field"><label>Barcode <span class="subtle">(optional)</span></label><div style="display:flex;gap:8px;"><input id="ag-barcode" placeholder="Scan or type" style="flex:1;"><button type="button" class="btn btn-outline btn-sm" id="ag-barcode-scan" style="flex-shrink:0;">${ICON_SEARCH} Scan</button></div></div>
       </div>
     `;
   } else if(profile==='specs'){
@@ -3410,7 +3546,7 @@ function renderAddGoodSheet(){
       </div>
       <div class="row2">
         <div class="field"><label>Reorder Alert Level</label><input id="ag-reorder" type="number" min="0" value="5"></div>
-        <div class="field"><label>Barcode <span class="subtle">(optional)</span></label><input id="ag-barcode" placeholder="Scan or type"></div>
+        <div class="field"><label>Barcode <span class="subtle">(optional)</span></label><div style="display:flex;gap:8px;"><input id="ag-barcode" placeholder="Scan or type" style="flex:1;"><button type="button" class="btn btn-outline btn-sm" id="ag-barcode-scan" style="flex-shrink:0;">${ICON_SEARCH} Scan</button></div></div>
       </div>
     `;
   } else if(profile==='dimensions'){
@@ -3431,7 +3567,7 @@ function renderAddGoodSheet(){
         <div class="field"><label>Quantity</label><input id="ag-qty" type="number" min="1" value="1"></div>
         <div class="field"><label>Reorder Alert Level</label><input id="ag-reorder" type="number" min="0" value="5"></div>
       </div>
-      <div class="field"><label>Barcode <span class="subtle">(optional)</span></label><input id="ag-barcode" placeholder="Scan or type"></div>
+      <div class="field"><label>Barcode <span class="subtle">(optional)</span></label><div style="display:flex;gap:8px;"><input id="ag-barcode" placeholder="Scan or type" style="flex:1;"><button type="button" class="btn btn-outline btn-sm" id="ag-barcode-scan" style="flex-shrink:0;">${ICON_SEARCH} Scan</button></div></div>
     `;
   } else {
     // perishable / general fallback — works for most shop types, but still uses
@@ -3450,7 +3586,7 @@ function renderAddGoodSheet(){
       <div class="field"><label>Batch # <span class="subtle">(optional)</span></label><input id="ag-batch" placeholder="B001"></div>
       <div class="row2">
         <div class="field"><label>Reorder Alert Level</label><input id="ag-reorder" type="number" min="0" value="5"></div>
-        <div class="field"><label>Barcode <span class="subtle">(optional)</span></label><input id="ag-barcode" placeholder="Scan or type"></div>
+        <div class="field"><label>Barcode <span class="subtle">(optional)</span></label><div style="display:flex;gap:8px;"><input id="ag-barcode" placeholder="Scan or type" style="flex:1;"><button type="button" class="btn btn-outline btn-sm" id="ag-barcode-scan" style="flex-shrink:0;">${ICON_SEARCH} Scan</button></div></div>
       </div>
     `;
   }
@@ -3476,6 +3612,22 @@ function bindAddGoodEvents(profile){
       renderAddGoodSheet();
     }));
   }
+  const scanBtn = document.getElementById('ag-barcode-scan');
+  if(scanBtn) scanBtn.addEventListener('click', ()=>{
+    const snapshot = {};
+    document.querySelectorAll('.sheet [id^="ag-"]').forEach(el=>{ snapshot[el.id] = el.value; });
+    openBarcodeScanner((code)=>{
+      renderAddGoodSheet();
+      bindAddGoodEvents(profile);
+      Object.keys(snapshot).forEach(id=>{
+        const el = document.getElementById(id);
+        if(el) el.value = snapshot[id];
+      });
+      const bcInput = document.getElementById('ag-barcode');
+      if(bcInput) bcInput.value = code;
+      toast('Barcode captured ✅');
+    });
+  });
   document.getElementById('save-good').addEventListener('click', ()=>saveNewGood(profile));
 }
 function syncPendingVariantsFromDOM(){
@@ -3723,7 +3875,7 @@ function screenCustomers(){
     (!customerSearch || c.fullName.toLowerCase().includes(customerSearch.toLowerCase())));
   return `
     <h2 class="screen-title">Customers</h2>
-    <input id="cust-search" placeholder="${ICON_SEARCH} Search customers…" value="${customerSearch}"
+    <input id="cust-search" placeholder="Search customers…" value="${customerSearch}"
       style="width:100%;padding:11px 13px;border:1.5px solid var(--line);border-radius:10px;font-size:14px;margin-bottom:10px;">
     ${list.length===0? `<div class="empty"><div class="ic">${ICON_USERS}</div><b>No customers yet</b>Tap + to add one.</div>` :
     list.map(c=>{
@@ -7517,6 +7669,59 @@ function openLogRestockModal(supplierId){
   });
 }
 
+
+/* ============================================================
+   BARCODE / QR SCANNER — camera-based, via html5-qrcode (CDN).
+   100% client-side: no server calls, no API key, nothing billed.
+   ============================================================ */
+let _scannerInstance = null;
+function openBarcodeScanner(onResult){
+  if(typeof Html5Qrcode === 'undefined'){
+    toast("Scanner didn't load — check your connection and try again.");
+    return;
+  }
+  openSheet(`
+    <div class="sheet-head"><h3>${ICON_SEARCH} Scan Barcode</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
+    <p class="subtle" style="margin-bottom:10px;">Point the camera at the barcode or QR code on the item.</p>
+    <div id="scanner-viewport" style="width:100%;border-radius:12px;overflow:hidden;background:#000;min-height:260px;"></div>
+    <p class="subtle" id="scanner-status" style="margin-top:10px;text-align:center;">Starting camera…</p>
+    <div class="field" style="margin-top:14px;">
+      <label>Or type the code manually</label>
+      <div style="display:flex;gap:8px;">
+        <input id="scanner-manual" placeholder="Type barcode" style="flex:1;">
+        <button class="btn btn-outline btn-sm" id="scanner-manual-go">Use</button>
+      </div>
+    </div>
+  `);
+  const finish = (code)=>{
+    stopScanner();
+    closeSheet();
+    onResult(code);
+  };
+  const manualGo = document.getElementById('scanner-manual-go');
+  const manualInput = document.getElementById('scanner-manual');
+  if(manualGo) manualGo.addEventListener('click', ()=>{
+    const v = manualInput.value.trim();
+    if(v) finish(v);
+  });
+  const statusEl = document.getElementById('scanner-status');
+  _scannerInstance = new Html5Qrcode('scanner-viewport');
+  _scannerInstance.start(
+    { facingMode: 'environment' },
+    { fps: 10, qrbox: { width: 250, height: 150 } },
+    (decodedText)=>{ finish(decodedText); },
+    ()=>{ /* per-frame scan miss — expected constantly while aiming, ignore */ }
+  ).catch(()=>{
+    if(statusEl) statusEl.textContent = "Couldn't access the camera — check permissions, or type the code below instead.";
+  });
+}
+function stopScanner(){
+  if(_scannerInstance){
+    try{ _scannerInstance.stop().then(()=>_scannerInstance.clear()).catch(()=>{}); }catch(e){}
+    _scannerInstance = null;
+  }
+}
+
 function openSheet(html){
   closeSheet();
   const ov = document.createElement('div');
@@ -7529,6 +7734,7 @@ function openSheet(html){
   bindPasswordToggles();
 }
 function closeSheet(){
+  stopScanner();
   const ov = document.getElementById('active-overlay');
   if(ov) ov.remove();
 }

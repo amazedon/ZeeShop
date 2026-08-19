@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ZeeShop — Super Admin</title>
+<title>Zed — Super Admin</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   :root{
@@ -71,7 +71,7 @@
 
 <div id="login-screen" class="center-screen">
   <div class="auth-card">
-    <div class="brand" style="margin-bottom:4px;color:var(--ink);"><div class="brand-mark">Z</div>ZeeShop Super Admin</div>
+    <div class="brand" style="margin-bottom:4px;color:var(--ink);"><div class="brand-mark">Z</div>Zed Super Admin</div>
     <p class="subtle">Platform-wide view — all registered businesses and their subscription status.</p>
     <div id="login-err"></div>
     <div class="field"><label>Email</label><input id="login-email" type="email" placeholder="you@business.com"></div>
@@ -90,7 +90,7 @@
 
 <div id="dashboard-screen" class="hidden">
   <div class="topbar">
-    <div class="brand"><div class="brand-mark">Z</div>ZeeShop Super Admin</div>
+    <div class="brand"><div class="brand-mark">Z</div>Zed Super Admin</div>
     <button id="logout-btn">Log Out</button>
   </div>
   <main>
@@ -135,7 +135,7 @@
 
 <div id="unauthorized-screen" class="center-screen hidden">
   <div class="auth-card unauthorized">
-    <div class="brand" style="margin-bottom:12px;color:var(--ink);justify-content:center;"><div class="brand-mark">Z</div>ZeeShop Super Admin</div>
+    <div class="brand" style="margin-bottom:12px;color:var(--ink);justify-content:center;"><div class="brand-mark">Z</div>Zed Super Admin</div>
     <div class="err">This account isn't authorized for super admin access. If this should be your account, ask an existing super admin to add you to the <code>super_admins</code> table.</div>
     <button class="btn btn-primary" id="unauthorized-back-btn" style="margin-top:6px;">Back to Log In</button>
   </div>
@@ -214,7 +214,7 @@
       unauthorizedScreen.classList.add('hidden');
       return;
     }
-    // Signing in only proves this is A valid ZeeShop account (owner, staff,
+    // Signing in only proves this is A valid Zed account (owner, staff,
     // anyone) — it does NOT prove super-admin access. That's verified here,
     // server-side, before anything privileged is shown.
     try{
@@ -308,6 +308,7 @@
             <input type="date" data-expiry-input="${b.id}" value="${b.subscription_expires_at ? b.subscription_expires_at.slice(0,10) : ''}" title="Expiry date (optional — leave blank for no expiry)" style="padding:5px 6px;border:1.5px solid var(--line);border-radius:8px;font-size:11.5px;">
             <button data-grant-btn="${b.id}" style="padding:6px 10px;border-radius:8px;border:none;background:var(--marigold);color:var(--ink);font-weight:800;font-size:12px;cursor:pointer;">Set</button>
             <button class="${suspended?'btn-outline-sm':'btn-danger-sm'}" data-suspend-btn="${b.id}" data-suspend-to="${suspended?'true':'false'}">${suspended?'Reactivate':'Suspend'}</button>
+            <button class="btn-danger-sm" data-force-delete-btn="${b.id}" data-biz-name="${escapeHtml(b.name||'')}" title="Permanently delete now — skips the 30-day GDPR grace period. For test accounts only.">Force Delete</button>
           </div>
           <div style="font-size:10.5px;color:var(--text-dim);margin-top:3px;" id="grant-status-${b.id}"></div>
         </td>
@@ -360,6 +361,32 @@
           await callAdminApi('set_business_active', { business_id: bizId, is_active: toActive });
           const b = allBusinesses.find(x=>x.id===bizId);
           if(b) b.is_active = toActive;
+          applySearchFilter();
+        }catch(e){
+          statusEl.style.color = 'var(--red)';
+          statusEl.textContent = 'Error: ' + e.message;
+        }
+      });
+    });
+
+    // FORCE DELETE — permanent, immediate, skips the normal 30-day GDPR
+    // grace period. Meant for wiping test/junk accounts during development,
+    // not for real customer deletion requests (those should go through the
+    // ordinary Settings → Delete Business flow, which gives people a
+    // 30-day window to change their mind).
+    document.querySelectorAll('[data-force-delete-btn]').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const bizId = btn.dataset.forceDeleteBtn;
+        const bizName = btn.dataset.bizName || 'this business';
+        const typed = prompt(`This PERMANENTLY deletes "${bizName}" and everything in it right now — no 30-day grace period, no undo.\n\nType the business name exactly to confirm:`);
+        if(typed === null) return;
+        if(typed !== bizName){ alert("That didn't match — nothing was deleted."); return; }
+        const statusEl = document.getElementById(`grant-status-${bizId}`);
+        statusEl.style.color = 'var(--text-dim)';
+        statusEl.textContent = 'Deleting…';
+        try{
+          await callAdminApi('force_delete_business', { business_id: bizId });
+          allBusinesses = allBusinesses.filter(x=>x.id!==bizId);
           applySearchFilter();
         }catch(e){
           statusEl.style.color = 'var(--red)';
@@ -427,7 +454,7 @@
     const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `zeeshop-businesses-${new Date().toISOString().slice(0,10)}.csv`;
+    a.href = url; a.download = `zed-businesses-${new Date().toISOString().slice(0,10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   });

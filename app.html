@@ -356,6 +356,11 @@ input:checked + .slider-tog::before{transform:translateX(19px);}
 .progress-bar .fill{height:100%;background:var(--marigold);border-radius:4px;}
 
 @media(min-width:560px){.userselect-grid{grid-template-columns:repeat(4,1fr);}}
+[dir="rtl"] body{direction:rtl;text-align:right;}
+[dir="rtl"] .link-row,[dir="rtl"] .center-screen div[style*="text-align:center"]{text-align:center;}
+[dir="rtl"] .bottomnav,[dir="rtl"] .row2,[dir="rtl"] .list-row,[dir="rtl"] .stat-grid{direction:rtl;}
+[dir="rtl"] .list-row > div:last-child{transform:scaleX(-1);}
+[dir="rtl"] input,[dir="rtl"] select,[dir="rtl"] textarea{text-align:right;}
 </style>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#12213B">
@@ -388,6 +393,610 @@ if ('serviceWorker' in navigator) {
 
 const DB_KEY = "zeeshop_state_v1";
 const DB_KEY_LEGACY = "dukapro_state_v1"; // old brand name — migrated below, then left alone
+
+/* ============================================================
+   LANGUAGE — client-side translation dictionary + switcher.
+   Phase 1 coverage: Login, Signup, Dashboard, New Sale, More menu.
+   Everything else still renders in English for now.
+   ============================================================ */
+const I18N = {
+"en": {
+"login_tagline": "Your Shop, In Your Pocket.",
+"login_username_label": "Username or Email",
+"login_password_label": "Password",
+"login_btn": "Log In",
+"login_forgot": "Forgot password?",
+"login_no_biz": "No business yet?",
+"login_create_free": "Create one free",
+"login_join_staff": "Joining a shop as staff?",
+"login_enter_code": "Enter your code",
+"signup_tagline": "Set up your business — takes 2 minutes.",
+"signup_biz_name": "Business Name",
+"signup_country": "Country",
+"signup_currency": "Currency",
+"signup_first_name": "First Name",
+"signup_last_name": "Last Name",
+"signup_username": "Username",
+"signup_username_hint": "(globally unique)",
+"signup_phone": "Phone",
+"signup_email": "Email",
+"signup_password": "Password",
+"signup_consent_pre": "I agree my data is processed to run my shop, per ZeeShop's",
+"signup_consent_post": ". I can export or delete it anytime.",
+"signup_btn": "Create My Shop — Free",
+"signup_have_biz": "Already have a business?",
+"signup_login_link": "Log in",
+"privacy_policy": "Privacy Policy",
+"greeting_morning": "Good morning",
+"greeting_afternoon": "Good afternoon",
+"greeting_evening": "Good evening",
+"dash_sales_today": "Sales Today",
+"dash_cash_in": "Cash In",
+"dash_profit_today": "Today's Profit",
+"dash_needs_attention": "Needs Attention",
+"dash_all_clear": "All clear",
+"dash_no_alerts": "No urgent alerts right now.",
+"dash_quick_actions": "Quick Actions",
+"dash_new_sale": "New Sale",
+"dash_close_day": "Close Day",
+"dash_close_shift": "Close My Shift",
+"dash_got_it": "Got it",
+"sale_title": "New Sale",
+"sale_subtitle": "1. Pick buyer & payment below · 2. Tap goods to add them · 3. Adjust quantity · 4. Complete Sale",
+"sale_buyer": "Buyer",
+"sale_walkin": "Walk-in customer",
+"sale_add_name_hint": "Buying but not a saved customer? Add their name for the receipt.",
+"sale_add_name_btn": "+ Add Name",
+"sale_edit_btn": "Edit",
+"sale_cash_or_credit": "Is this Cash or Credit?",
+"sale_cash_btn": "Cash — Paid in full now",
+"sale_credit_btn": "Credit — Owes some or all of it",
+"sale_credit_disabled": "Credit sales aren't enabled for your account.",
+"sale_tap_goods": "Tap Goods to Add Them",
+"sale_search_placeholder": "Search by name, or scan/type a barcode…",
+"sale_scan_btn": "Scan",
+"more_title": "More",
+"more_history": "History",
+"more_credit_ledger": "Credit Ledger",
+"more_close_day": "Close Day",
+"more_expenses": "Expenses",
+"more_lodging": "Lodging",
+"more_suppliers": "Suppliers",
+"more_warehouse": "Warehouse",
+"more_notes": "Notes",
+"more_calculator": "Calculator",
+"more_reports": "Profit Reports",
+ "more_compare": "Compare Shops",
+"more_staff": "Staff",
+"more_audit": "Audit Log",
+"more_profile": "My Profile",
+"more_faq": "Help / FAQ",
+"more_about": "About Us",
+"more_contact": "Contact Us",
+"more_settings": "Settings",
+"more_share_app": "Share This App",
+"more_share_app_hint": "Tell another shop owner about ZeeShop",
+"more_lock": "Lock / Switch User",
+"more_logout": "Log Out",
+"more_logout_hint": "Sign out of this business on this device",
+"lang_label": "Language"
+},
+"es": {
+"login_tagline": "Tu Tienda, En Tu Bolsillo.",
+"login_username_label": "Usuario o Correo",
+"login_password_label": "Contraseña",
+"login_btn": "Iniciar Sesión",
+"login_forgot": "¿Olvidaste tu contraseña?",
+"login_no_biz": "¿Aún no tienes un negocio?",
+"login_create_free": "Crea uno gratis",
+"login_join_staff": "¿Te unes como personal?",
+"login_enter_code": "Ingresa tu código",
+"signup_tagline": "Configura tu negocio — toma 2 minutos.",
+"signup_biz_name": "Nombre del Negocio",
+"signup_country": "País",
+"signup_currency": "Moneda",
+"signup_first_name": "Nombre",
+"signup_last_name": "Apellido",
+"signup_username": "Usuario",
+"signup_username_hint": "(único globalmente)",
+"signup_phone": "Teléfono",
+"signup_email": "Correo Electrónico",
+"signup_password": "Contraseña",
+"signup_consent_pre": "Acepto que mis datos se procesen para operar mi tienda, según la",
+"signup_consent_post": " de ZeeShop. Puedo exportarlos o eliminarlos cuando quiera.",
+"signup_btn": "Crear Mi Tienda — Gratis",
+"signup_have_biz": "¿Ya tienes un negocio?",
+"signup_login_link": "Iniciar sesión",
+"privacy_policy": "Política de Privacidad",
+"greeting_morning": "Buenos días",
+"greeting_afternoon": "Buenas tardes",
+"greeting_evening": "Buenas noches",
+"dash_sales_today": "Ventas de Hoy",
+"dash_cash_in": "Efectivo Recibido",
+"dash_profit_today": "Ganancia de Hoy",
+"dash_needs_attention": "Requiere Atención",
+"dash_all_clear": "Todo en orden",
+"dash_no_alerts": "No hay alertas urgentes ahora.",
+"dash_quick_actions": "Acciones Rápidas",
+"dash_new_sale": "Nueva Venta",
+"dash_close_day": "Cerrar el Día",
+"dash_close_shift": "Cerrar Mi Turno",
+"dash_got_it": "Entendido",
+"sale_title": "Nueva Venta",
+"sale_subtitle": "1. Elige comprador y pago · 2. Toca los artículos para añadirlos · 3. Ajusta la cantidad · 4. Completa la Venta",
+"sale_buyer": "Comprador",
+"sale_walkin": "Cliente sin registrar",
+"sale_add_name_hint": "¿Compra pero no es cliente guardado? Añade su nombre para el recibo.",
+"sale_add_name_btn": "+ Añadir Nombre",
+"sale_edit_btn": "Editar",
+"sale_cash_or_credit": "¿Es en Efectivo o a Crédito?",
+"sale_cash_btn": "Efectivo — Pagado en su totalidad",
+"sale_credit_btn": "Crédito — Debe parte o todo",
+"sale_credit_disabled": "Las ventas a crédito no están habilitadas para tu cuenta.",
+"sale_tap_goods": "Toca los Artículos para Añadirlos",
+"sale_search_placeholder": "Busca por nombre, o escanea/escribe un código de barras…",
+"sale_scan_btn": "Escanear",
+"more_title": "Más",
+"more_history": "Historial",
+"more_credit_ledger": "Libro de Créditos",
+"more_close_day": "Cerrar el Día",
+"more_expenses": "Gastos",
+"more_lodging": "Alojamiento",
+"more_suppliers": "Proveedores",
+"more_warehouse": "Almacén",
+"more_notes": "Notas",
+"more_calculator": "Calculadora",
+"more_reports": "Reportes de Ganancias",
+ "more_compare": "Comparar Tiendas",
+"more_staff": "Personal",
+"more_audit": "Registro de Auditoría",
+"more_profile": "Mi Perfil",
+"more_faq": "Ayuda / Preguntas Frecuentes",
+"more_about": "Sobre Nosotros",
+"more_contact": "Contáctanos",
+"more_settings": "Configuración",
+"more_share_app": "Comparte Esta App",
+"more_share_app_hint": "Cuéntale a otro comerciante sobre ZeeShop",
+"more_lock": "Bloquear / Cambiar Usuario",
+"more_logout": "Cerrar Sesión",
+"more_logout_hint": "Cerrar sesión de este negocio en este dispositivo",
+"lang_label": "Idioma"
+},
+"fr": {
+"login_tagline": "Votre Boutique, Dans Votre Poche.",
+"login_username_label": "Nom d'utilisateur ou e-mail",
+"login_password_label": "Mot de passe",
+"login_btn": "Se Connecter",
+"login_forgot": "Mot de passe oublié ?",
+"login_no_biz": "Pas encore d'entreprise ?",
+"login_create_free": "Créez-en une gratuitement",
+"login_join_staff": "Vous rejoignez comme employé ?",
+"login_enter_code": "Entrez votre code",
+"signup_tagline": "Configurez votre entreprise — 2 minutes suffisent.",
+"signup_biz_name": "Nom de l'Entreprise",
+"signup_country": "Pays",
+"signup_currency": "Devise",
+"signup_first_name": "Prénom",
+"signup_last_name": "Nom",
+"signup_username": "Nom d'utilisateur",
+"signup_username_hint": "(unique globalement)",
+"signup_phone": "Téléphone",
+"signup_email": "E-mail",
+"signup_password": "Mot de passe",
+"signup_consent_pre": "J'accepte que mes données soient traitées pour gérer ma boutique, selon la",
+"signup_consent_post": " de ZeeShop. Je peux les exporter ou les supprimer à tout moment.",
+"signup_btn": "Créer Ma Boutique — Gratuit",
+"signup_have_biz": "Vous avez déjà une entreprise ?",
+"signup_login_link": "Se connecter",
+"privacy_policy": "Politique de Confidentialité",
+"greeting_morning": "Bonjour",
+"greeting_afternoon": "Bon après-midi",
+"greeting_evening": "Bonsoir",
+"dash_sales_today": "Ventes du Jour",
+"dash_cash_in": "Encaissé",
+"dash_profit_today": "Profit du Jour",
+"dash_needs_attention": "Nécessite Attention",
+"dash_all_clear": "Tout va bien",
+"dash_no_alerts": "Aucune alerte urgente pour le moment.",
+"dash_quick_actions": "Actions Rapides",
+"dash_new_sale": "Nouvelle Vente",
+"dash_close_day": "Clôturer la Journée",
+"dash_close_shift": "Clôturer Mon Service",
+"dash_got_it": "Compris",
+"sale_title": "Nouvelle Vente",
+"sale_subtitle": "1. Choisissez l'acheteur et le paiement · 2. Touchez les articles pour les ajouter · 3. Ajustez la quantité · 4. Terminez la Vente",
+"sale_buyer": "Acheteur",
+"sale_walkin": "Client de passage",
+"sale_add_name_hint": "Achat sans client enregistré ? Ajoutez son nom pour le reçu.",
+"sale_add_name_btn": "+ Ajouter un Nom",
+"sale_edit_btn": "Modifier",
+"sale_cash_or_credit": "Comptant ou à Crédit ?",
+"sale_cash_btn": "Comptant — Payé intégralement",
+"sale_credit_btn": "Crédit — Doit tout ou partie",
+"sale_credit_disabled": "Les ventes à crédit ne sont pas activées pour votre compte.",
+"sale_tap_goods": "Touchez les Articles pour les Ajouter",
+"sale_search_placeholder": "Recherchez par nom, ou scannez/tapez un code-barres…",
+"sale_scan_btn": "Scanner",
+"more_title": "Plus",
+"more_history": "Historique",
+"more_credit_ledger": "Registre de Crédit",
+"more_close_day": "Clôturer la Journée",
+"more_expenses": "Dépenses",
+"more_lodging": "Hébergement",
+"more_suppliers": "Fournisseurs",
+"more_warehouse": "Entrepôt",
+"more_notes": "Notes",
+"more_calculator": "Calculatrice",
+"more_reports": "Rapports de Profit",
+ "more_compare": "Comparer les Boutiques",
+"more_staff": "Personnel",
+"more_audit": "Journal d'Audit",
+"more_profile": "Mon Profil",
+"more_faq": "Aide / FAQ",
+"more_about": "À Propos",
+"more_contact": "Nous Contacter",
+"more_settings": "Paramètres",
+"more_share_app": "Partager Cette App",
+"more_share_app_hint": "Parlez de ZeeShop à un autre commerçant",
+"more_lock": "Verrouiller / Changer d'Utilisateur",
+"more_logout": "Se Déconnecter",
+"more_logout_hint": "Se déconnecter de cette entreprise sur cet appareil",
+"lang_label": "Langue"
+},
+"ar": {
+"login_tagline": "متجرك، في جيبك.",
+"login_username_label": "اسم المستخدم أو البريد الإلكتروني",
+"login_password_label": "كلمة المرور",
+"login_btn": "تسجيل الدخول",
+"login_forgot": "نسيت كلمة المرور؟",
+"login_no_biz": "ليس لديك متجر بعد؟",
+"login_create_free": "أنشئ واحدًا مجانًا",
+"login_join_staff": "تنضم كموظف؟",
+"login_enter_code": "أدخل رمزك",
+"signup_tagline": "أنشئ متجرك — يستغرق دقيقتين فقط.",
+"signup_biz_name": "اسم المتجر",
+"signup_country": "البلد",
+"signup_currency": "العملة",
+"signup_first_name": "الاسم الأول",
+"signup_last_name": "اسم العائلة",
+"signup_username": "اسم المستخدم",
+"signup_username_hint": "(فريد عالميًا)",
+"signup_phone": "الهاتف",
+"signup_email": "البريد الإلكتروني",
+"signup_password": "كلمة المرور",
+"signup_consent_pre": "أوافق على معالجة بياناتي لتشغيل متجري، وفقًا لـ",
+"signup_consent_post": " الخاصة بـ ZeeShop. يمكنني تصديرها أو حذفها في أي وقت.",
+"signup_btn": "أنشئ متجري — مجانًا",
+"signup_have_biz": "لديك متجر بالفعل؟",
+"signup_login_link": "تسجيل الدخول",
+"privacy_policy": "سياسة الخصوصية",
+"greeting_morning": "صباح الخير",
+"greeting_afternoon": "مساء الخير",
+"greeting_evening": "مساء الخير",
+"dash_sales_today": "مبيعات اليوم",
+"dash_cash_in": "النقد المُستلم",
+"dash_profit_today": "ربح اليوم",
+"dash_needs_attention": "يحتاج إلى انتباه",
+"dash_all_clear": "كل شيء على ما يرام",
+"dash_no_alerts": "لا توجد تنبيهات عاجلة الآن.",
+"dash_quick_actions": "إجراءات سريعة",
+"dash_new_sale": "بيع جديد",
+"dash_close_day": "إغلاق اليوم",
+"dash_close_shift": "إنهاء نوبتي",
+"dash_got_it": "فهمت",
+"sale_title": "بيع جديد",
+"sale_subtitle": "١. اختر المشتري وطريقة الدفع · ٢. اضغط على السلع لإضافتها · ٣. عدّل الكمية · ٤. أكمل عملية البيع",
+"sale_buyer": "المشتري",
+"sale_walkin": "عميل عابر",
+"sale_add_name_hint": "يشتري بدون أن يكون عميلاً محفوظًا؟ أضف اسمه للإيصال.",
+"sale_add_name_btn": "+ إضافة اسم",
+"sale_edit_btn": "تعديل",
+"sale_cash_or_credit": "نقدًا أم بالدين؟",
+"sale_cash_btn": "نقدًا — مدفوع بالكامل الآن",
+"sale_credit_btn": "دين — يدين بجزء أو كل المبلغ",
+"sale_credit_disabled": "مبيعات الدين غير مفعّلة لحسابك.",
+"sale_tap_goods": "اضغط على السلع لإضافتها",
+"sale_search_placeholder": "ابحث بالاسم، أو امسح/اكتب الباركود…",
+"sale_scan_btn": "مسح",
+"more_title": "المزيد",
+"more_history": "السجل",
+"more_credit_ledger": "دفتر الديون",
+"more_close_day": "إغلاق اليوم",
+"more_expenses": "المصروفات",
+"more_lodging": "الإقامة",
+"more_suppliers": "الموردون",
+"more_warehouse": "المستودع",
+"more_notes": "الملاحظات",
+"more_calculator": "الآلة الحاسبة",
+"more_reports": "تقارير الأرباح",
+ "more_compare": "مقارنة المتاجر",
+"more_staff": "الموظفون",
+"more_audit": "سجل التدقيق",
+"more_profile": "ملفي الشخصي",
+"more_faq": "المساعدة / الأسئلة الشائعة",
+"more_about": "معلومات عنا",
+"more_contact": "اتصل بنا",
+"more_settings": "الإعدادات",
+"more_share_app": "شارك هذا التطبيق",
+"more_share_app_hint": "أخبر تاجرًا آخر عن ZeeShop",
+"more_lock": "قفل / تبديل المستخدم",
+"more_logout": "تسجيل الخروج",
+"more_logout_hint": "تسجيل الخروج من هذا المتجر على هذا الجهاز",
+"lang_label": "اللغة"
+},
+"pt": {
+"login_tagline": "Sua Loja, No Seu Bolso.",
+"login_username_label": "Usuário ou E-mail",
+"login_password_label": "Senha",
+"login_btn": "Entrar",
+"login_forgot": "Esqueceu a senha?",
+"login_no_biz": "Ainda não tem um negócio?",
+"login_create_free": "Crie um grátis",
+"login_join_staff": "Está entrando como funcionário?",
+"login_enter_code": "Digite seu código",
+"signup_tagline": "Configure seu negócio — leva 2 minutos.",
+"signup_biz_name": "Nome do Negócio",
+"signup_country": "País",
+"signup_currency": "Moeda",
+"signup_first_name": "Nome",
+"signup_last_name": "Sobrenome",
+"signup_username": "Usuário",
+"signup_username_hint": "(único globalmente)",
+"signup_phone": "Telefone",
+"signup_email": "E-mail",
+"signup_password": "Senha",
+"signup_consent_pre": "Concordo que meus dados sejam processados para gerenciar minha loja, conforme a",
+"signup_consent_post": " da ZeeShop. Posso exportá-los ou excluí-los a qualquer momento.",
+"signup_btn": "Criar Minha Loja — Grátis",
+"signup_have_biz": "Já tem um negócio?",
+"signup_login_link": "Entrar",
+"privacy_policy": "Política de Privacidade",
+"greeting_morning": "Bom dia",
+"greeting_afternoon": "Boa tarde",
+"greeting_evening": "Boa noite",
+"dash_sales_today": "Vendas de Hoje",
+"dash_cash_in": "Dinheiro Recebido",
+"dash_profit_today": "Lucro de Hoje",
+"dash_needs_attention": "Precisa de Atenção",
+"dash_all_clear": "Tudo certo",
+"dash_no_alerts": "Nenhum alerta urgente no momento.",
+"dash_quick_actions": "Ações Rápidas",
+"dash_new_sale": "Nova Venda",
+"dash_close_day": "Fechar o Dia",
+"dash_close_shift": "Fechar Meu Turno",
+"dash_got_it": "Entendi",
+"sale_title": "Nova Venda",
+"sale_subtitle": "1. Escolha o comprador e o pagamento · 2. Toque nos produtos para adicioná-los · 3. Ajuste a quantidade · 4. Conclua a Venda",
+"sale_buyer": "Comprador",
+"sale_walkin": "Cliente avulso",
+"sale_add_name_hint": "Comprando sem ser um cliente salvo? Adicione o nome para o recibo.",
+"sale_add_name_btn": "+ Adicionar Nome",
+"sale_edit_btn": "Editar",
+"sale_cash_or_credit": "É à Vista ou a Crédito?",
+"sale_cash_btn": "À Vista — Pago integralmente agora",
+"sale_credit_btn": "Crédito — Deve parte ou tudo",
+"sale_credit_disabled": "Vendas a crédito não estão habilitadas para sua conta.",
+"sale_tap_goods": "Toque nos Produtos para Adicioná-los",
+"sale_search_placeholder": "Busque por nome, ou escaneie/digite um código de barras…",
+"sale_scan_btn": "Escanear",
+"more_title": "Mais",
+"more_history": "Histórico",
+"more_credit_ledger": "Livro de Créditos",
+"more_close_day": "Fechar o Dia",
+"more_expenses": "Despesas",
+"more_lodging": "Hospedagem",
+"more_suppliers": "Fornecedores",
+"more_warehouse": "Armazém",
+"more_notes": "Notas",
+"more_calculator": "Calculadora",
+"more_reports": "Relatórios de Lucro",
+ "more_compare": "Comparar Lojas",
+"more_staff": "Equipe",
+"more_audit": "Registro de Auditoria",
+"more_profile": "Meu Perfil",
+"more_faq": "Ajuda / Perguntas Frequentes",
+"more_about": "Sobre Nós",
+"more_contact": "Fale Conosco",
+"more_settings": "Configurações",
+"more_share_app": "Compartilhar Este App",
+"more_share_app_hint": "Conte a outro lojista sobre a ZeeShop",
+"more_lock": "Bloquear / Trocar Usuário",
+"more_logout": "Sair",
+"more_logout_hint": "Sair deste negócio neste dispositivo",
+"lang_label": "Idioma"
+},
+"zh": {
+"login_tagline": "您的商店，在您的口袋里。",
+"login_username_label": "用户名或邮箱",
+"login_password_label": "密码",
+"login_btn": "登录",
+"login_forgot": "忘记密码？",
+"login_no_biz": "还没有商店？",
+"login_create_free": "免费创建一个",
+"login_join_staff": "作为员工加入？",
+"login_enter_code": "输入您的邀请码",
+"signup_tagline": "设置您的商店 — 只需2分钟。",
+"signup_biz_name": "商店名称",
+"signup_country": "国家",
+"signup_currency": "货币",
+"signup_first_name": "名字",
+"signup_last_name": "姓氏",
+"signup_username": "用户名",
+"signup_username_hint": "（全局唯一）",
+"signup_phone": "电话",
+"signup_email": "邮箱",
+"signup_password": "密码",
+"signup_consent_pre": "我同意根据 ZeeShop 的",
+"signup_consent_post": "处理我的数据以运营我的商店。我可以随时导出或删除数据。",
+"signup_btn": "创建我的商店 — 免费",
+"signup_have_biz": "已经有商店了？",
+"signup_login_link": "登录",
+"privacy_policy": "隐私政策",
+"greeting_morning": "早上好",
+"greeting_afternoon": "下午好",
+"greeting_evening": "晚上好",
+"dash_sales_today": "今日销售额",
+"dash_cash_in": "已收现金",
+"dash_profit_today": "今日利润",
+"dash_needs_attention": "需要注意",
+"dash_all_clear": "一切正常",
+"dash_no_alerts": "目前没有紧急提醒。",
+"dash_quick_actions": "快捷操作",
+"dash_new_sale": "新建销售",
+"dash_close_day": "结束当日营业",
+"dash_close_shift": "结束我的班次",
+"dash_got_it": "知道了",
+"sale_title": "新建销售",
+"sale_subtitle": "1. 选择买家和付款方式 · 2. 点击商品添加 · 3. 调整数量 · 4. 完成销售",
+"sale_buyer": "买家",
+"sale_walkin": "临时顾客",
+"sale_add_name_hint": "购买但不是已保存的顾客？为收据添加其姓名。",
+"sale_add_name_btn": "+ 添加姓名",
+"sale_edit_btn": "编辑",
+"sale_cash_or_credit": "现金还是赊账？",
+"sale_cash_btn": "现金 — 现在全额付清",
+"sale_credit_btn": "赊账 — 部分或全部欠款",
+"sale_credit_disabled": "您的账户未启用赊账销售。",
+"sale_tap_goods": "点击商品添加",
+"sale_search_placeholder": "按名称搜索，或扫描/输入条形码…",
+"sale_scan_btn": "扫描",
+"more_title": "更多",
+"more_history": "历史记录",
+"more_credit_ledger": "赊账台账",
+"more_close_day": "结束当日营业",
+"more_expenses": "支出",
+"more_lodging": "住宿",
+"more_suppliers": "供应商",
+"more_warehouse": "仓库",
+"more_notes": "备注",
+"more_calculator": "计算器",
+"more_reports": "利润报表",
+ "more_compare": "门店对比",
+"more_staff": "员工",
+"more_audit": "审计日志",
+"more_profile": "我的资料",
+"more_faq": "帮助 / 常见问题",
+"more_about": "关于我们",
+"more_contact": "联系我们",
+"more_settings": "设置",
+"more_share_app": "分享此应用",
+"more_share_app_hint": "把 ZeeShop 推荐给其他店主",
+"more_lock": "锁定 / 切换用户",
+"more_logout": "退出登录",
+"more_logout_hint": "在此设备上退出此商店",
+"lang_label": "语言"
+},
+"hi": {
+"login_tagline": "आपकी दुकान, आपकी जेब में।",
+"login_username_label": "यूज़रनेम या ईमेल",
+"login_password_label": "पासवर्ड",
+"login_btn": "लॉग इन करें",
+"login_forgot": "पासवर्ड भूल गए?",
+"login_no_biz": "अभी तक कोई दुकान नहीं है?",
+"login_create_free": "मुफ़्त में एक बनाएं",
+"login_join_staff": "स्टाफ के रूप में जुड़ रहे हैं?",
+"login_enter_code": "अपना कोड डालें",
+"signup_tagline": "अपनी दुकान सेट करें — बस 2 मिनट लगते हैं।",
+"signup_biz_name": "दुकान का नाम",
+"signup_country": "देश",
+"signup_currency": "मुद्रा",
+"signup_first_name": "पहला नाम",
+"signup_last_name": "अंतिम नाम",
+"signup_username": "यूज़रनेम",
+"signup_username_hint": "(विश्व स्तर पर अद्वितीय)",
+"signup_phone": "फ़ोन",
+"signup_email": "ईमेल",
+"signup_password": "पासवर्ड",
+"signup_consent_pre": "मैं सहमत हूं कि मेरी दुकान चलाने के लिए मेरा डेटा ZeeShop की",
+"signup_consent_post": " के अनुसार प्रोसेस किया जाए। मैं इसे कभी भी एक्सपोर्ट या डिलीट कर सकता/सकती हूं।",
+"signup_btn": "मेरी दुकान बनाएं — मुफ़्त",
+"signup_have_biz": "पहले से एक दुकान है?",
+"signup_login_link": "लॉग इन करें",
+"privacy_policy": "गोपनीयता नीति",
+"greeting_morning": "सुप्रभात",
+"greeting_afternoon": "नमस्कार",
+"greeting_evening": "शुभ संध्या",
+"dash_sales_today": "आज की बिक्री",
+"dash_cash_in": "प्राप्त नकद",
+"dash_profit_today": "आज का मुनाफ़ा",
+"dash_needs_attention": "ध्यान देने योग्य",
+"dash_all_clear": "सब ठीक है",
+"dash_no_alerts": "अभी कोई ज़रूरी अलर्ट नहीं है।",
+"dash_quick_actions": "त्वरित कार्य",
+"dash_new_sale": "नई बिक्री",
+"dash_close_day": "दिन बंद करें",
+"dash_close_shift": "मेरी शिफ्ट बंद करें",
+"dash_got_it": "समझ गया",
+"sale_title": "नई बिक्री",
+"sale_subtitle": "1. खरीदार और भुगतान चुनें · 2. सामान जोड़ने के लिए टैप करें · 3. मात्रा समायोजित करें · 4. बिक्री पूरी करें",
+"sale_buyer": "खरीदार",
+"sale_walkin": "वॉक-इन ग्राहक",
+"sale_add_name_hint": "खरीद रहे हैं पर सेव किया हुआ ग्राहक नहीं है? रसीद के लिए नाम जोड़ें।",
+"sale_add_name_btn": "+ नाम जोड़ें",
+"sale_edit_btn": "संपादित करें",
+"sale_cash_or_credit": "नकद है या उधार?",
+"sale_cash_btn": "नकद — अभी पूरा भुगतान",
+"sale_credit_btn": "उधार — कुछ या पूरा बकाया",
+"sale_credit_disabled": "आपके खाते के लिए उधार बिक्री सक्षम नहीं है।",
+"sale_tap_goods": "सामान जोड़ने के लिए टैप करें",
+"sale_search_placeholder": "नाम से खोजें, या बारकोड स्कैन/टाइप करें…",
+"sale_scan_btn": "स्कैन करें",
+"more_title": "अधिक",
+"more_history": "इतिहास",
+"more_credit_ledger": "उधार बही",
+"more_close_day": "दिन बंद करें",
+"more_expenses": "खर्च",
+"more_lodging": "आवास",
+"more_suppliers": "आपूर्तिकर्ता",
+"more_warehouse": "गोदाम",
+"more_notes": "नोट्स",
+"more_calculator": "कैलकुलेटर",
+"more_reports": "मुनाफ़ा रिपोर्ट",
+ "more_compare": "दुकानों की तुलना",
+"more_staff": "स्टाफ",
+"more_audit": "ऑडिट लॉग",
+"more_profile": "मेरी प्रोफ़ाइल",
+"more_faq": "सहायता / सामान्य प्रश्न",
+"more_about": "हमारे बारे में",
+"more_contact": "संपर्क करें",
+"more_settings": "सेटिंग्स",
+"more_share_app": "यह ऐप शेयर करें",
+"more_share_app_hint": "किसी अन्य दुकानदार को ZeeShop के बारे में बताएं",
+"more_lock": "लॉक करें / यूज़र बदलें",
+"more_logout": "लॉग आउट करें",
+"more_logout_hint": "इस डिवाइस पर इस दुकान से लॉग आउट करें",
+"lang_label": "भाषा"
+}
+};
+const SUPPORTED_LANGS = { en:'English', es:'Español', fr:'Français', ar:'العربية', pt:'Português', zh:'中文', hi:'हिन्दी' };
+let currentLang = (function(){
+  const saved = localStorage.getItem('zeeshop_lang');
+  if(saved && I18N[saved]) return saved;
+  const browserLang = (navigator.language||'en').slice(0,2);
+  return I18N[browserLang] ? browserLang : 'en';
+})();
+function t(key){
+  return (I18N[currentLang] && I18N[currentLang][key]) || I18N.en[key] || key;
+}
+function setLang(lang){
+  if(!I18N[lang]) return;
+  currentLang = lang;
+  localStorage.setItem('zeeshop_lang', lang);
+  document.documentElement.lang = lang;
+  document.documentElement.dir = (lang==='ar') ? 'rtl' : 'ltr';
+  render();
+}
+function languageSwitcherHTML(compact){
+  const opts = Object.keys(SUPPORTED_LANGS).map(code=>
+    `<option value="${code}" ${code===currentLang?'selected':''}>${SUPPORTED_LANGS[code]}</option>`).join('');
+  return `<select id="lang-switcher" style="${compact?'background:transparent;color:inherit;border:1px solid rgba(255,255,255,0.3);border-radius:8px;padding:4px 8px;font-size:12px;':'width:100%;padding:11px 13px;border:1.5px solid var(--line);border-radius:10px;font-size:14px;'}">${opts}</select>`;
+}
+function bindLanguageSwitcher(){
+  const el = document.getElementById('lang-switcher');
+  if(el) el.addEventListener('change', e=>setLang(e.target.value));
+}
+document.documentElement.lang = currentLang;
+document.documentElement.dir = (currentLang==='ar') ? 'rtl' : 'ltr';
 
 /* ==== UI icon set (SVG, replaces emoji placeholders) ==== */
 const ICON_PRINTER = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>`;
@@ -933,18 +1542,19 @@ function renderLogin(){
     <div style="width:100%;max-width:400px;">
     <div class="auth-card">
       <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">ZeeShop</div></div>
-      <div class="tagline">Your Shop, In Your Pocket.</div>
+      <div class="tagline">${t('login_tagline')}</div>
       ${authError ? `<div class="err">${authError}</div>` : ''}
       ${googleAuthButton()}
-      <div class="field"><label>Username or Email</label><input id="li-user" placeholder="chika_stores or you@email.com"></div>
-      <div class="field"><label>Password</label><input id="li-pass" type="password" placeholder="••••••••"></div>
-      <button class="btn btn-primary" id="btn-login">Log In</button>
-      <div class="link-row"><a href="#" id="go-forgot" style="color:var(--text-dim);">Forgot password?</a></div>
-      <div class="link-row">No business yet? <a href="#" id="go-signup" style="color:var(--marigold-dark);font-weight:800;">Create one free</a></div>
-      <div class="link-row">Joining a shop as staff? <a href="#" id="go-join-shop" style="color:var(--teal);font-weight:800;">Enter your code</a></div>
+      <div class="field"><label>${t('login_username_label')}</label><input id="li-user" placeholder="chika_stores or you@email.com"></div>
+      <div class="field"><label>${t('login_password_label')}</label><input id="li-pass" type="password" placeholder="••••••••"></div>
+      <button class="btn btn-primary" id="btn-login">${t('login_btn')}</button>
+      <div class="link-row"><a href="#" id="go-forgot" style="color:var(--text-dim);">${t('login_forgot')}</a></div>
+      <div class="link-row">${t('login_no_biz')} <a href="#" id="go-signup" style="color:var(--marigold-dark);font-weight:800;">${t('login_create_free')}</a></div>
+      <div class="link-row">${t('login_join_staff')} <a href="#" id="go-join-shop" style="color:var(--teal);font-weight:800;">${t('login_enter_code')}</a></div>
     </div>
     <div style="text-align:center;margin-top:18px;font-size:11.5px;color:rgba(255,255,255,0.55);">
-      <a href="privacy.html" target="_blank" rel="noopener" style="color:rgba(255,255,255,0.8);text-decoration:underline;">Privacy Policy</a>
+      <a href="privacy.html" target="_blank" rel="noopener" style="color:rgba(255,255,255,0.8);text-decoration:underline;">${t('privacy_policy')}</a>
+      <div style="margin-top:8px;">${languageSwitcherHTML(true)}</div>
     </div>
   </div>
   </div>`;
@@ -1200,17 +1810,17 @@ function renderSignup(){
     <div style="width:100%;max-width:400px;">
     <div class="auth-card">
       <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">ZeeShop</div></div>
-      <div class="tagline">Set up your business — takes 2 minutes.</div>
+      <div class="tagline">${t('signup_tagline')}</div>
       ${authError ? `<div class="err">${authError}</div>` : ''}
       ${googleAuthButton()}
-      <div class="field"><label>Business Name</label><input id="su-biz" placeholder="Chika Stores"></div>
+      <div class="field"><label>${t('signup_biz_name')}</label><input id="su-biz" placeholder="Chika Stores"></div>
       <div class="row2">
-        <div class="field"><label>Country</label>
+        <div class="field"><label>${t('signup_country')}</label>
           <select id="su-country">
             ${countryOptionsHTML('Nigeria')}
           </select>
         </div>
-        <div class="field"><label>Currency</label>
+        <div class="field"><label>${t('signup_currency')}</label>
           <select id="su-ccy">
             <option value="NGN">₦ NGN</option><option value="KES">KSh KES</option><option value="GHS">GH₵ GHS</option>
             <option value="INR">₹ INR</option><option value="PHP">₱ PHP</option><option value="USD">$ USD</option>
@@ -1222,22 +1832,23 @@ function renderSignup(){
         </div>
       </div>
       <div class="row2">
-        <div class="field"><label>First Name</label><input id="su-fn" placeholder="Chika"></div>
-        <div class="field"><label>Last Name</label><input id="su-ln" placeholder="Mba"></div>
+        <div class="field"><label>${t('signup_first_name')}</label><input id="su-fn" placeholder="Chika"></div>
+        <div class="field"><label>${t('signup_last_name')}</label><input id="su-ln" placeholder="Mba"></div>
       </div>
-      <div class="field"><label>Username <span class="subtle">(globally unique)</span></label><input id="su-username" placeholder="chika_stores"></div>
-      <div class="field"><label>Phone</label><input id="su-phone" placeholder="+234 801 234 5678"></div>
-      <div class="field"><label>Email</label><input id="su-email" type="email" placeholder="you@email.com"></div>
-      <div class="field"><label>Password</label><input id="su-pass" type="password" placeholder="Min 6 characters"></div>
+      <div class="field"><label>${t('signup_username')} <span class="subtle">${t('signup_username_hint')}</span></label><input id="su-username" placeholder="chika_stores"></div>
+      <div class="field"><label>${t('signup_phone')}</label><input id="su-phone" placeholder="+234 801 234 5678"></div>
+      <div class="field"><label>${t('signup_email')}</label><input id="su-email" type="email" placeholder="you@email.com"></div>
+      <div class="field"><label>${t('signup_password')}</label><input id="su-pass" type="password" placeholder="Min 6 characters"></div>
       <label style="display:flex;gap:8px;align-items:flex-start;font-size:12px;color:var(--text-dim);margin-bottom:16px;">
         <input type="checkbox" id="su-consent" style="margin-top:2px;">
-        I agree my data is processed to run my shop, per ZeeShop's <a href="privacy.html" target="_blank" rel="noopener" style="color:var(--marigold-dark);font-weight:700;">Privacy Policy</a>. I can export or delete it anytime.
+        ${t('signup_consent_pre')} <a href="privacy.html" target="_blank" rel="noopener" style="color:var(--marigold-dark);font-weight:700;">${t('privacy_policy')}</a>${t('signup_consent_post')}
       </label>
-      <button class="btn btn-primary" id="btn-signup">Create My Shop — Free</button>
-      <div class="link-row">Already have a business? <a href="#" id="go-login" style="color:var(--marigold-dark);font-weight:800;">Log in</a></div>
+      <button class="btn btn-primary" id="btn-signup">${t('signup_btn')}</button>
+      <div class="link-row">${t('signup_have_biz')} <a href="#" id="go-login" style="color:var(--marigold-dark);font-weight:800;">${t('signup_login_link')}</a></div>
     </div>
     <div style="text-align:center;margin-top:18px;font-size:11.5px;color:rgba(255,255,255,0.55);">
-      <a href="privacy.html" target="_blank" rel="noopener" style="color:rgba(255,255,255,0.8);text-decoration:underline;">Privacy Policy</a>
+      <a href="privacy.html" target="_blank" rel="noopener" style="color:rgba(255,255,255,0.8);text-decoration:underline;">${t('privacy_policy')}</a>
+      <div style="margin-top:8px;">${languageSwitcherHTML(true)}</div>
     </div>
   </div>
   </div>`;
@@ -1389,6 +2000,7 @@ function initGoogleRedirectListener(){
 }
 
 function bindAuthEvents(){
+  bindLanguageSwitcher();
   const go = (id,fn)=>{ const e=document.getElementById(id); if(e) e.addEventListener('click', fn); };
   go('google-auth-btn', handleGoogleSignIn);
   // Coming back here right after Google auth, with no existing business
@@ -2237,6 +2849,7 @@ function renderRoute(){
     case 'credit': return screenCredit();
     case 'closeday': return screenCloseDay();
     case 'reports': return screenReports();
+    case 'compareshops': return screenCompareShops();
     case 'staff': return screenStaff();
     case 'settings': return screenSettings();
     case 'audit': return screenAudit();
@@ -2462,7 +3075,7 @@ function screenDashboard(){
     },0), 0);
     profitBlock = `
       <div class="stat-box accent">
-        <div class="lbl">Today's Profit</div>
+        <div class="lbl">${t('dash_profit_today')}</div>
         <div class="val">${fmtMoney(todayTotal-cogs)}</div>
       </div>`;
   }
@@ -2474,13 +3087,13 @@ function screenDashboard(){
     <p class="subtle" style="margin-bottom:14px;">${currentShop()?.name} · ${fmtDate(todayISO())}</p>
 
     <div class="stat-grid">
-      <div class="stat-box"><div class="lbl">Sales Today</div><div class="val">${fmtMoney(todayTotal)}</div></div>
-      ${profitBlock || `<div class="stat-box"><div class="lbl">Cash In</div><div class="val">${fmtMoney(todayCash)}</div></div>`}
+      <div class="stat-box"><div class="lbl">${t('dash_sales_today')}</div><div class="val">${fmtMoney(todayTotal)}</div></div>
+      ${profitBlock || `<div class="stat-box"><div class="lbl">${t('dash_cash_in')}</div><div class="val">${fmtMoney(todayCash)}</div></div>`}
     </div>
     ${isMaster() ? dailyDigestBlock() : ''}
 
     ${(alerts.expiring>0 || alerts.dueSoon>0 || alerts.overdue>0 || alerts.lowStock>0 || outStock.length>0) ? `
-      <div class="section-head"><h3>Needs Attention</h3></div>
+      <div class="section-head"><h3>${t('dash_needs_attention')}</h3></div>
       ${alerts.overdue>0 && isMaster()?`<div class="card" style="display:flex;align-items:center;gap:10px;" data-goto="credit">
         <div style="font-size:20px;">${ICON_ALERT_DOT}</div><div style="flex:1;"><b>${alerts.overdue} customer(s)</b> overdue on credit — worth a reminder</div>
       </div>`:''}
@@ -2496,13 +3109,13 @@ function screenDashboard(){
       ${alerts.dueSoon>0 && isMaster()?`<div class="card" style="display:flex;align-items:center;gap:10px;" data-goto="credit">
         <div style="font-size:20px;">${ICON_CARD}</div><div style="flex:1;"><b>${alerts.dueSoon} customer(s)</b> owe you, due within 2 days</div>
       </div>`:''}
-    ` : `<div class="empty"><div class="ic">${ICON_CHECK_CIRCLE}</div><b>All clear</b>No urgent alerts right now.</div>`}
+    ` : `<div class="empty"><div class="ic">${ICON_CHECK_CIRCLE}</div><b>${t('dash_all_clear')}</b>${t('dash_no_alerts')}</div>`}
 
-    <div class="section-head"><h3>Quick Actions</h3></div>
+    <div class="section-head"><h3>${t('dash_quick_actions')}</h3></div>
     <div style="display:flex;gap:10px;">
-      ${!isViewer() && canDo('canSell')?`<button class="btn btn-dark" style="flex:1;" data-goto="sale">${ICON_RECEIPT} New Sale</button>`:''}
-      ${isMaster()?`<button class="btn btn-outline" style="flex:1;" data-goto="closeday">${ICON_LOCK} Close Day</button>`:''}
-      ${isStaff() && canDo('canRecordCash')?`<button class="btn btn-outline" style="flex:1;" data-goto="closeday">${ICON_LOCK} Close My Shift</button>`:''}
+      ${!isViewer() && canDo('canSell')?`<button class="btn btn-dark" style="flex:1;" data-goto="sale">${ICON_RECEIPT} ${t('dash_new_sale')}</button>`:''}
+      ${isMaster()?`<button class="btn btn-outline" style="flex:1;" data-goto="closeday">${ICON_LOCK} ${t('dash_close_day')}</button>`:''}
+      ${isStaff() && canDo('canRecordCash')?`<button class="btn btn-outline" style="flex:1;" data-goto="closeday">${ICON_LOCK} ${t('dash_close_shift')}</button>`:''}
     </div>
 
     ${isMaster() ? staffActivityFeed() : ''}
@@ -2532,7 +3145,7 @@ function handoverNoteBanner(){
           <div class="subtle" style="font-size:11px;margin-top:6px;">${author?author.firstName:'A teammate'} · ${fmtDate(n.createdAt.slice(0,10))}</div>
         </div>
       </div>
-      <button data-dismiss-handover="${n.id}" class="btn btn-outline btn-sm" style="margin-top:10px;">Got it</button>
+      <button data-dismiss-handover="${n.id}" class="btn btn-outline btn-sm" style="margin-top:10px;">${t('dash_got_it')}</button>
     </div>`;
 }
 
@@ -2598,7 +3211,7 @@ function bindDashboardEvents(){
     render();
   }));
 }
-function greeting(){ const h=new Date().getHours(); return h<12?'Good morning':h<17?'Good afternoon':'Good evening'; }
+function greeting(){ const h=new Date().getHours(); return h<12?t('greeting_morning'):h<17?t('greeting_afternoon'):t('greeting_evening'); }
 function subHeader(title){
   return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
     <button data-goto="more" style="background:var(--paper-dim);border:none;width:44px;height:44px;border-radius:12px;font-size:22px;color:var(--ink-text);flex-shrink:0;">←</button>
@@ -2624,40 +3237,40 @@ let saleSearch = '';
 
 function screenNewSale(){
   if(!canDo('canSell')){
-    return `<h2 class="screen-title">New Sale</h2><div class="empty"><div class="ic">${ICON_LOCK}</div><b>Not available to you</b>Your Owner has turned off sales access for your account. Ask them to enable it under Staff → Permissions.</div>`;
+    return `<h2 class="screen-title">${t('sale_title')}</h2><div class="empty"><div class="ic">${ICON_LOCK}</div><b>Not available to you</b>Your Owner has turned off sales access for your account. Ask them to enable it under Staff → Permissions.</div>`;
   }
   if(currentShop()?.isWarehouse){
-    return `<h2 class="screen-title">New Sale</h2><div class="empty"><div class="ic">${ICON_BOX}</div><b>This is a warehouse</b>${escapeHtml(currentShop().name)} is set up for holding stock only, not selling directly. Switch to a shop using the dropdown at the top, or move stock here to a shop first under More → Warehouse.</div>`;
+    return `<h2 class="screen-title">${t('sale_title')}</h2><div class="empty"><div class="ic">${ICON_BOX}</div><b>This is a warehouse</b>${escapeHtml(currentShop().name)} is set up for holding stock only, not selling directly. Switch to a shop using the dropdown at the top, or move stock here to a shop first under More → Warehouse.</div>`;
   }
   const goods = state.goods.filter(g=>g.shopId===state.currentShopId &&
     (!saleSearch || g.name.toLowerCase().includes(saleSearch.toLowerCase()) || (g.barcode && g.barcode===saleSearch.trim())));
   const bd = cartBreakdown();
   const customers = state.customers.filter(c=>c.businessId===business().id);
   return `
-    <h2 class="screen-title">New Sale</h2>
-    <p class="subtle" style="margin-bottom:14px;">1. Pick buyer &amp; payment below · 2. Tap goods to add them · 3. Adjust quantity · 4. Complete Sale</p>
+    <h2 class="screen-title">${t('sale_title')}</h2>
+    <p class="subtle" style="margin-bottom:14px;">${t('sale_subtitle')}</p>
 
     <div class="card">
       <div class="field" style="margin-bottom:${saleCustomerId?'10px':'6px'};">
-        <label>Buyer</label>
+        <label>${t('sale_buyer')}</label>
         <select id="ns-customer">
-          <option value="">Walk-in customer</option>
+          <option value="">${t('sale_walkin')}</option>
           ${customers.map(c=>`<option value="${c.id}" ${saleCustomerId===c.id?'selected':''}>${c.fullName}${c.groupId?' · '+groupName(c.groupId):''}</option>`).join('')}
         </select>
       </div>
       ${!saleCustomerId ? `
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
-        <span class="subtle">${saleWalkInName ? '${ICON_EDIT_NOTE} '+saleWalkInName+(saleWalkInPhone?' · '+saleWalkInPhone:'') : "Buying but not a saved customer? Add their name for the receipt."}</span>
-        <button class="btn btn-sm btn-outline" id="edit-walkin-btn" style="flex-shrink:0;">${saleWalkInName?'Edit':'+ Add Name'}</button>
+        <span class="subtle">${saleWalkInName ? '${ICON_EDIT_NOTE} '+saleWalkInName+(saleWalkInPhone?' · '+saleWalkInPhone:'') : t('sale_add_name_hint')}</span>
+        <button class="btn btn-sm btn-outline" id="edit-walkin-btn" style="flex-shrink:0;">${saleWalkInName?t('sale_edit_btn'):t('sale_add_name_btn')}</button>
       </div>` : ''}
-      <label style="display:block;font-size:12px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Is this Cash or Credit?</label>
+      <label style="display:block;font-size:12px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">${t('sale_cash_or_credit')}</label>
       <div style="display:flex;gap:10px;">
-        <button class="btn ${saleMode==='cash'?'btn-dark':'btn-outline'}" style="flex:1;" id="mode-cash">${ICON_CASH} Cash — Paid in full now</button>
+        <button class="btn ${saleMode==='cash'?'btn-dark':'btn-outline'}" style="flex:1;" id="mode-cash">${ICON_CASH} ${t('sale_cash_btn')}</button>
       </div>
       ${canDo('canSellCredit') ? `
       <div style="display:flex;gap:10px;margin-top:8px;">
-        <button class="btn ${saleMode==='credit'?'btn-dark':'btn-outline'}" style="flex:1;" id="mode-credit">${ICON_NOTEBOOK} Credit — Owes some or all of it</button>
-      </div>` : `<p class="subtle" style="margin-top:8px;">Credit sales aren't enabled for your account.</p>`}
+        <button class="btn ${saleMode==='credit'?'btn-dark':'btn-outline'}" style="flex:1;" id="mode-credit">${ICON_NOTEBOOK} ${t('sale_credit_btn')}</button>
+      </div>` : `<p class="subtle" style="margin-top:8px;">${t('sale_credit_disabled')}</p>`}
       <div id="credit-fields" class="${saleMode==='credit' && canDo('canSellCredit')?'':'hidden'}" style="margin-top:10px;">
         <div class="row2">
           <div class="field"><label>Amount Paid Now</label><input id="ns-paid" type="number" min="0" value="0"></div>
@@ -2718,11 +3331,11 @@ function screenNewSale(){
     </div>
     ` : ''}
 
-    <div class="section-head"><h3>Tap Goods to Add Them</h3></div>
+    <div class="section-head"><h3>${t('sale_tap_goods')}</h3></div>
     <div style="display:flex;gap:8px;margin-bottom:6px;">
-      <input id="sale-search" placeholder="Search by name, or scan/type a barcode…" value="${saleSearch}"
+      <input id="sale-search" placeholder="${t('sale_search_placeholder')}" value="${saleSearch}"
         style="flex:1;padding:11px 13px;border:1.5px solid var(--line);border-radius:10px;font-size:14px;">
-      <button class="btn btn-outline btn-sm" id="sale-scan-btn" style="flex-shrink:0;">${ICON_SEARCH} Scan</button>
+      <button class="btn btn-outline btn-sm" id="sale-scan-btn" style="flex-shrink:0;">${ICON_SEARCH} ${t('sale_scan_btn')}</button>
     </div>
     <div class="goods-grid">
       ${goods.length? goods.map(g=>{
@@ -2812,29 +3425,41 @@ function cartBreakdown(){
   return { sub, disc, tax, taxPct, grand: taxable + tax };
 }
 
+
+function tryAddByBarcode(code){
+  if(!code) return;
+  const g = state.goods.find(x=>x.shopId===state.currentShopId && x.barcode===code);
+  if(!g){ saleSearch = code; toast("No item matches that barcode — showing search results."); refreshMain(); return; }
+  if(g.hasVariants){ openVariantPickerModal(g.id); return; }
+  const stock = totalStock(g);
+  const existing = cart.find(c=>c.goodId===g.id && !c.variantId);
+  if(existing){
+    if(existing.qty+1 > stock){ toast('Not enough stock.'); return; }
+    existing.qty++;
+  } else {
+    if(stock<=0){ toast(g.name + ' is out of stock.'); return; }
+    cart.push({goodId:g.id, variantId:null, qty:1, note:''});
+  }
+  toast(g.name + ' added ✅');
+  refreshMain();
+}
+
 function bindRouteEvents(){
   if(route==='dashboard'){ bindDashboardEvents(); }
   if(route==='sale'){
     const search = document.getElementById('sale-search');
     if(search) search.addEventListener('input', e=>{ saleSearch=e.target.value; refreshMain(); });
+    // A physical/Bluetooth barcode scanner gun behaves like a keyboard — it
+    // types the code into whichever field is focused, then sends an Enter
+    // keystroke. Catching that Enter here gives hardware-scanner users the
+    // same instant "scan → added to cart" flow as the camera scanner below,
+    // with no extra tap needed.
+    if(search) search.addEventListener('keydown', e=>{
+      if(e.key==='Enter'){ e.preventDefault(); tryAddByBarcode(search.value.trim()); }
+    });
     const scanBtn = document.getElementById('sale-scan-btn');
     if(scanBtn) scanBtn.addEventListener('click', ()=>{
-      openBarcodeScanner((code)=>{
-        const g = state.goods.find(x=>x.shopId===state.currentShopId && x.barcode===code);
-        if(!g){ saleSearch = code; toast("No item matches that barcode — showing search results."); refreshMain(); return; }
-        if(g.hasVariants){ openVariantPickerModal(g.id); return; }
-        const stock = totalStock(g);
-        const existing = cart.find(c=>c.goodId===g.id && !c.variantId);
-        if(existing){
-          if(existing.qty+1 > stock){ toast('Not enough stock.'); return; }
-          existing.qty++;
-        } else {
-          if(stock<=0){ toast(g.name + ' is out of stock.'); return; }
-          cart.push({goodId:g.id, variantId:null, qty:1, note:''});
-        }
-        toast(g.name + ' added ✅');
-        refreshMain();
-      });
+      openBarcodeScanner((code)=>tryAddByBarcode(code));
     });
     const custSel = document.getElementById('ns-customer');
     if(custSel) custSel.addEventListener('change', e=>{
@@ -2925,6 +3550,7 @@ function bindRouteEvents(){
   if(route==='about-us') bindAboutUsEvents();
   if(route==='contact-us') bindContactUsEvents();
   if(route==='reports') bindReportsEvents();
+  if(route==='compareshops') bindCompareShopsEvents();
   if(route==='profile') bindProfileEvents();
   if(route==='settings') bindSettingsEvents();
 
@@ -3526,7 +4152,7 @@ function renderAddGoodSheet(){
       <button class="btn btn-outline btn-sm" id="add-variant-row" style="margin-bottom:14px;">＋ Add Size/Color</button>
       <div class="row2">
         <div class="field"><label>Reorder Alert Level</label><input id="ag-reorder" type="number" min="0" value="5"></div>
-        <div class="field"><label>Barcode <span class="subtle">(optional)</span></label><div style="display:flex;gap:8px;"><input id="ag-barcode" placeholder="Scan or type" style="flex:1;"><button type="button" class="btn btn-outline btn-sm" id="ag-barcode-scan" style="flex-shrink:0;">${ICON_SEARCH} Scan</button></div></div>
+        <div class="field"><label>Barcode <span class="subtle">(optional)</span></label><div style="display:flex;gap:8px;"><input id="ag-barcode" placeholder="Scan or type" style="flex:1;"><button type="button" class="btn btn-outline btn-sm" id="ag-barcode-scan" style="flex-shrink:0;">${ICON_SEARCH} ${t('sale_scan_btn')}</button></div></div>
       </div>
     `;
   } else if(profile==='specs'){
@@ -3546,7 +4172,7 @@ function renderAddGoodSheet(){
       </div>
       <div class="row2">
         <div class="field"><label>Reorder Alert Level</label><input id="ag-reorder" type="number" min="0" value="5"></div>
-        <div class="field"><label>Barcode <span class="subtle">(optional)</span></label><div style="display:flex;gap:8px;"><input id="ag-barcode" placeholder="Scan or type" style="flex:1;"><button type="button" class="btn btn-outline btn-sm" id="ag-barcode-scan" style="flex-shrink:0;">${ICON_SEARCH} Scan</button></div></div>
+        <div class="field"><label>Barcode <span class="subtle">(optional)</span></label><div style="display:flex;gap:8px;"><input id="ag-barcode" placeholder="Scan or type" style="flex:1;"><button type="button" class="btn btn-outline btn-sm" id="ag-barcode-scan" style="flex-shrink:0;">${ICON_SEARCH} ${t('sale_scan_btn')}</button></div></div>
       </div>
     `;
   } else if(profile==='dimensions'){
@@ -3567,7 +4193,7 @@ function renderAddGoodSheet(){
         <div class="field"><label>Quantity</label><input id="ag-qty" type="number" min="1" value="1"></div>
         <div class="field"><label>Reorder Alert Level</label><input id="ag-reorder" type="number" min="0" value="5"></div>
       </div>
-      <div class="field"><label>Barcode <span class="subtle">(optional)</span></label><div style="display:flex;gap:8px;"><input id="ag-barcode" placeholder="Scan or type" style="flex:1;"><button type="button" class="btn btn-outline btn-sm" id="ag-barcode-scan" style="flex-shrink:0;">${ICON_SEARCH} Scan</button></div></div>
+      <div class="field"><label>Barcode <span class="subtle">(optional)</span></label><div style="display:flex;gap:8px;"><input id="ag-barcode" placeholder="Scan or type" style="flex:1;"><button type="button" class="btn btn-outline btn-sm" id="ag-barcode-scan" style="flex-shrink:0;">${ICON_SEARCH} ${t('sale_scan_btn')}</button></div></div>
     `;
   } else {
     // perishable / general fallback — works for most shop types, but still uses
@@ -3586,7 +4212,7 @@ function renderAddGoodSheet(){
       <div class="field"><label>Batch # <span class="subtle">(optional)</span></label><input id="ag-batch" placeholder="B001"></div>
       <div class="row2">
         <div class="field"><label>Reorder Alert Level</label><input id="ag-reorder" type="number" min="0" value="5"></div>
-        <div class="field"><label>Barcode <span class="subtle">(optional)</span></label><div style="display:flex;gap:8px;"><input id="ag-barcode" placeholder="Scan or type" style="flex:1;"><button type="button" class="btn btn-outline btn-sm" id="ag-barcode-scan" style="flex-shrink:0;">${ICON_SEARCH} Scan</button></div></div>
+        <div class="field"><label>Barcode <span class="subtle">(optional)</span></label><div style="display:flex;gap:8px;"><input id="ag-barcode" placeholder="Scan or type" style="flex:1;"><button type="button" class="btn btn-outline btn-sm" id="ag-barcode-scan" style="flex-shrink:0;">${ICON_SEARCH} ${t('sale_scan_btn')}</button></div></div>
       </div>
     `;
   }
@@ -4153,26 +4779,27 @@ function bindCloseDayEvents(){
 function screenMore(){
   const pendingNameReqs = canManageStaff() ? state.users.filter(u=>u.businessId===business().id && u.nameChangeRequest && canManageThisUser(u)).length : 0;
   const items = [
-    {id:'history', ic:ICON_RECEIPT, label:'History', show:!isViewer()},
-    {id:'credit', ic:ICON_CARD, label:'Credit Ledger', show:!isViewer()},
-    {id:'closeday', ic:ICON_LOCK, label:'Close Day', show:!isViewer() && canDo('canRecordCash')},
-    {id:'expenses', ic:ICON_CASH, label:'Expenses', show:!isViewer()},
-    {id:'lodging', ic:ICON_BED, label:'Lodging', show:!isViewer() && isHotelBiz()},
-    {id:'suppliers', ic:ICON_TRUCK, label:'Suppliers', show:!isViewer()},
-    {id:'warehouse', ic:ICON_BOX, label:'Warehouse', show:!isViewer() && (isMaster() || canDo('canAddGoods'))},
-    {id:'notes', ic:ICON_NOTEBOOK, label:'Notes', show:true},
-    {id:'calculator', ic:ICON_CALCULATOR, label:'Calculator', show:true},
-    {id:'reports', ic:ICON_BARCHART, label:'Profit Reports', show:isMaster()},
-    {id:'staff', ic:ICON_USERS, label:'Staff', show:canManageStaff(), badge:pendingNameReqs},
-    {id:'audit', ic:ICON_FILE, label:'Audit Log', show:isMaster()},
-    {id:'profile', ic:ICON_USER, label:'My Profile', show:true},
-    {id:'faq', ic:ICON_HELP, label:'Help / FAQ', show:true},
-    {id:'about-us', ic:ICON_FILE, label:'About Us', show:true},
-    {id:'contact-us', ic:ICON_PHONE, label:'Contact Us', show:true},
-    {id:'settings', ic:ICON_SETTINGS, label:'Settings', show:true},
+    {id:'history', ic:ICON_RECEIPT, label:t('more_history'), show:!isViewer()},
+    {id:'credit', ic:ICON_CARD, label:t('more_credit_ledger'), show:!isViewer()},
+    {id:'closeday', ic:ICON_LOCK, label:t('more_close_day'), show:!isViewer() && canDo('canRecordCash')},
+    {id:'expenses', ic:ICON_CASH, label:t('more_expenses'), show:!isViewer()},
+    {id:'lodging', ic:ICON_BED, label:t('more_lodging'), show:!isViewer() && isHotelBiz()},
+    {id:'suppliers', ic:ICON_TRUCK, label:t('more_suppliers'), show:!isViewer()},
+    {id:'warehouse', ic:ICON_BOX, label:t('more_warehouse'), show:!isViewer() && (isMaster() || canDo('canAddGoods'))},
+    {id:'notes', ic:ICON_NOTEBOOK, label:t('more_notes'), show:true},
+    {id:'calculator', ic:ICON_CALCULATOR, label:t('more_calculator'), show:true},
+    {id:'reports', ic:ICON_BARCHART, label:t('more_reports'), show:isMaster()},
+    {id:'compareshops', ic:ICON_BARCHART, label:t('more_compare'), show:isMaster() && ownerComparableShops().length>1},
+    {id:'staff', ic:ICON_USERS, label:t('more_staff'), show:canManageStaff(), badge:pendingNameReqs},
+    {id:'audit', ic:ICON_FILE, label:t('more_audit'), show:isMaster()},
+    {id:'profile', ic:ICON_USER, label:t('more_profile'), show:true},
+    {id:'faq', ic:ICON_HELP, label:t('more_faq'), show:true},
+    {id:'about-us', ic:ICON_FILE, label:t('more_about'), show:true},
+    {id:'contact-us', ic:ICON_PHONE, label:t('more_contact'), show:true},
+    {id:'settings', ic:ICON_SETTINGS, label:t('more_settings'), show:true},
   ].filter(i=>i.show);
   return `
-    <h2 class="screen-title">More</h2>
+    <h2 class="screen-title">${t('more_title')}</h2>
     ${items.map(i=>`
       <div class="list-row" data-goto="${i.id}" style="cursor:pointer;">
         <div class="thumb">${i.ic}</div><div class="info"><div class="t1">${i.label}</div></div>
@@ -4180,14 +4807,14 @@ function screenMore(){
         <div>›</div>
       </div>`).join('')}
     <div class="list-row" id="do-share-app" style="cursor:pointer;">
-      <div class="thumb">${ICON_EXPORT}</div><div class="info"><div class="t1">Share This App</div><div class="t2 subtle">Tell another shop owner about ZeeShop</div></div><div>›</div>
+      <div class="thumb">${ICON_EXPORT}</div><div class="info"><div class="t1">${t('more_share_app')}</div><div class="t2 subtle">${t('more_share_app_hint')}</div></div><div>›</div>
     </div>
     <div class="divider"></div>
     <div class="list-row" id="do-logout" style="cursor:pointer;">
-      <div class="thumb">${ICON_LOCK}</div><div class="info"><div class="t1">Lock / Switch User</div></div><div>›</div>
+      <div class="thumb">${ICON_LOCK}</div><div class="info"><div class="t1">${t('more_lock')}</div></div><div>›</div>
     </div>
     <div class="list-row" id="do-full-logout" style="cursor:pointer;">
-      <div class="thumb">${ICON_LOGOUT}</div><div class="info"><div class="t1">Log Out</div><div class="t2 subtle">Sign out of this business on this device</div></div><div>›</div>
+      <div class="thumb">${ICON_LOGOUT}</div><div class="info"><div class="t1">${t('more_logout')}</div><div class="t2 subtle">${t('more_logout_hint')}</div></div><div>›</div>
     </div>
   `;
 }
@@ -4330,6 +4957,77 @@ function getRangeDates(range){
   while(d<=today){ days.push(d.toISOString().slice(0,10)); d.setDate(d.getDate()+1); }
   return days;
 }
+
+/* ============================================================
+   CROSS-SHOP COMPARISON — side-by-side performance for owners
+   running more than one shop. Warehouses are excluded since they
+   don't record sales. Reuses getRangeDates()/reportsRange pattern
+   from Profit Reports.
+   ============================================================ */
+let compareRange = '7d';
+function ownerComparableShops(){
+  return state.shops.filter(s=>s.businessId===business()?.id && !s.isWarehouse);
+}
+function screenCompareShops(){
+  const shops = ownerComparableShops();
+  const days = getRangeDates(compareRange);
+  const rangeLabels = {today:'Today', '7d':'7 Days', '30d':'30 Days', month:'This Month'};
+
+  const rows = shops.map(shop=>{
+    const sales = state.sales.filter(s=>s.shopId===shop.id && s.status!=='voided' && days.includes(s.date));
+    const revenue = sales.reduce((a,s)=>a+s.subtotal,0);
+    const cogs = sales.reduce((a,s)=>a+s.items.reduce((b,it)=>{
+      const g = state.goods.find(x=>x.id===it.goodId);
+      return b + (g?g.costPrice:0)*netQty(it);
+    },0),0);
+    const expenses = state.expenses.filter(e=>e.shopId===shop.id && days.includes(e.date)).reduce((a,e)=>a+e.amount,0);
+    const grossProfit = revenue - cogs;
+    const netProfit = grossProfit - expenses;
+    const txnCount = sales.length;
+    const avgSale = txnCount ? revenue/txnCount : 0;
+    return { shop, revenue, grossProfit, netProfit, expenses, txnCount, avgSale };
+  }).sort((a,b)=>b.revenue-a.revenue);
+
+  const maxRevenue = Math.max(1, ...rows.map(r=>r.revenue));
+  const totalRevenue = rows.reduce((a,r)=>a+r.revenue,0);
+
+  return `
+    ${subHeader(t('more_compare'))}
+    <div style="display:flex;gap:8px;margin-bottom:14px;overflow-x:auto;">
+      ${Object.keys(rangeLabels).map(r=>`<button class="btn btn-sm ${compareRange===r?'btn-dark':'btn-outline'}" data-crange="${r}">${rangeLabels[r]}</button>`).join('')}
+    </div>
+    ${shops.length<2 ? `
+      <div class="empty"><div class="ic">${ICON_BARCHART}</div><b>Nothing to compare yet</b>Add a second shop under More → Settings to see them ranked side by side.</div>
+    ` : `
+      <p class="subtle" style="margin-bottom:14px;">${rangeLabels[compareRange]} · ${fmtMoney(totalRevenue)} combined revenue across ${rows.length} shops</p>
+      ${rows.map((r,i)=>`
+        <div class="card" style="margin-bottom:10px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:8px;">
+            <div>
+              <div style="font-weight:800;font-size:14.5px;">${i===0 && r.revenue>0 ? '🏆 ' : ''}${escapeHtml(r.shop.name)}</div>
+              <div class="subtle" style="font-size:11.5px;">${r.txnCount} sale(s) · avg ${fmtMoney(r.avgSale)}</div>
+            </div>
+            <div style="text-align:right;flex-shrink:0;">
+              <div style="font-weight:800;font-size:15px;">${fmtMoney(r.revenue)}</div>
+              <div class="subtle" style="font-size:11px;">revenue</div>
+            </div>
+          </div>
+          <div style="width:100%;height:8px;background:var(--paper-dim);border-radius:5px;overflow:hidden;">
+            <div style="width:${r.revenue/maxRevenue*100}%;height:100%;background:${i===0?'var(--marigold)':'var(--teal)'};border-radius:5px;"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:12px;color:var(--text-dim);">
+            <span>Gross Profit: <b style="color:var(--ink-text);">${fmtMoney(r.grossProfit)}</b></span>
+            <span>Net Profit: <b style="color:${r.netProfit>=0?'var(--ink-text)':'var(--red)'};">${fmtMoney(r.netProfit)}</b></span>
+          </div>
+        </div>
+      `).join('')}
+    `}
+  `;
+}
+function bindCompareShopsEvents(){
+  document.querySelectorAll('[data-crange]').forEach(b=>b.addEventListener('click', ()=>{ compareRange=b.dataset.crange; refreshMain(); }));
+}
+
 function screenReports(){
   const shopSales = state.sales.filter(s=>s.shopId===state.currentShopId && s.status!=='voided');
   const days = getRangeDates(reportsRange);
@@ -6189,7 +6887,7 @@ function screenHistory(){
 
   const filterOptions = [
     {id:'all', label:'All'}, {id:'sale', label:'Sales'}, {id:'credit', label:'Credit'},
-    {id:'voided', label:'Voided'}, {id:'supplier', label:'Supplier'}, {id:'expense', label:'Expenses'},
+    {id:'voided', label:'Voided'}, {id:'supplier', label:'Supplier'}, {id:'expense', label:t('more_expenses')},
     {id:'adjustment', label:'Corrections'}
   ];
   const typeIcon = {sale:ICON_RECEIPT, credit:ICON_NOTEBOOK, voided:ICON_BAN, supplier:ICON_TRUCK, expense:ICON_CASH, adjustment:ICON_HASH};
@@ -6260,7 +6958,7 @@ const HISTORY_TYPE_LABELS = {sale:'SALE', credit:'CREDIT', voided:'VOIDED', supp
 function openHistoryShareModal(){
   const filterOptions = [
     {id:'all', label:'All'}, {id:'sale', label:'Sales'}, {id:'credit', label:'Credit'},
-    {id:'voided', label:'Voided'}, {id:'supplier', label:'Supplier'}, {id:'expense', label:'Expenses'},
+    {id:'voided', label:'Voided'}, {id:'supplier', label:'Supplier'}, {id:'expense', label:t('more_expenses')},
     {id:'adjustment', label:'Corrections'}
   ];
   const filterLabel = (filterOptions.find(f=>f.id===historyFilter)||{}).label || 'All';

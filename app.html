@@ -1658,6 +1658,20 @@ let forgotEmail = null;
 let forgotCode = null;
 let forgotOtpSending = false;
 
+
+async function notifyContactChange(field, newValue){
+  try{
+    const { data: sessionData } = await window.sb.auth.getSession();
+    const token = sessionData?.session?.access_token;
+    if(!token) return; // no real Supabase Auth session (e.g. staff/PIN account) — nothing to notify
+    await fetch(`${SITE_CONTENT_URL}/functions/v1/notify-contact-change`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+token },
+      body: JSON.stringify({ field, new_value: newValue })
+    });
+  }catch(e){ /* best-effort — never block the user's own save over this */ }
+}
+
 /* ---- forgot-password email verification (Edge Functions do the actual send/verify) ---- */
 async function sendResetOtp(email){
   const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/send-reset-otp`, {
@@ -6041,6 +6055,8 @@ function screenProfile(){
       ` : `
       <div class="field"><label>Username <span class="subtle">(cannot be changed)</span></label><input value="${escAttr(u.username)}" disabled style="opacity:0.6;"></div>
       `}
+      <div class="field"><label>${u.role==='master'?'Confirm with your Current Password':'Confirm with your Current PIN'}</label><input id="pf-confirm-cred" type="password" placeholder="${u.role==='master'?'Your current password':'Your current PIN'}"></div>
+      <p class="subtle" style="margin-top:-8px;margin-bottom:12px;">Required any time you save changes here — protects your contact details if your session or device is ever compromised.</p>
       <button class="btn btn-primary" id="save-profile-btn">Save Changes</button>
     </div>
     ${(u.role!=='master' && employmentRecordFor(u.id)) ? renderMyEmploymentRecordCard(u.id) : ''}
@@ -6059,12 +6075,14 @@ function screenProfile(){
     ${u.role==='master'?`
     <div class="card">
       <div class="t1" style="margin-bottom:10px;">Change Password</div>
+      <div class="field"><label>Current Password</label><input id="pf-currentpass" type="password" placeholder="Required to confirm it's you"></div>
       <div class="field"><label>New Password</label><input id="pf-newpass" type="password" placeholder="Min 6 characters"></div>
       <div class="field"><label>Confirm New Password</label><input id="pf-newpass2" type="password"></div>
       <button class="btn btn-outline" id="save-password-btn">Update Password</button>
     </div>` : `
     <div class="card">
       <div class="t1" style="margin-bottom:10px;">Change My PIN</div>
+      <div class="field"><label>Current PIN</label><input id="pf-currentpin" type="tel" maxlength="6" placeholder="Required to confirm it's you"></div>
       <div class="field"><label>New PIN <span class="subtle">(4-6 digits)</span></label><input id="pf-newpin" type="tel" maxlength="6" placeholder="••••"></div>
       <div class="field"><label>Confirm New PIN</label><input id="pf-newpin2" type="tel" maxlength="6"></div>
       <button class="btn btn-outline" id="save-pin-btn">Update PIN</button>
@@ -6075,6 +6093,22 @@ function bindProfileEvents(){
   const saveBtn = document.getElementById('save-profile-btn');
   if(saveBtn) saveBtn.addEventListener('click', ()=>{
     const u = currentUser();
+    // Confirm current credentials before touching anything. This is the
+    // fix for a real gap: previously, anyone with a live session — even a
+    // briefly unlocked or stolen phone — could change the email/phone on
+    // file with zero friction, which then silently hijacks password-reset
+    // recovery too (it goes to whatever email is on file NOW). Requiring
+    // the current password/PIN here means a stolen session alone isn't
+    // enough anymore.
+    const confirmCred = document.getElementById('pf-confirm-cred').value;
+    const credOk = u.role==='master'
+      ? hash(confirmCred) === u.passwordHash
+      : hash(confirmCred) === u.pinHash;
+    if(!confirmCred || !credOk){
+      toast(u.role==='master' ? 'Current password is incorrect.' : 'Current PIN is incorrect.');
+      return;
+    }
+    const oldPhone = u.phone, oldEmail = u.email, oldUsername = u.username;
     if(u.role==='master'){
       const fn = document.getElementById('pf-fn').value.trim();
       const ln = document.getElementById('pf-ln').value.trim();
@@ -6086,15 +6120,20 @@ function bindProfileEvents(){
          state.users.some(x=>x.id!==u.id && x.username.toLowerCase()===newUsername.toLowerCase())){
         toast('That username is already taken.'); return;
       }
-      if(newUsername !== u.username){
-        logAudit('username_changed', `Changed username from @${u.username} to @${newUsername}`);
-        u.username = newUsername;
-      }
+      u.username = newUsername;
     }
     const phoneRaw = document.getElementById('pf-phone').value.trim();
-    u.phone = phoneRaw ? '+'+toIntlDigits(phoneRaw) : '';
+    const newPhone = phoneRaw ? '+'+toIntlDigits(phoneRaw) : '';
     const emailField = document.getElementById('pf-email');
-    if(emailField) u.email = emailField.value.trim();
+    const newEmail = emailField ? emailField.value.trim() : u.email;
+    // Notify the OLD email BEFORE applying the change locally or queuing
+    // it to the server — the notify function looks up whatever email is
+    // on file right now, so this ordering is what makes sure it reaches
+    // the address someone is trying to move away from, not the new one.
+    if(newPhone !== oldPhone) notifyContactChange('phone', newPhone);
+    if(newEmail !== oldEmail) notifyContactChange('email', newEmail);
+    u.phone = newPhone;
+    u.email = newEmail;
     // None of this used to sync — a name, username, phone, or email change
     // stayed on whichever device made it, invisible everywhere else
     // (including the person's own second device, and anyone looking them
@@ -6103,7 +6142,13 @@ function bindProfileEvents(){
       id: u.id, username: u.username, first_name: u.firstName, last_name: u.lastName,
       phone: u.phone, email: u.email
     });
-    logAudit('profile_updated', 'Updated own profile');
+    // Specific old → new audit entries for the sensitive fields, instead of
+    // one generic "profile updated" line that told you nothing if you ever
+    // needed to investigate a dispute over who changed what and when.
+    if(oldUsername !== u.username) logAudit('username_changed', `Changed username from @${oldUsername} to @${u.username}`);
+    if(oldPhone !== u.phone) logAudit('phone_changed', `Changed phone from ${oldPhone||'(none)'} to ${u.phone||'(none)'}`);
+    if(oldEmail !== u.email) logAudit('email_changed', `Changed email from ${oldEmail||'(none)'} to ${u.email||'(none)'}`);
+    document.getElementById('pf-confirm-cred').value = '';
     toast('Profile updated ✅'); render();
   });
   const reqNameBtn = document.getElementById('request-name-btn');
@@ -6131,19 +6176,25 @@ function bindProfileEvents(){
   });
   const savePassBtn = document.getElementById('save-password-btn');
   if(savePassBtn) savePassBtn.addEventListener('click', ()=>{
+    const currentPass = document.getElementById('pf-currentpass').value;
+    if(hash(currentPass) !== currentUser().passwordHash){ toast('Current password is incorrect.'); return; }
     const p1 = document.getElementById('pf-newpass').value;
     const p2 = document.getElementById('pf-newpass2').value;
     if(p1.length<6){ toast('Password must be at least 6 characters.'); return; }
     if(p1!==p2){ toast("Passwords don't match."); return; }
     currentUser().passwordHash = hash(p1);
+    if(currentUser().role === 'master') notifyContactChange('password', null);
     enqueueSync('app_users','update', { id: currentUser().id, password_hash: currentUser().passwordHash });
     logAudit('password_changed', 'Changed own password');
     if(currentUser().role === 'master') syncPasswordToSupabaseAuth(p1);
     toast('Password updated ✅');
+    document.getElementById('pf-currentpass').value='';
     document.getElementById('pf-newpass').value=''; document.getElementById('pf-newpass2').value='';
   });
   const savePinBtn = document.getElementById('save-pin-btn');
   if(savePinBtn) savePinBtn.addEventListener('click', ()=>{
+    const currentPin = document.getElementById('pf-currentpin').value;
+    if(hash(currentPin) !== currentUser().pinHash){ toast('Current PIN is incorrect.'); return; }
     const p1 = document.getElementById('pf-newpin').value;
     const p2 = document.getElementById('pf-newpin2').value;
     if(!/^\d{4,6}$/.test(p1)){ toast('PIN must be 4-6 digits.'); return; }

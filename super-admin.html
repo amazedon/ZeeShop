@@ -427,7 +427,36 @@
             <div class="subtle" style="font-size:11px;">@${escapeHtml(u.username||'—')} · ${escapeHtml(u.phone||'no phone')} · ${escapeHtml(u.email||'no email')}</div>
           </div>
         `).join('')}
+        <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line);">
+          <div style="font-weight:800;font-size:12px;margin-bottom:6px;">Recover Owner Account</div>
+          <p class="subtle" style="font-size:11px;margin-bottom:8px;">Only use this after verifying the person's identity yourself (ID, business registration, original signup details, a phone call — this tool does not check that for you). Leave a field blank to leave it unchanged.</p>
+          <input id="recover-email-${bizId}" placeholder="New email (optional)" style="width:100%;margin-bottom:6px;padding:6px 8px;font-size:12px;">
+          <input id="recover-phone-${bizId}" placeholder="New phone (optional)" style="width:100%;margin-bottom:6px;padding:6px 8px;font-size:12px;">
+          <input id="recover-password-${bizId}" type="text" placeholder="New temporary password (optional)" style="width:100%;margin-bottom:8px;padding:6px 8px;font-size:12px;">
+          <button class="btn-outline-sm" data-recover-btn="${bizId}">Apply Recovery</button>
+          <span id="recover-status-${bizId}" style="font-size:11px;margin-left:8px;"></span>
+        </div>
       `;
+      const recoverBtn = cell.querySelector(`[data-recover-btn="${bizId}"]`);
+      if(recoverBtn) recoverBtn.addEventListener('click', async ()=>{
+        const new_email = document.getElementById(`recover-email-${bizId}`).value.trim();
+        const new_phone = document.getElementById(`recover-phone-${bizId}`).value.trim();
+        const new_password = document.getElementById(`recover-password-${bizId}`).value.trim();
+        if(!new_email && !new_phone && !new_password){ alert('Fill in at least one field.'); return; }
+        if(!confirm('Apply this recovery? Make sure you have verified this person is the real owner first.')) return;
+        const statusEl = document.getElementById(`recover-status-${bizId}`);
+        statusEl.style.color = 'var(--text-dim)';
+        statusEl.textContent = 'Applying…';
+        try{
+          const result = await callAdminApi('override_owner_contact', { business_id: bizId, new_email: new_email||undefined, new_phone: new_phone||undefined, new_password: new_password||undefined });
+          statusEl.style.color = 'var(--green)';
+          statusEl.textContent = 'Done: ' + (result.changed||[]).join(', ');
+          delete bizDetailCache[bizId];
+        }catch(e){
+          statusEl.style.color = 'var(--red)';
+          statusEl.textContent = 'Error: ' + e.message;
+        }
+      });
     }catch(e){
       cell.innerHTML = `<div class="err">Could not load staff: ${escapeHtml(e.message)}</div>`;
     }

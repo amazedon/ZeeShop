@@ -13,6 +13,84 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// ---- Inlined receipt-sending (was a shared import, but Supabase's
+// dashboard single-function deploy can't resolve relative imports to a
+// sibling _shared/ folder — see the "Module not found ... _shared/
+// send-receipt.ts" deploy error). Duplicated into every function that
+// needs it instead, so each one deploys standalone from the dashboard.
+// If you switch to CLI-based deploys of the whole supabase/functions/
+// directory later, this can be de-duplicated back into a real _shared
+// import if you prefer. ----
+const TERMII_API_KEY = Deno.env.get("TERMII_API_KEY")!;
+const TERMII_BASE_URL = Deno.env.get("TERMII_BASE_URL")!;
+const TERMII_EMAIL_CONFIG_ID = Deno.env.get("TERMII_EMAIL_CONFIG_ID")!;
+
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  NGN: "₦", GHS: "GH₵", GBP: "£", EUR: "€", USD: "$",
+};
+
+export interface ReceiptInput {
+  toEmail: string;
+  businessName: string;
+  plan: "pro" | "boss";
+  interval: "monthly" | "yearly";
+  amount: number;
+  currency: string;
+  txRef: string;
+  paidAt: string;      // ISO date
+  expiresAt: string;   // ISO date
+  isAutoRenewal: boolean;
+}
+
+export async function sendSubscriptionReceipt(input: ReceiptInput): Promise<{ sent: boolean; error?: string }> {
+  if (!input.toEmail) return { sent: false, error: "No email on file to send to." };
+
+  const symbol = CURRENCY_SYMBOLS[input.currency] || input.currency + " ";
+  const planLabel = input.plan === "boss" ? "Boss" : "Pro";
+  const paidDate = new Date(input.paidAt).toLocaleDateString("en-GB", { year: "numeric", month: "long", day: "numeric" });
+  const expiresDate = new Date(input.expiresAt).toLocaleDateString("en-GB", { year: "numeric", month: "long", day: "numeric" });
+
+  const subject = `Your ZeeShop receipt — ${planLabel} plan (${symbol}${input.amount})`;
+  const bodyHtml = `
+    <div style="font-family:sans-serif;max-width:480px;margin:0 auto;">
+      <h2 style="color:#12213B;">Payment Receipt</h2>
+      <p>${input.isAutoRenewal ? "Your ZeeShop subscription auto-renewed." : "Thank you for upgrading your ZeeShop subscription."}</p>
+      <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+        <tr><td style="padding:6px 0;color:#6B7280;">Business</td><td style="padding:6px 0;text-align:right;font-weight:700;">${input.businessName}</td></tr>
+        <tr><td style="padding:6px 0;color:#6B7280;">Plan</td><td style="padding:6px 0;text-align:right;font-weight:700;">${planLabel} (${input.interval})</td></tr>
+        <tr><td style="padding:6px 0;color:#6B7280;">Amount</td><td style="padding:6px 0;text-align:right;font-weight:700;">${symbol}${input.amount}</td></tr>
+        <tr><td style="padding:6px 0;color:#6B7280;">Date Paid</td><td style="padding:6px 0;text-align:right;">${paidDate}</td></tr>
+        <tr><td style="padding:6px 0;color:#6B7280;">Transaction Ref</td><td style="padding:6px 0;text-align:right;font-size:12px;">${input.txRef}</td></tr>
+        <tr><td style="padding:6px 0;color:#6B7280;">Renews / Expires</td><td style="padding:6px 0;text-align:right;">${expiresDate}</td></tr>
+      </table>
+      <p style="font-size:12px;color:#6B7280;">Keep this email as your receipt. Questions? Reply to this email or reach us from within the app under More → Contact Us.</p>
+    </div>
+  `;
+
+  try {
+    const res = await fetch(`${TERMII_BASE_URL}/api/email/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: TERMII_API_KEY,
+        email_address: input.toEmail,
+        subject,
+        content: bodyHtml,
+        emailConfigurationId: TERMII_EMAIL_CONFIG_ID,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      console.log("Receipt email send failed:", JSON.stringify(data));
+      return { sent: false, error: JSON.stringify(data) };
+    }
+    return { sent: true };
+  } catch (e) {
+    console.log("Receipt email send threw:", e);
+    return { sent: false, error: e instanceof Error ? e.message : "Unknown error" };
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -69,7 +147,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: bizRows, error: bizErr } = await adminClient
       .from("businesses")
-      .select("id")
+      .select("id, name")
       .eq("owner_auth_user_id", userData.user.id)
       .limit(1);
 
@@ -78,7 +156,9 @@ Deno.serve(async (req: Request) => {
     }
 
     const businessId = bizRows[0].id;
+    const businessName = bizRows[0].name || "your business";
     const periodDays = interval === "yearly" ? 365 : 30;
+    const paidAt = new Date().toISOString();
     const expiresAt = new Date(Date.now() + periodDays * 24 * 60 * 60 * 1000).toISOString();
 
     const { error: updateErr } = await adminClient
@@ -88,6 +168,23 @@ Deno.serve(async (req: Request) => {
 
     if (updateErr) {
       return json({ error: "Payment verified but plan update failed: " + updateErr.message }, 500);
+    }
+
+    // Best-effort — a receipt email failing should never undo a payment
+    // that's already been verified and applied above.
+    if (userData.user.email) {
+      sendSubscriptionReceipt({
+        toEmail: userData.user.email,
+        businessName,
+        plan,
+        interval,
+        amount: Number(expected_amount),
+        currency: expected_currency,
+        txRef: String(transaction_id),
+        paidAt,
+        expiresAt,
+        isAutoRenewal: false,
+      }).catch((e) => console.log("Receipt send threw:", e));
     }
 
     return json({

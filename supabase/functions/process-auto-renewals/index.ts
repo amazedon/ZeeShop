@@ -180,8 +180,14 @@ async function renewOne(
     return await logAndReturn(admin, businessId, plan, interval, null, null, false, "No active consented card on file");
   }
 
-  // Get the current admin-set price for this business's currency
-  const currency = ["NGN", "GHS", "GBP", "EUR"].includes(biz.currency) ? biz.currency : "USD";
+  // Use the business's actual currency directly — previously this only
+  // recognized 4 of the app's 17 supported currencies (NGN/GHS/GBP/EUR)
+  // and silently forced everyone else into USD pricing, which could
+  // charge a customer a completely different amount than what they
+  // actually agreed to at signup. The "no valid price configured" check
+  // right below already safely stops the renewal if a currency genuinely
+  // has no price set — no separate whitelist needed on top of that.
+  const currency = biz.currency || "USD";
   const { data: priceRow } = await admin
     .from("pricing")
     .select("amount")

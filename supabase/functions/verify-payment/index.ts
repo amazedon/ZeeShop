@@ -145,13 +145,43 @@ Deno.serve(async (req: Request) => {
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const adminClient = createClient(supabaseUrl, serviceKey);
 
-    const { data: bizRows, error: bizErr } = await adminClient
+    let { data: bizRows, error: bizErr } = await adminClient
       .from("businesses")
       .select("id, name")
       .eq("owner_auth_user_id", userData.user.id)
       .limit(1);
 
-    if (bizErr || !bizRows || bizRows.length === 0) {
+    // Same fallback as the client's loadOwnerBusinessData: a person who
+    // signed up with email+password and later pays after signing in via
+    // "Continue with Google" (or vice versa) on the same email can be a
+    // second, separate Supabase Auth identity if Google-account linking
+    // isn't enabled on the project. Re-link the business to whichever
+    // identity is actually paying right now, rather than reject a
+    // genuine payment because of a stale auth id.
+    if ((bizErr || !bizRows || bizRows.length === 0) && userData.user.email) {
+      const { data: masterRows } = await adminClient
+        .from("app_users")
+        .select("business_id")
+        .eq("role", "master")
+        .ilike("email", userData.user.email)
+        .limit(1);
+
+      if (masterRows && masterRows[0]) {
+        await adminClient
+          .from("businesses")
+          .update({ owner_auth_user_id: userData.user.id })
+          .eq("id", masterRows[0].business_id);
+
+        const { data: refetched } = await adminClient
+          .from("businesses")
+          .select("id, name")
+          .eq("id", masterRows[0].business_id)
+          .limit(1);
+        bizRows = refetched || [];
+      }
+    }
+
+    if (!bizRows || bizRows.length === 0) {
       return json({ error: "No business found for this account" }, 404);
     }
 

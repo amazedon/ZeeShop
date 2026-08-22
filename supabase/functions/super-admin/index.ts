@@ -257,6 +257,38 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true, changed: changes }, 200);
     }
 
+    // SITE CONTENT — the public landing page and in-app About/Contact
+    // screens all read from this one shared table. Editing it here (not
+    // in the regular business admin.html) is deliberate: this table has
+    // no business_id — it's one shared row per section for the whole
+    // platform, not per-shop content. Any regular shop owner being able
+    // to write to it would mean any of them could deface the company's
+    // own marketing page.
+    if (action === "get_site_content") {
+      const { data, error } = await admin.from("site_content").select("*");
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true, sections: data }, 200);
+    }
+
+    if (action === "update_site_content") {
+      const { section, heading, body } = params;
+      if (!section) return json({ error: "Missing section" }, 400);
+
+      const { error: upsertErr } = await admin
+        .from("site_content")
+        .upsert({ section, heading, body }, { onConflict: "section" });
+      if (upsertErr) return json({ error: upsertErr.message }, 500);
+
+      await admin.from("audit_log_platform").insert({
+        actor_auth_user_id: callerData.user.id,
+        action: "update_site_content",
+        target_business_id: null,
+        detail: `Updated landing page section "${section}".`,
+      }).then((r) => { if (r.error) console.log("audit_log_platform insert skipped:", r.error.message); });
+
+      return json({ ok: true }, 200);
+    }
+
     return json({ error: "Unknown action." }, 400);
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : "Unexpected error" }, 500);

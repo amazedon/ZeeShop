@@ -28,11 +28,37 @@ Deno.serve(async (req: Request) => {
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const admin = createClient(supabaseUrl, serviceKey);
 
-    const { data: bizRows, error: bizErr } = await admin
+    let { data: bizRows, error: bizErr } = await admin
       .from("businesses")
       .select("id")
       .eq("owner_auth_user_id", userData.user.id)
       .limit(1);
+
+    // Fallback: someone who signed up with email+password and is now
+    // generating a join code after signing in via "Continue with Google"
+    // (or vice versa) on the same email can be a second, separate Supabase
+    // Auth identity if Google-account linking isn't enabled on the
+    // project — same fix as loadOwnerBusinessData (app.html) and
+    // verify-payment. Re-link the business to whichever identity is
+    // actually here right now instead of rejecting a legitimate owner.
+    if ((bizErr || !bizRows?.length) && userData.user.email) {
+      const { data: masterRows } = await admin
+        .from("app_users")
+        .select("business_id")
+        .eq("role", "master")
+        .ilike("email", userData.user.email)
+        .limit(1);
+
+      if (masterRows && masterRows[0]) {
+        await admin
+          .from("businesses")
+          .update({ owner_auth_user_id: userData.user.id })
+          .eq("id", masterRows[0].business_id);
+
+        bizRows = [{ id: masterRows[0].business_id }];
+      }
+    }
+
     if (bizErr || !bizRows?.length) return json({ error: "No business found for this account" }, 404);
 
     const businessId = bizRows[0].id;

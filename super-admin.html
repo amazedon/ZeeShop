@@ -102,6 +102,15 @@
     </div>
 
     <div class="card">
+      <h2>🌐 Landing Page Content</h2>
+      <p class="subtle">Edits the About Us and Contact Us text shown on zed.ememart.com and inside the app's own About/Contact screens — one shared set of text for the whole platform, not per-business.</p>
+      <div id="site-content-status"></div>
+      <div id="site-content-editor">
+        <p class="subtle">Loading…</p>
+      </div>
+    </div>
+
+    <div class="card">
       <h2>📣 Send Notification</h2>
       <p class="subtle">Sends a push notification to devices with notifications enabled. Leave "Target Business" blank to send to everyone across the platform.</p>
       <div id="broadcast-status"></div>
@@ -229,6 +238,54 @@
     unauthorizedScreen.classList.add('hidden');
     dashScreen.classList.remove('hidden');
     loadBusinesses();
+    loadSiteContent();
+  }
+
+  const SITE_SECTIONS = [
+    { key: 'about_us', label: 'About Us' },
+    { key: 'contact_us', label: 'Contact Us' },
+  ];
+
+  async function loadSiteContent(){
+    const box = document.getElementById('site-content-editor');
+    box.innerHTML = '<p class="subtle">Loading…</p>';
+    try{
+      const result = await callAdminApi('get_site_content', {});
+      const sections = result.sections || [];
+      box.innerHTML = SITE_SECTIONS.map(s=>{
+        const row = sections.find(r=>r.section===s.key) || {};
+        return `
+          <div style="margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--line);">
+            <div style="font-weight:800;font-size:13px;margin-bottom:8px;">${s.label}</div>
+            <div class="field"><label>Heading</label><input id="sc-heading-${s.key}" value="${escapeHtml(row.heading||'')}"></div>
+            <div class="field"><label>Body</label><textarea id="sc-body-${s.key}" rows="4" style="width:100%;padding:8px;font-family:inherit;font-size:13px;">${escapeHtml(row.body||'')}</textarea></div>
+            <button class="btn-outline-sm" data-save-section="${s.key}">Save ${s.label}</button>
+            <span id="sc-status-${s.key}" style="font-size:11px;margin-left:8px;"></span>
+          </div>
+        `;
+      }).join('');
+
+      box.querySelectorAll('[data-save-section]').forEach(btn=>{
+        btn.addEventListener('click', async ()=>{
+          const key = btn.dataset.saveSection;
+          const heading = document.getElementById(`sc-heading-${key}`).value.trim();
+          const body = document.getElementById(`sc-body-${key}`).value.trim();
+          const statusEl = document.getElementById(`sc-status-${key}`);
+          statusEl.style.color = 'var(--text-dim)';
+          statusEl.textContent = 'Saving…';
+          try{
+            await callAdminApi('update_site_content', { section: key, heading, body });
+            statusEl.style.color = 'var(--green)';
+            statusEl.textContent = 'Saved ✅';
+          }catch(e){
+            statusEl.style.color = 'var(--red)';
+            statusEl.textContent = 'Error: ' + e.message;
+          }
+        });
+      });
+    }catch(e){
+      box.innerHTML = `<div class="err">Could not load: ${escapeHtml(e.message)}</div>`;
+    }
   }
 
   async function loadBusinesses(){

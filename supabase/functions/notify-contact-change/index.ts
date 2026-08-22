@@ -102,11 +102,33 @@ Deno.serve(async (req) => {
 
     // Look up the caller's OWN row — never anyone else's. This is what
     // stops this endpoint being usable to spam or probe other accounts.
-    const { data: userRow, error: userErr } = await supabase
+    let { data: userRow, error: userErr } = await supabase
       .from("app_users")
       .select("id, email, phone")
       .eq("auth_user_id", callerData.user.id)
       .maybeSingle();
+
+    // Fallback: same identity-split scenario as loadOwnerBusinessData,
+    // verify-payment, create-join-code, and regenerate-connect-code —
+    // someone who signed up with email+password and is now here via
+    // "Continue with Google" (or vice versa) on the same email can be a
+    // second, separate Supabase Auth identity if Google-account linking
+    // isn't enabled on the project. This is exactly the scenario where
+    // this security notification matters most, so it shouldn't be the
+    // one place that silently goes quiet because of it.
+    if (!userRow && callerData.user.email) {
+      const { data: emailMatch } = await supabase
+        .from("app_users")
+        .select("id, email, phone, auth_user_id")
+        .eq("role", "master")
+        .ilike("email", callerData.user.email)
+        .maybeSingle();
+      if (emailMatch) {
+        await supabase.from("app_users").update({ auth_user_id: callerData.user.id }).eq("id", emailMatch.id);
+        userRow = emailMatch;
+      }
+    }
+
     if (userErr) return json({ error: userErr.message }, 500);
     if (!userRow) return json({ error: "No matching account found." }, 404);
 

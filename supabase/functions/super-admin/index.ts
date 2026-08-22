@@ -271,12 +271,15 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === "update_site_content") {
-      const { section, heading, body } = params;
+      const { section, ...fields } = params;
       if (!section) return json({ error: "Missing section" }, 400);
 
+      // Generic pass-through — accepts heading/body (about_us, contact_us,
+      // privacy_policy) or email/phone/address (contact_us) without this
+      // function needing to change every time a new field is added.
       const { error: upsertErr } = await admin
         .from("site_content")
-        .upsert({ section, heading, body }, { onConflict: "section" });
+        .upsert({ section, ...fields }, { onConflict: "section" });
       if (upsertErr) return json({ error: upsertErr.message }, 500);
 
       await admin.from("audit_log_platform").insert({

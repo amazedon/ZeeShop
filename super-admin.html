@@ -242,9 +242,11 @@
   }
 
   const SITE_SECTIONS = [
-    { key: 'about_us', label: 'About Us' },
-    { key: 'contact_us', label: 'Contact Us' },
+    { key: 'about_us', label: 'About Us', bodyRows: 4 },
+    { key: 'contact_us', label: 'Contact Us', bodyRows: 3, extraFields: ['email', 'phone', 'address'] },
+    { key: 'privacy_policy', label: 'Privacy Policy', bodyRows: 16, bodyIsHtml: true, hideHeading: true },
   ];
+  const FIELD_LABELS = { email: 'Email', phone: 'Phone', address: 'Address' };
 
   async function loadSiteContent(){
     const box = document.getElementById('site-content-editor');
@@ -254,11 +256,15 @@
       const sections = result.sections || [];
       box.innerHTML = SITE_SECTIONS.map(s=>{
         const row = sections.find(r=>r.section===s.key) || {};
+        const extraFieldsHtml = (s.extraFields||[]).map(f=>
+          `<div class="field"><label>${FIELD_LABELS[f]}</label><input id="sc-${f}-${s.key}" value="${escapeHtml(row[f]||'')}"></div>`
+        ).join('');
         return `
           <div style="margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--line);">
             <div style="font-weight:800;font-size:13px;margin-bottom:8px;">${s.label}</div>
-            <div class="field"><label>Heading</label><input id="sc-heading-${s.key}" value="${escapeHtml(row.heading||'')}"></div>
-            <div class="field"><label>Body</label><textarea id="sc-body-${s.key}" rows="4" style="width:100%;padding:8px;font-family:inherit;font-size:13px;">${escapeHtml(row.body||'')}</textarea></div>
+            ${s.hideHeading ? '' : `<div class="field"><label>Heading</label><input id="sc-heading-${s.key}" value="${escapeHtml(row.heading||'')}"></div>`}
+            ${extraFieldsHtml}
+            <div class="field"><label>${s.bodyIsHtml ? 'Body (raw HTML — headings, lists, paragraphs allowed)' : 'Body'}</label><textarea id="sc-body-${s.key}" rows="${s.bodyRows||4}" style="width:100%;padding:8px;font-family:${s.bodyIsHtml?'monospace':'inherit'};font-size:12.5px;">${escapeHtml(row.body||'')}</textarea></div>
             <button class="btn-outline-sm" data-save-section="${s.key}">Save ${s.label}</button>
             <span id="sc-status-${s.key}" style="font-size:11px;margin-left:8px;"></span>
           </div>
@@ -268,13 +274,19 @@
       box.querySelectorAll('[data-save-section]').forEach(btn=>{
         btn.addEventListener('click', async ()=>{
           const key = btn.dataset.saveSection;
-          const heading = document.getElementById(`sc-heading-${key}`).value.trim();
-          const body = document.getElementById(`sc-body-${key}`).value.trim();
+          const sectionDef = SITE_SECTIONS.find(s=>s.key===key);
+          const payload = { section: key };
+          const headingEl = document.getElementById(`sc-heading-${key}`);
+          if(headingEl) payload.heading = headingEl.value.trim();
+          payload.body = document.getElementById(`sc-body-${key}`).value.trim();
+          (sectionDef.extraFields||[]).forEach(f=>{
+            payload[f] = document.getElementById(`sc-${f}-${key}`).value.trim();
+          });
           const statusEl = document.getElementById(`sc-status-${key}`);
           statusEl.style.color = 'var(--text-dim)';
           statusEl.textContent = 'Saving…';
           try{
-            await callAdminApi('update_site_content', { section: key, heading, body });
+            await callAdminApi('update_site_content', payload);
             statusEl.style.color = 'var(--green)';
             statusEl.textContent = 'Saved ✅';
           }catch(e){

@@ -1910,8 +1910,43 @@ function escapeIlike(s){ return s.replace(/[%_]/g, c => '\\'+c); }
 async function loadOwnerBusinessData(accessToken, authUserId, emailForLookup){
   const headers = { 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+accessToken };
 
-  const bizRes = await fetch(`${SITE_CONTENT_URL}/rest/v1/businesses?select=*&owner_auth_user_id=eq.${authUserId}`, { headers });
-  const bizRows = bizRes.ok ? await bizRes.json() : [];
+  let bizRes = await fetch(`${SITE_CONTENT_URL}/rest/v1/businesses?select=*&owner_auth_user_id=eq.${authUserId}`, { headers });
+  let bizRows = bizRes.ok ? await bizRes.json() : [];
+
+  // Fallback: someone who originally signed up with email+password, then
+  // later signs in on a new device via "Continue with Google" (or vice
+  // versa) using the SAME email, can end up as a second, separate Supabase
+  // Auth identity if Google-account linking isn't enabled on the project.
+  // Same person, same business, different auth_user_id — the lookup above
+  // finds nothing even though they're clearly the right owner. businesses
+  // itself has no email column, so this goes through app_users (the
+  // master's own record) to find the business, then re-points that
+  // business at whichever identity they're actually using right now —
+  // heals this permanently after the first successful login post-fix,
+  // instead of leaving them locked out every time they use the "other"
+  // sign-in method.
+  if(!bizRows[0] && emailForLookup){
+    const masterLookupRes = await fetch(
+      `${SITE_CONTENT_URL}/rest/v1/app_users?select=business_id&role=eq.master&email=ilike.${escapeIlike(emailForLookup)}`,
+      { headers }
+    );
+    const masterRows = masterLookupRes.ok ? await masterLookupRes.json() : [];
+    if(masterRows[0]){
+      const relinkRes = await fetch(`${SITE_CONTENT_URL}/rest/v1/businesses?id=eq.${masterRows[0].business_id}`, {
+        method: 'PATCH',
+        headers: { ...headers, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+        body: JSON.stringify({ owner_auth_user_id: authUserId })
+      });
+      bizRows = relinkRes.ok ? await relinkRes.json() : [];
+      if(!bizRows[0]){
+        // PATCH succeeded server-side even if 'Prefer: return=representation'
+        // didn't come back as expected — re-fetch directly to be sure.
+        const refetchRes = await fetch(`${SITE_CONTENT_URL}/rest/v1/businesses?select=*&id=eq.${masterRows[0].business_id}`, { headers });
+        bizRows = refetchRes.ok ? await refetchRes.json() : [];
+      }
+    }
+  }
+
   if(!bizRows[0]){
     throw new Error("We couldn't find a business linked to this account.");
   }

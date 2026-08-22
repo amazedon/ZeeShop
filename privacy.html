@@ -40,7 +40,6 @@ ul{padding-left:20px;margin-bottom:10px;}
   <h1>Privacy Policy</h1>
   <p class="updated">Last updated: July 2026</p>
 
-  <div id="policy-body-el">
   <p>This Privacy Policy explains how Ememart Solutions ("we", "us", "our") collects, uses, and protects information when you use ZeeShop, our shop and inventory management application ("the App").</p>
 
 
@@ -88,50 +87,10 @@ ul{padding-left:20px;margin-bottom:10px;}
   <h2>10. Contact us</h2>
   <div class="contact-box">
     <strong>Ememart Solutions</strong><br>
-    Email: <a id="policy-email-el" href="mailto:Help@ememart.com">Help@ememart.com</a><br>
-    Phone: <a id="policy-phone-el" href="tel:+2348027300375">0802 730 0375</a><br>
-    Address: <span id="policy-address-el">4 Ajanwa Street, Abubor Nnewichi, Nnewi, Anambra State, Nigeria</span>
-  </div>
+    Email: <a href="mailto:Help@ememart.com">Help@ememart.com</a><br>
+    Phone: <a href="tel:+2348027300375">0802 730 0375</a><br>
+    Address: 4 Ajanwa Street, Abubor Nnewichi, Nnewi, Anambra State, Nigeria
   </div>
 </div>
-
-<script>
-  // Same pattern as index.html: pull the super-admin-edited version if one
-  // exists, fall back to the static text above if the fetch fails or
-  // nothing's been set yet — this page never ends up blank either way.
-  // The policy body is rendered as HTML (not plain text) so headings and
-  // lists set by whoever edits it in super-admin.html are preserved —
-  // safe here since only a verified super admin can ever write that value.
-  (async function(){
-    try{
-      const SITE_CONTENT_URL = 'https://beypnkzrgqrkjttsxlju.supabase.co';
-      const SITE_CONTENT_ANON_KEY = 'sb_publishable_m_MrYeKVF4HgUG5i5v_THg_LPbvmUK5';
-      const res = await fetch(`${SITE_CONTENT_URL}/rest/v1/site_content?section=in.(privacy_policy,contact_us)&select=*`, {
-        headers: { 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+SITE_CONTENT_ANON_KEY }
-      });
-      if(!res.ok) return;
-      const rows = await res.json();
-      const policy = rows.find(r=>r.section==='privacy_policy');
-      const contact = rows.find(r=>r.section==='contact_us');
-
-      if(policy && policy.body){
-        document.getElementById('policy-body-el').innerHTML = policy.body;
-      }
-      if(contact){
-        if(contact.email){
-          const el = document.getElementById('policy-email-el');
-          el.textContent = contact.email; el.href = 'mailto:'+contact.email;
-        }
-        if(contact.phone){
-          const el = document.getElementById('policy-phone-el');
-          el.textContent = contact.phone; el.href = 'tel:'+contact.phone.replace(/\s+/g,'');
-        }
-        if(contact.address){
-          document.getElementById('policy-address-el').textContent = contact.address;
-        }
-      }
-    }catch(e){ /* offline or fetch failed — static text above stays as-is */ }
-  })();
-</script>
 </body>
 </html>

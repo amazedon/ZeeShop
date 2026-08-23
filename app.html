@@ -1674,6 +1674,21 @@ async function notifyContactChange(field, newValue){
 
 /* ---- forgot-password email verification (Edge Functions do the actual send/verify) ---- */
 
+
+async function callUpdateStaffPermissions(targetUserId, perms){
+  const { data: sessionData } = await window.sb.auth.getSession();
+  const token = sessionData?.session?.access_token;
+  if(!token) throw new Error("Not signed in to the server — can't change permissions while offline.");
+  const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/update-staff-permissions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+token },
+    body: JSON.stringify({ target_user_id: targetUserId, ...perms })
+  });
+  const data = await res.json();
+  if(!res.ok || data.error) throw new Error(data.error || "Couldn't save permissions.");
+  return data;
+}
+
 async function callResetStaffPin(targetUserId, newPin){
   const { data: sessionData } = await window.sb.auth.getSession();
   const token = sessionData?.session?.access_token;
@@ -2741,7 +2756,17 @@ async function reconnectStaffDevice(){
     });
     state.currentShopId = result.shops && result.shops[0] ? result.shops[0].id : null;
 
-    if(!state.users.some(x=>x.id===result.user.id)) state.users.push(result.user);
+    if(!state.users.some(x=>x.id===result.user.id)){
+      state.users.push(result.user);
+    } else {
+      // Refresh the existing local copy instead of leaving it untouched —
+      // a staff member reconnecting is exactly the moment the server's
+      // copy is freshest (permissions, name, active status), so this is
+      // a free chance to correct any local copy that had gone stale from
+      // a change made on another device.
+      const idx = state.users.findIndex(x=>x.id===result.user.id);
+      state.users[idx] = { ...state.users[idx], ...result.user };
+    }
     state.sessionUserId = result.user.id;
 
     save();
@@ -5892,36 +5917,43 @@ function openStaffPermissionsModal(userId){
   if(saTog) saTog.addEventListener('change', ()=>{
     document.getElementById('superadmin-shops').classList.toggle('hidden', !saTog.checked);
   });
-  document.getElementById('save-perms-btn').addEventListener('click', ()=>{
-    u.canSell = document.getElementById('perm-sell').checked;
-    u.canSellCredit = document.getElementById('perm-credit').checked;
-    u.canRecordCash = document.getElementById('perm-record').checked;
-    u.canAddGoods = document.getElementById('perm-addgoods').checked;
-    u.canVoidReturn = document.getElementById('perm-voidreturn').checked;
+  document.getElementById('save-perms-btn').addEventListener('click', async ()=>{
+    const canSell = document.getElementById('perm-sell').checked;
+    const canSellCredit = document.getElementById('perm-credit').checked;
+    const canRecordCash = document.getElementById('perm-record').checked;
+    const canAddGoods = document.getElementById('perm-addgoods').checked;
+    const canVoidReturn = document.getElementById('perm-voidreturn').checked;
+    let isSuperAdmin = u.isSuperAdmin, managesShopIds = u.managesShopIds || [];
+    const wasSuper = u.isSuperAdmin;
     if(isMaster() && saTog){
-      const wasSuper = u.isSuperAdmin;
-      u.isSuperAdmin = saTog.checked;
-      if(u.isSuperAdmin){
-        u.managesShopIds = Array.from(document.querySelectorAll('.sa-shop-cb:checked')).map(cb=>cb.value);
-        if(!wasSuper) logAudit('super_admin_granted', `Made ${u.firstName} ${u.lastName} a Super Admin`);
-      } else {
-        u.managesShopIds = [];
-        if(wasSuper) logAudit('super_admin_revoked', `Revoked Super Admin from ${u.firstName} ${u.lastName}`);
-      }
+      isSuperAdmin = saTog.checked;
+      managesShopIds = isSuperAdmin ? Array.from(document.querySelectorAll('.sa-shop-cb:checked')).map(cb=>cb.value) : [];
     }
-    // Permission changes are exactly the kind of thing that MUST reach the
-    // server and every device promptly — a revoked permission that only
-    // took effect locally would leave the staff member able to keep doing
-    // whatever was just turned off, on their own device. is_super_admin and
-    // manages_shop_ids were previously left out here entirely, which is why
-    // a Super Admin's assigned-shop list never followed them to another device.
-    enqueueSync('app_users','update', {
-      id: u.id, can_sell: u.canSell, can_sell_credit: u.canSellCredit, can_record_cash: u.canRecordCash,
-      can_add_goods: u.canAddGoods, can_void_return: u.canVoidReturn,
-      is_super_admin: !!u.isSuperAdmin, manages_shop_ids: u.managesShopIds || []
-    });
-    logAudit('permissions_updated', `Updated permissions for ${u.firstName} ${u.lastName}`);
-    toast('Permissions saved ✅'); closeSheet(); render();
+    // Pushed straight to the server and awaited — not queued for later —
+    // for the same reason as the PIN reset fix: permission changes MUST
+    // reach the server and every device promptly, since a revoked
+    // permission that only took effect locally would leave the staff
+    // member able to keep doing whatever was just turned off, on their
+    // own device. The old enqueueSync approach could silently never
+    // reach the server at all, leaving every OTHER device permanently
+    // showing the old permission set no matter how many times "Save"
+    // was clicked.
+    try{
+      await callUpdateStaffPermissions(u.id, {
+        can_sell: canSell, can_sell_credit: canSellCredit, can_record_cash: canRecordCash,
+        can_add_goods: canAddGoods, can_void_return: canVoidReturn,
+        is_super_admin: isSuperAdmin, manages_shop_ids: managesShopIds
+      });
+      u.canSell = canSell; u.canSellCredit = canSellCredit; u.canRecordCash = canRecordCash;
+      u.canAddGoods = canAddGoods; u.canVoidReturn = canVoidReturn;
+      u.isSuperAdmin = isSuperAdmin; u.managesShopIds = managesShopIds;
+      if(isSuperAdmin && !wasSuper) logAudit('super_admin_granted', `Made ${u.firstName} ${u.lastName} a Super Admin`);
+      if(!isSuperAdmin && wasSuper) logAudit('super_admin_revoked', `Revoked Super Admin from ${u.firstName} ${u.lastName}`);
+      logAudit('permissions_updated', `Updated permissions for ${u.firstName} ${u.lastName}`);
+      toast('Permissions saved ✅ — takes effect immediately, everywhere.'); closeSheet(); render();
+    }catch(e){
+      toast("Couldn't save permissions: " + e.message);
+    }
   });
 }
 function bindStaffEvents(){

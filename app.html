@@ -1673,6 +1673,21 @@ async function notifyContactChange(field, newValue){
 }
 
 /* ---- forgot-password email verification (Edge Functions do the actual send/verify) ---- */
+
+async function callResetStaffPin(targetUserId, newPin){
+  const { data: sessionData } = await window.sb.auth.getSession();
+  const token = sessionData?.session?.access_token;
+  if(!token) throw new Error("Not signed in to the server — can't reset a PIN while offline.");
+  const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/reset-staff-pin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+token },
+    body: JSON.stringify({ target_user_id: targetUserId, new_pin: newPin })
+  });
+  const data = await res.json();
+  if(!res.ok || data.error) throw new Error(data.error || "Couldn't reset the PIN.");
+  return data;
+}
+
 async function sendResetOtp(email){
   const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/send-reset-otp`, {
     method: 'POST',
@@ -6010,21 +6025,25 @@ function bindStaffEvents(){
     logAudit('recordonly_deleted', 'Removed '+p.firstName+' '+p.lastName+' (no app account)');
     toast('Removed'); render();
   }));
-  document.querySelectorAll('[data-reset-pin]').forEach(b=>b.addEventListener('click', ()=>{
+  document.querySelectorAll('[data-reset-pin]').forEach(b=>b.addEventListener('click', async ()=>{
     const u = state.users.find(x=>x.id===b.dataset.resetPin);
     if(!canManageThisUser(u)){ toast("You don't have permission to manage this account."); return; }
     const pin = prompt('New 4-6 digit PIN for '+u.firstName+':');
     if(!pin || !/^\d{4,6}$/.test(pin)){ toast('PIN must be 4-6 digits.'); return; }
-    u.pinHash = hash(pin); u.pinLength = pin.length;
-    // This was local-only — the server's copy of pin_hash never changed, so
-    // a staff member could still reconnect on a NEW device using their OLD
-    // pin (since staff-device-login checks the server's value), and their
-    // own existing device would fail with "incorrect PIN" on the new one
-    // until it happened to pull the (never-sent) update — which would never
-    // arrive, since nothing ever pushed it.
-    enqueueSync('app_users','update', { id: u.id, pin_hash: u.pinHash, pin_length: u.pinLength });
-    logAudit('pin_reset','Reset PIN for '+u.firstName);
-    toast('PIN reset ✅ — their other devices will pick it up once online.'); save();
+    // Pushed straight to the server and awaited — not queued for later —
+    // so a failure (e.g. a permissions problem) shows up immediately as
+    // an error instead of a false "success" that silently never reached
+    // the server. This replaces the old enqueueSync-based approach, which
+    // is exactly what caused resets to work locally but never actually
+    // take effect anywhere else, no matter how many times it was retried.
+    try{
+      const result = await callResetStaffPin(u.id, pin);
+      u.pinHash = result.pin_hash; u.pinLength = result.pin_length;
+      logAudit('pin_reset','Reset PIN for '+u.firstName);
+      toast('PIN reset ✅ — takes effect immediately, everywhere.'); save();
+    }catch(e){
+      toast("Couldn't reset the PIN: " + e.message);
+    }
   }));
   document.querySelectorAll('[data-toggle-active]').forEach(b=>b.addEventListener('click', ()=>{
     const u = state.users.find(x=>x.id===b.dataset.toggleActive);
@@ -6227,22 +6246,27 @@ function bindProfileEvents(){
     document.getElementById('pf-newpass').value=''; document.getElementById('pf-newpass2').value='';
   });
   const savePinBtn = document.getElementById('save-pin-btn');
-  if(savePinBtn) savePinBtn.addEventListener('click', ()=>{
+  if(savePinBtn) savePinBtn.addEventListener('click', async ()=>{
     const currentPin = document.getElementById('pf-currentpin').value;
     if(hash(currentPin) !== currentUser().pinHash){ toast('Current PIN is incorrect.'); return; }
     const p1 = document.getElementById('pf-newpin').value;
     const p2 = document.getElementById('pf-newpin2').value;
     if(!/^\d{4,6}$/.test(p1)){ toast('PIN must be 4-6 digits.'); return; }
     if(p1!==p2){ toast("PINs don't match."); return; }
-    currentUser().pinHash = hash(p1); currentUser().pinLength = p1.length;
-    // Same bug as the admin-side Reset PIN: without this, changing your own
-    // PIN only took effect on the device you changed it from. Your other
-    // device would keep rejecting the new PIN, AND reconnecting on a brand
-    // new device would still accept the OLD one, since the server never knew.
-    enqueueSync('app_users','update', { id: currentUser().id, pin_hash: currentUser().pinHash, pin_length: currentUser().pinLength });
-    logAudit('pin_changed', 'Changed own PIN');
-    toast('PIN updated ✅');
-    document.getElementById('pf-newpin').value=''; document.getElementById('pf-newpin2').value='';
+    // Pushed straight to the server and awaited — see the admin-side Reset
+    // PIN handler for why: the old enqueueSync approach could silently
+    // never reach the server, so changing your own PIN only ever took
+    // effect on the device you changed it from.
+    try{
+      const result = await callResetStaffPin(currentUser().id, p1);
+      currentUser().pinHash = result.pin_hash; currentUser().pinLength = result.pin_length;
+      logAudit('pin_changed', 'Changed own PIN');
+      toast('PIN updated ✅ — takes effect immediately, everywhere.');
+      document.getElementById('pf-currentpin').value='';
+      document.getElementById('pf-newpin').value=''; document.getElementById('pf-newpin2').value='';
+    }catch(e){
+      toast("Couldn't update the PIN: " + e.message);
+    }
   });
 }
 

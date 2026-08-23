@@ -284,8 +284,20 @@ async function pullSync(){
               taxName: state.business.taxName, taxPercent: state.business.taxPercent,
               logoDataUrl: state.business.logoDataUrl
             })){
-              Object.assign(state.business, fresh);
-              changed = true;
+              // Guard against a real race: if you set the logo/business
+              // type/etc and refresh again quickly — before the queued
+              // push above has actually reached the server — this pull
+              // would otherwise fetch the OLD server row and stomp your
+              // brand new local value right back to blank. Every OTHER
+              // table already skips merging while a matching write is
+              // still queued (see isPending() below); this block predates
+              // that helper's position in the file, so it checks the raw
+              // queue directly instead of forward-referencing it.
+              const hasPendingBusinessWrite = loadSyncQueue().some(item=>item.table==='businesses' && item.payload && item.payload.id===bizId);
+              if(!hasPendingBusinessWrite){
+                Object.assign(state.business, fresh);
+                changed = true;
+              }
             }
           }
         }

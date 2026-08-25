@@ -147,44 +147,37 @@ async function flushSyncQueue(){
 }
 
 async function pushSyncItem(item, accessToken){
+  // Routed through sync-relay instead of hitting PostgREST directly with
+  // the client's own session token. That direct-to-PostgREST approach put
+  // every single write at the mercy of Row Level Security — and RLS gaps
+  // on this project turned out to be real and repeatable (PIN resets,
+  // staff permissions, and name-change requests all silently failed this
+  // exact way before being fixed one at a time). Routing everything
+  // through one server-side relay with its own authorization check means
+  // a write either genuinely succeeds or comes back as a real, visible
+  // error — never a silent no-op that looks fine until a second device
+  // shows nothing ever actually arrived.
   const headers = {
     'apikey': SITE_CONTENT_ANON_KEY,
     'Authorization': 'Bearer ' + accessToken,
     'Content-Type': 'application/json'
   };
   try{
-    let res;
-    if(item.op === 'insert'){
-      res = await fetch(`${SYNC_SUPABASE_URL}/rest/v1/${item.table}`, {
-        method: 'POST',
-        headers: { ...headers, 'Prefer': 'return=minimal,resolution=merge-duplicates' },
-        body: JSON.stringify(item.payload)
-      });
-    } else if(item.op === 'update'){
-      res = await fetch(`${SYNC_SUPABASE_URL}/rest/v1/${item.table}?id=eq.${item.payload.id}`, {
-        method: 'PATCH',
-        headers: { ...headers, 'Prefer': 'return=minimal' },
-        body: JSON.stringify(item.payload)
-      });
-    } else if(item.op === 'delete'){
-      res = await fetch(`${SYNC_SUPABASE_URL}/rest/v1/${item.table}?id=eq.${item.payload.id}`, {
-        method: 'DELETE',
-        headers
-      });
-    } else {
-      return 'permanent'; // unknown op — drop it rather than block the queue forever
-    }
+    const res = await fetch(`${SYNC_SUPABASE_URL}/functions/v1/sync-relay`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ table: item.table, op: item.op, payload: item.payload })
+    });
     if(res.ok) return 'ok';
-    // 401/403 — the session just expired mid-flush; retry once a fresh token
-    // is available rather than discarding real data.
-    if(res.status === 401 || res.status === 403) return 'retry';
-    // Other 4xx (bad/malformed data, constraint violation, etc.) will never
-    // succeed no matter how many times we retry — drop it so it doesn't
-    // block every other queued change behind it.
-    if(res.status >= 400 && res.status < 500) return 'permanent';
+    // The relay only ever returns 401 for a genuinely expired/missing
+    // session (retry once a fresh token is available) — unlike a bare
+    // PostgREST 403, its 403 means "authenticated fine, but this table or
+    // business doesn't check out," which won't fix itself by retrying.
+    if(res.status === 401) return 'retry';
+    if(res.status === 403 || (res.status >= 400 && res.status < 500)) return 'permanent';
     return 'retry'; // 5xx / unexpected — transient, worth retrying
   }catch(e){
-    return 'retry'; // network error — definitely offline, try again later
+    return 'retry'; // network error — try again once back online
   }
 }
 
@@ -498,7 +491,7 @@ async function pullSync(){
         // without this, pulling an amendment made on another device would
         // silently WIPE this device's copy of the amendment trail instead of
         // extending it.
-        original: existingRec ? existingRec.original : { employmentType:r.employment_type, resumptionDate:r.resumption_date, salaryAmount:r.salary_amount, salaryFrequency:r.salary_frequency, settlementDate:r.settlement_date, settlementTerms:r.settlement_terms||'', notes:r.notes||'' },
+        original: existingRec ? existingRec.original : { employmentType:r.employment_type, resumptionDate:r.resumption_date, salaryAmount:r.salary_amount, salaryFrequency:r.salary_frequency, settlementDate:r.settlement_date, settlementTerms:r.settlement_terms||'', notes:r.notes||'', createdAt:r.created_at||null, createdBy:r.created_by_user_id||null },
         history: existingRec ? existingRec.history : []
       };
     });

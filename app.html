@@ -1260,7 +1260,7 @@ function todayISO(){return new Date().toISOString().slice(0,10);}
 function daysBetween(d1,d2){return Math.round((new Date(d2)-new Date(d1))/86400000);}
 function fmtDate(d){return new Date(d+"T00:00:00").toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});}
 function fmtMoney(n){
-  const c = state.business ? (CCY[state.business.currency]||state.business.currency+" ") : "₦";
+  const c = (state.business && state.business.currency) ? (CCY[state.business.currency]||state.business.currency+" ") : "";
   return c + Number(n||0).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:2});
 }
 // Canvas text rendering on some Android devices doesn't reliably render currency
@@ -1437,6 +1437,30 @@ function render(){
           `}
         </div>
       </div>`;
+    return;
+  }
+  if(state.business.setupComplete === false && state.sessionUserId){
+    // Gates literally everything else — the whole point is that a Google
+    // signup gets into the app instantly instead of facing a form wall,
+    // but nothing that touches money (which is almost everything here)
+    // can safely render without a currency set. This screen is the ONLY
+    // thing shown until that's fixed. Staff shouldn't normally exist yet
+    // at this point, but if one somehow does, they see a waiting message
+    // instead of the Owner's setup form, which they have no permission
+    // (or reason) to fill in themselves.
+    if(isMaster()){
+      app.innerHTML = renderFinishSetup();
+      bindFinishSetupEvents();
+    } else {
+      app.innerHTML = `
+        <div class="center-screen">
+          <div class="auth-card" style="text-align:center;">
+            <div class="brand" style="justify-content:center;"><div class="brand-mark">Z</div><div class="brand-name">ZeeShop</div></div>
+            <h2 style="margin:10px 0 8px;">Almost ready</h2>
+            <p class="subtle">Your Owner is still finishing the shop's setup. Check back shortly.</p>
+          </div>
+        </div>`;
+    }
     return;
   }
   if(!state.sessionUserId){
@@ -2016,7 +2040,7 @@ async function loadOwnerBusinessData(accessToken, authUserId, emailForLookup){
     subscriptionExpiresAt: b.subscription_expires_at||null, autoRenewEnabled: b.auto_renew_enabled||false,
     autoRenewPlan: b.auto_renew_plan||null, autoRenewInterval: b.auto_renew_interval||null,
     connectCode: b.connect_code||null, deletionRequestedAt: b.deletion_requested_at||null,
-    logoDataUrl: b.logo_data_url||null, createdAt: b.created_at
+    logoDataUrl: b.logo_data_url||null, createdAt: b.created_at, setupComplete: b.setup_complete !== false
   };
 
   const [usersRes, shopsRes] = await Promise.all([
@@ -2095,13 +2119,22 @@ function initGoogleRedirectListener(){
     try{
       await loginOwnerViaGoogleSession(session);
     }catch(e){
-      // No business found for this Google account yet — treat it as a
-      // brand new signup, skipping straight to business details since
-      // Google already verified who they are.
-      pendingGoogleAuth = { authUserId: authUser.id, email: authUser.email, firstName, lastName };
-      authMode = 'signup';
-      render();
-      toast("Signed in with Google — just finish your business details.");
+      // No business found for this Google account yet. Instead of
+      // blocking them with a full signup form before they can do
+      // anything, create a minimal business right away — Google's
+      // already verified who they are, so there's no reason to make
+      // that the bottleneck. Currency, shop name, and phone are still
+      // required before any real work (adding goods, making a sale,
+      // anything money-related needs a currency to display), so the
+      // Finish Setup screen gates the rest of the app until those are
+      // filled in — just not as a wall before you're even let in once.
+      try{
+        await createMinimalGoogleBusiness(authUser, firstName, lastName);
+      }catch(createErr){
+        authError = "Couldn't finish signing you in: " + createErr.message;
+        authMode = 'login';
+        render();
+      }
     }
   });
 }
@@ -2412,6 +2445,143 @@ function hash(s){ let h=0; for(let i=0;i<s.length;i++){h=(h*31 + s.charCodeAt(i)
 // row would be unrecoverable — no other device, and not even a local-storage
 // clear on this one, could ever get back to it. So this throws on failure
 // and lets the signup form show the real error instead.
+async function createMinimalGoogleBusiness(authUser, firstName, lastName){
+  const bizId = uid('biz');
+  const userId = uid('user');
+  const shopId = uid('shop');
+  const bizName = `${firstName}'s Shop`;
+  // Best-effort unique username — email prefix plus a short random suffix.
+  // If it happens to collide with an existing one (usernames are globally
+  // unique), the insert below retries once with a fresh suffix rather
+  // than failing outright; either way, it's fully editable in Finish
+  // Setup afterward, so a slightly awkward auto-generated name is never
+  // a dead end.
+  const emailPrefix = (authUser.email || 'user').split('@')[0].replace(/[^a-z0-9_]/gi, '').toLowerCase() || 'user';
+  let username = `${emailPrefix}${Math.floor(100 + Math.random()*900)}`;
+
+  const tryCreate = async ()=>{
+    const { error } = await window.sb.from('businesses').insert({
+      id: bizId, name: bizName, business_type: '', registration_number: '', country: null, currency: null,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, language: 'en', tax_name: 'VAT', tax_percent: 0,
+      subscription_plan: 'free', owner_auth_user_id: authUser.id, setup_complete: false
+    });
+    if(error) throw error;
+    const { error: shopErr } = await window.sb.from('shops').insert({
+      id: shopId, business_id: bizId, name: bizName + " — Main Shop", address: '', phone: null, email: authUser.email
+    });
+    if(shopErr) throw shopErr;
+    const { error: userErr } = await window.sb.from('app_users').insert({
+      id: userId, business_id: bizId, username, email: authUser.email, phone: null, first_name: firstName, last_name: lastName,
+      role: 'master', is_active: true, can_add_goods: true, can_sell: true, can_sell_credit: true,
+      can_record_cash: true, can_void_return: true, can_share: true, password_hash: null, auth_user_id: authUser.id
+    });
+    if(userErr) throw userErr;
+  };
+
+  try{
+    await tryCreate();
+  }catch(e){
+    // Most likely a username collision — try once more with a different
+    // random suffix before giving up and surfacing a real error.
+    username = `${emailPrefix}${Math.floor(1000 + Math.random()*9000)}`;
+    await tryCreate();
+  }
+
+  const groupRetail = {id:uid('grp'),businessId:bizId,name:'Retail'};
+  const groupWholesale = {id:uid('grp'),businessId:bizId,name:'Wholesale'};
+  const groupVip = {id:uid('grp'),businessId:bizId,name:'VIP'};
+  for(const g of [groupRetail, groupWholesale, groupVip]){
+    await window.sb.from('customer_groups').insert({ id: g.id, business_id: g.businessId, name: g.name });
+  }
+
+  state.business = { id:bizId, name:bizName, businessType:'', registrationNumber:'', country:null, currency:null,
+    timezone:Intl.DateTimeFormat().resolvedOptions().timeZone, language:'en', taxName:'VAT', taxPercent:0,
+    subscriptionPlan:'free', setupComplete:false, createdAt:new Date().toISOString() };
+  state.users.push({ id:userId, businessId:bizId, username, email:authUser.email, phone:null, firstName, lastName,
+    passwordHash: null, role:'master', isActive:true, canAddGoods:true, canSell:true, canSellCredit:true,
+    canRecordCash:true, canVoidReturn:true });
+  state.shops.push({ id:shopId, businessId:bizId, name: bizName+" — Main Shop", address:'', phone:null, email:authUser.email,
+    receiptFooter:'Thank you for your business!', receiptTerms:'Goods sold in good condition. No refund after payment.', auctionDiscountDefault:30 });
+  state.customerGroups.push(groupRetail, groupWholesale, groupVip);
+  state.currentShopId = shopId;
+  state.sessionUserId = userId;
+  logAudit('signup', 'Business created with Google (setup pending): '+bizName);
+  render();
+  if(typeof pullSync === 'function') pullSync();
+}
+function renderFinishSetup(){
+  const b = business();
+  const u = currentUser();
+  return `
+    <div class="center-screen">
+      <div style="width:100%;max-width:400px;">
+      <div class="auth-card">
+        <div class="brand"><div class="brand-mark">Z</div><div class="brand-name">ZeeShop</div></div>
+        <div class="tagline">Almost there — just a few details before you start selling.</div>
+        ${authError ? `<div class="err">${authError}</div>` : ''}
+        <div class="field"><label>Business Name</label><input id="fs-biz" value="${escapeHtml(b.name||'')}"></div>
+        <div class="row2">
+          <div class="field"><label>Country</label>
+            <select id="fs-country">${countryOptionsHTML(b.country||'Nigeria')}</select>
+          </div>
+          <div class="field"><label>Currency</label>
+            <select id="fs-ccy">
+              ${Object.keys(CCY).filter(c=>c!=='OTHER').map(c=>`<option value="${c}">${c} (${CCY[c]})</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="field"><label>Your Phone</label><input id="fs-phone" placeholder="+234 801 234 5678" value="${escapeHtml(u.phone||'')}"></div>
+        <div class="field"><label>Username <span class="subtle">(globally unique)</span></label><input id="fs-username" value="${escapeHtml(u.username||'')}"></div>
+        <button class="btn btn-primary" id="fs-submit-btn">Start Using ZeeShop</button>
+        <div class="link-row"><a href="#" id="fs-logout" style="color:var(--text-dim);">Log out</a></div>
+      </div>
+      </div>
+    </div>`;
+}
+function bindFinishSetupEvents(){
+  const submitBtn = document.getElementById('fs-submit-btn');
+  if(submitBtn) submitBtn.addEventListener('click', async ()=>{
+    const bizName = document.getElementById('fs-biz').value.trim();
+    const country = document.getElementById('fs-country').value;
+    const ccy = document.getElementById('fs-ccy').value;
+    const phoneRaw = document.getElementById('fs-phone').value.trim();
+    const newUsername = document.getElementById('fs-username').value.trim();
+    if(!bizName){ authError = 'Business name is required.'; render(); return; }
+    if(!newUsername){ authError = 'Username is required.'; render(); return; }
+    if(!phoneRaw){ authError = 'Phone number is required.'; render(); return; }
+    const u = currentUser();
+    if(newUsername.toLowerCase() !== (u.username||'').toLowerCase() &&
+       state.users.some(x=>x.id!==u.id && x.username.toLowerCase()===newUsername.toLowerCase())){
+      authError = 'That username is already taken.'; render(); return;
+    }
+    submitBtn.disabled = true; submitBtn.textContent = 'Setting up…';
+    try{
+      const phone = '+'+toIntlDigits(phoneRaw);
+      business().name = bizName; business().country = country; business().currency = ccy; business().setupComplete = true;
+      u.username = newUsername; u.phone = phone;
+      const shop = state.shops.find(s=>s.id===state.currentShopId);
+      if(shop){ shop.name = bizName + ' — Main Shop'; shop.phone = phone; }
+      enqueueSync('businesses','update', { id: business().id, name: bizName, country, currency: ccy, setup_complete: true });
+      enqueueSync('app_users','update', { id: u.id, username: newUsername, phone });
+      if(shop) enqueueSync('shops','update', { id: shop.id, name: shop.name, phone });
+      logAudit('setup_completed', 'Finished shop setup: '+bizName);
+      authError = '';
+      toast('All set ✅ Welcome to ZeeShop!');
+      render();
+    }catch(e){
+      authError = "Couldn't save your setup: " + e.message;
+      submitBtn.disabled = false; submitBtn.textContent = 'Start Using ZeeShop';
+      render();
+    }
+  });
+  const logoutLink = document.getElementById('fs-logout');
+  if(logoutLink) logoutLink.addEventListener('click', (e)=>{
+    e.preventDefault();
+    if(window.sb) window.sb.auth.signOut();
+    state.sessionUserId=null; state.business=null; forceFullLogin=true; authMode='login'; authError='';
+    render();
+  });
+}
 async function completeGoogleSignupAccount(data, ownerAuthId){
   const { biz, country, ccy, fn, ln, username, phone, email } = data;
   const bizId = uid('biz');
@@ -5390,7 +5560,7 @@ function openEmploymentSetupForm(userId){
       employment_type: fields.employmentType, resumption_date: fields.resumptionDate,
       salary_amount: fields.salaryAmount, salary_frequency: fields.salaryFrequency,
       settlement_date: fields.settlementDate, settlement_terms: fields.settlementTerms,
-      notes: fields.notes, created_by_user_id: state.sessionUserId
+      notes: fields.notes, created_by_user_id: state.sessionUserId, created_at: now
     });
     logAudit('employment_record_created', `Created employment record for ${u.firstName} ${u.lastName}`);
     toast('Employment record saved ✅'); closeSheet(); renderEmploymentRecordView(userId);
@@ -6195,11 +6365,12 @@ function screenProfile(){
     </div>`) : ''}
     ${u.role==='master'?`
     <div class="card">
-      <div class="t1" style="margin-bottom:10px;">Change Password</div>
-      <div class="field"><label>Current Password</label><input id="pf-currentpass" type="password" placeholder="Required to confirm it's you"></div>
+      <div class="t1" style="margin-bottom:10px;">${u.passwordHash?'Change Password':'Set a Password'}</div>
+      ${u.passwordHash ? '' : `<p class="subtle" style="margin-bottom:10px;">You signed up with Google, so you don't have a password yet. Setting one now means you can also log in with your email and password, not just Google — useful as a backup if you ever lose access to that Google account.</p>`}
+      ${u.passwordHash ? `<div class="field"><label>Current Password</label><input id="pf-currentpass" type="password" placeholder="Required to confirm it's you"></div>` : ''}
       <div class="field"><label>New Password</label><input id="pf-newpass" type="password" placeholder="Min 6 characters"></div>
       <div class="field"><label>Confirm New Password</label><input id="pf-newpass2" type="password"></div>
-      <button class="btn btn-outline" id="save-password-btn">Update Password</button>
+      <button class="btn btn-outline" id="save-password-btn">${u.passwordHash?'Update Password':'Set Password'}</button>
     </div>` : `
     <div class="card">
       <div class="t1" style="margin-bottom:10px;">Change My PIN</div>
@@ -6305,8 +6476,11 @@ function bindProfileEvents(){
   });
   const savePassBtn = document.getElementById('save-password-btn');
   if(savePassBtn) savePassBtn.addEventListener('click', ()=>{
-    const currentPass = document.getElementById('pf-currentpass').value;
-    if(hash(currentPass) !== currentUser().passwordHash){ toast('Current password is incorrect.'); return; }
+    const hasExistingPassword = !!currentUser().passwordHash;
+    if(hasExistingPassword){
+      const currentPass = document.getElementById('pf-currentpass').value;
+      if(hash(currentPass) !== currentUser().passwordHash){ toast('Current password is incorrect.'); return; }
+    }
     const p1 = document.getElementById('pf-newpass').value;
     const p2 = document.getElementById('pf-newpass2').value;
     if(p1.length<6){ toast('Password must be at least 6 characters.'); return; }
@@ -6314,11 +6488,13 @@ function bindProfileEvents(){
     currentUser().passwordHash = hash(p1);
     if(currentUser().role === 'master') notifyContactChange('password', null);
     enqueueSync('app_users','update', { id: currentUser().id, password_hash: currentUser().passwordHash });
-    logAudit('password_changed', 'Changed own password');
+    logAudit(hasExistingPassword?'password_changed':'password_set', hasExistingPassword?'Changed own password':'Set a password (was Google-only)');
     if(currentUser().role === 'master') syncPasswordToSupabaseAuth(p1);
-    toast('Password updated ✅');
-    document.getElementById('pf-currentpass').value='';
+    toast(hasExistingPassword?'Password updated ✅':'Password set ✅ — you can now log in with email + password too.');
+    const currentPassEl = document.getElementById('pf-currentpass');
+    if(currentPassEl) currentPassEl.value='';
     document.getElementById('pf-newpass').value=''; document.getElementById('pf-newpass2').value='';
+    render();
   });
   const savePinBtn = document.getElementById('save-pin-btn');
   if(savePinBtn) savePinBtn.addEventListener('click', async ()=>{

@@ -264,7 +264,8 @@ async function pullSync(){
               // device except the one they were set on.
               businessType: b.business_type || '', registrationNumber: b.registration_number || '',
               taxName: b.tax_name || 'VAT', taxPercent: b.tax_percent || 0,
-              logoDataUrl: b.logo_data_url || null
+              logoDataUrl: b.logo_data_url || null,
+              setupComplete: b.setup_complete !== false
             };
             if(JSON.stringify(fresh) !== JSON.stringify({
               subscriptionPlan: state.business.subscriptionPlan, subscriptionExpiresAt: state.business.subscriptionExpiresAt,
@@ -275,7 +276,8 @@ async function pullSync(){
               autoRenewInterval: state.business.autoRenewInterval,
               businessType: state.business.businessType, registrationNumber: state.business.registrationNumber,
               taxName: state.business.taxName, taxPercent: state.business.taxPercent,
-              logoDataUrl: state.business.logoDataUrl
+              logoDataUrl: state.business.logoDataUrl,
+              setupComplete: state.business.setupComplete !== false
             })){
               // Guard against a real race: if you set the logo/business
               // type/etc and refresh again quickly — before the queued

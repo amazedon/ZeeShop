@@ -2446,66 +2446,40 @@ function hash(s){ let h=0; for(let i=0;i<s.length;i++){h=(h*31 + s.charCodeAt(i)
 // clear on this one, could ever get back to it. So this throws on failure
 // and lets the signup form show the real error instead.
 async function createMinimalGoogleBusiness(authUser, firstName, lastName){
-  const bizId = uid('biz');
-  const userId = uid('user');
-  const shopId = uid('shop');
-  const bizName = `${firstName}'s Shop`;
-  // Best-effort unique username — email prefix plus a short random suffix.
-  // If it happens to collide with an existing one (usernames are globally
-  // unique), the insert below retries once with a fresh suffix rather
-  // than failing outright; either way, it's fully editable in Finish
-  // Setup afterward, so a slightly awkward auto-generated name is never
-  // a dead end.
-  const emailPrefix = (authUser.email || 'user').split('@')[0].replace(/[^a-z0-9_]/gi, '').toLowerCase() || 'user';
-  let username = `${emailPrefix}${Math.floor(100 + Math.random()*900)}`;
+  // Was doing direct client-side inserts into businesses/shops/app_users
+  // using the freshly-authenticated user's own session — that has no way
+  // to succeed under RLS for someone with no existing app_users row yet
+  // ("new row violates row-level security policy for table businesses").
+  // Routed through a dedicated server-side function instead, using the
+  // service role key, which cannot be blocked by RLS the way a
+  // client-authenticated insert can.
+  const { data: sessionData } = await window.sb.auth.getSession();
+  const token = sessionData?.session?.access_token;
+  if(!token) throw new Error("No active session — please try signing in again.");
 
-  const tryCreate = async ()=>{
-    const { error } = await window.sb.from('businesses').insert({
-      id: bizId, name: bizName, business_type: '', registration_number: '', country: null, currency: null,
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, language: 'en', tax_name: 'VAT', tax_percent: 0,
-      subscription_plan: 'free', owner_auth_user_id: authUser.id, setup_complete: false
-    });
-    if(error) throw error;
-    const { error: shopErr } = await window.sb.from('shops').insert({
-      id: shopId, business_id: bizId, name: bizName + " — Main Shop", address: '', phone: null, email: authUser.email
-    });
-    if(shopErr) throw shopErr;
-    const { error: userErr } = await window.sb.from('app_users').insert({
-      id: userId, business_id: bizId, username, email: authUser.email, phone: null, first_name: firstName, last_name: lastName,
-      role: 'master', is_active: true, can_add_goods: true, can_sell: true, can_sell_credit: true,
-      can_record_cash: true, can_void_return: true, can_share: true, password_hash: null, auth_user_id: authUser.id
-    });
-    if(userErr) throw userErr;
-  };
+  const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/create-google-business`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+token },
+    body: JSON.stringify({ first_name: firstName, last_name: lastName, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone })
+  });
+  const result = await res.json();
+  if(!res.ok || result.error) throw new Error(result.error || "Couldn't create your business.");
 
-  try{
-    await tryCreate();
-  }catch(e){
-    // Most likely a username collision — try once more with a different
-    // random suffix before giving up and surfacing a real error.
-    username = `${emailPrefix}${Math.floor(1000 + Math.random()*9000)}`;
-    await tryCreate();
-  }
-
-  const groupRetail = {id:uid('grp'),businessId:bizId,name:'Retail'};
-  const groupWholesale = {id:uid('grp'),businessId:bizId,name:'Wholesale'};
-  const groupVip = {id:uid('grp'),businessId:bizId,name:'VIP'};
-  for(const g of [groupRetail, groupWholesale, groupVip]){
-    await window.sb.from('customer_groups').insert({ id: g.id, business_id: g.businessId, name: g.name });
-  }
-
-  state.business = { id:bizId, name:bizName, businessType:'', registrationNumber:'', country:null, currency:null,
+  state.business = { id:result.business.id, name:result.business.name, businessType:'', registrationNumber:'',
+    country:result.business.country, currency:result.business.currency,
     timezone:Intl.DateTimeFormat().resolvedOptions().timeZone, language:'en', taxName:'VAT', taxPercent:0,
-    subscriptionPlan:'free', setupComplete:false, createdAt:new Date().toISOString() };
-  state.users.push({ id:userId, businessId:bizId, username, email:authUser.email, phone:null, firstName, lastName,
+    subscriptionPlan:'free', setupComplete:result.business.setupComplete, createdAt:new Date().toISOString() };
+  state.users.push({ id:result.user.id, businessId:result.business.id, username:result.user.username,
+    email:result.user.email, phone:result.user.phone, firstName:result.user.firstName, lastName:result.user.lastName,
     passwordHash: null, role:'master', isActive:true, canAddGoods:true, canSell:true, canSellCredit:true,
     canRecordCash:true, canVoidReturn:true });
-  state.shops.push({ id:shopId, businessId:bizId, name: bizName+" — Main Shop", address:'', phone:null, email:authUser.email,
+  state.shops.push({ id:result.shop.id, businessId:result.business.id, name:result.shop.name, address:'',
+    phone:result.shop.phone, email:result.shop.email,
     receiptFooter:'Thank you for your business!', receiptTerms:'Goods sold in good condition. No refund after payment.', auctionDiscountDefault:30 });
-  state.customerGroups.push(groupRetail, groupWholesale, groupVip);
-  state.currentShopId = shopId;
-  state.sessionUserId = userId;
-  logAudit('signup', 'Business created with Google (setup pending): '+bizName);
+  state.customerGroups.push(...result.customerGroups.map(g=>({id:g.id, businessId:result.business.id, name:g.name})));
+  state.currentShopId = result.shop.id;
+  state.sessionUserId = result.user.id;
+  logAudit('signup', 'Business created with Google (setup pending): '+result.business.name);
   render();
   if(typeof pullSync === 'function') pullSync();
 }
@@ -2583,48 +2557,43 @@ function bindFinishSetupEvents(){
   });
 }
 async function completeGoogleSignupAccount(data, ownerAuthId){
+  // Was doing direct client-side inserts using the freshly-authenticated
+  // user's own session — the exact same RLS gap fixed in
+  // createMinimalGoogleBusiness (see that function's comment for the
+  // full explanation). Every Google signup through THIS full-form path
+  // hit the identical "new row violates row-level security policy"
+  // error, regardless of which path got you here.
   const { biz, country, ccy, fn, ln, username, phone, email } = data;
-  const bizId = uid('biz');
-  const userId = uid('user');
-  const shopId = uid('shop');
 
-  const { error: bizErr } = await window.sb.from('businesses').insert({
-    id: bizId, name: biz, business_type: '', registration_number: '', country, currency: ccy,
-    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, language: 'en', tax_name: 'VAT', tax_percent: 0,
-    subscription_plan: 'free', owner_auth_user_id: ownerAuthId
+  const { data: sessionData } = await window.sb.auth.getSession();
+  const token = sessionData?.session?.access_token;
+  if(!token) throw new Error("No active session — please try signing in again.");
+
+  const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/create-google-business`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+token },
+    body: JSON.stringify({
+      name: biz, country, currency: ccy, first_name: fn, last_name: ln, username, phone,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+    })
   });
-  if(bizErr) throw new Error("Couldn't create the business: " + bizErr.message);
+  const result = await res.json();
+  if(!res.ok || result.error) throw new Error(result.error || "Couldn't create your business.");
 
-  const { error: shopErr } = await window.sb.from('shops').insert({
-    id: shopId, business_id: bizId, name: biz + " — Main Shop", address: '', phone, email
-  });
-  if(shopErr) throw new Error("Couldn't create the shop: " + shopErr.message);
-
-  const { error: userErr } = await window.sb.from('app_users').insert({
-    id: userId, business_id: bizId, username, email, phone, first_name: fn, last_name: ln,
-    role: 'master', is_active: true, can_add_goods: true, can_sell: true, can_sell_credit: true,
-    can_record_cash: true, can_void_return: true, can_share: true, password_hash: null, auth_user_id: ownerAuthId
-  });
-  if(userErr) throw new Error("Couldn't create your staff record: " + userErr.message);
-
-  const groupRetail = {id:uid('grp'),businessId:bizId,name:'Retail'};
-  const groupWholesale = {id:uid('grp'),businessId:bizId,name:'Wholesale'};
-  const groupVip = {id:uid('grp'),businessId:bizId,name:'VIP'};
-  for(const g of [groupRetail, groupWholesale, groupVip]){
-    await window.sb.from('customer_groups').insert({ id: g.id, business_id: g.businessId, name: g.name });
-  }
-
-  state.business = { id:bizId, name:biz, businessType:'', registrationNumber:'', country, currency:ccy,
+  state.business = { id:result.business.id, name:result.business.name, businessType:'', registrationNumber:'',
+    country:result.business.country, currency:result.business.currency,
     timezone:Intl.DateTimeFormat().resolvedOptions().timeZone, language:'en', taxName:'VAT', taxPercent:0,
-    subscriptionPlan:'free', createdAt:new Date().toISOString() };
-  state.users.push({ id:userId, businessId:bizId, username, email, phone, firstName:fn, lastName:ln,
+    subscriptionPlan:'free', setupComplete:true, createdAt:new Date().toISOString() };
+  state.users.push({ id:result.user.id, businessId:result.business.id, username:result.user.username,
+    email:result.user.email, phone:result.user.phone, firstName:result.user.firstName, lastName:result.user.lastName,
     passwordHash: null, role:'master', isActive:true, canAddGoods:true });
-  state.shops.push({ id:shopId, businessId:bizId, name: biz+" — Main Shop", address:'', phone, email,
+  state.shops.push({ id:result.shop.id, businessId:result.business.id, name:result.shop.name, address:'',
+    phone:result.shop.phone, email:result.shop.email,
     receiptFooter:'Thank you for your business!', receiptTerms:'Goods sold in good condition. No refund after payment.', auctionDiscountDefault:30 });
-  state.customerGroups.push(groupRetail, groupWholesale, groupVip);
-  state.currentShopId = shopId;
-  state.sessionUserId = userId;
-  logAudit('signup', 'Business created with Google: '+biz);
+  state.customerGroups.push(...result.customerGroups.map(g=>({id:g.id, businessId:result.business.id, name:g.name})));
+  state.currentShopId = result.shop.id;
+  state.sessionUserId = result.user.id;
+  logAudit('signup', 'Business created with Google: '+result.business.name);
   pendingGoogleAuth = null;
   render();
   if(typeof pullSync === 'function') pullSync();
@@ -6715,9 +6684,14 @@ const FLW_PUBLIC_KEY = 'FLWPUBK-5125776fe796c3160589ef913919a973-X';
 
 async function fetchPricingForBusiness(){
   const b = business();
-  const bizCurrency = (b && b.currency) || 'USD';
-  const currency = ['NGN','GHS','GBP','EUR'].includes(bizCurrency) ? bizCurrency : 'USD';
-  const CURRENCY_SYMBOLS = { NGN:'₦', GHS:'GH₵', GBP:'£', EUR:'€', USD:'$' };
+  // Use the business's actual currency directly — this previously only
+  // recognized 4 of the app's 17 supported currencies (same bug already
+  // found and fixed in process-auto-renewals.ts) and silently forced
+  // everyone else into USD pricing, which could show a completely
+  // different price than what that business actually pays. The "no
+  // price row" case below already handles a currency with nothing
+  // configured — no separate whitelist needed on top of that.
+  const currency = (b && b.currency) || 'USD';
   try{
     const res = await fetch(`${SITE_CONTENT_URL}/rest/v1/pricing?currency=eq.${currency}&select=*`, {
       headers: { 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+SITE_CONTENT_ANON_KEY }
@@ -6728,7 +6702,7 @@ async function fetchPricingForBusiness(){
       const row = rows.find(r=>r.plan===plan && r.interval===interval);
       return row ? row.amount : 0;
     };
-    const symbol = CURRENCY_SYMBOLS[currency] || currency;
+    const symbol = CCY[currency] || currency;
     return {
       currency, symbol,
       proMonthly: get('pro','monthly'), proYearly: get('pro','yearly'),

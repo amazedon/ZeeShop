@@ -2343,92 +2343,62 @@ function bindSignupVerifyEvents(){
     }
   });
 }async function completeSignupAccount(data){
+  // Was doing all the local-state setup FIRST, then trying to persist to
+  // Supabase wrapped in a try/catch that silently swallowed any failure
+  // ("Local account still works even if Supabase fails"). Given the
+  // identical "new row violates row-level security policy for table
+  // businesses" error confirmed on the Google signup path, this almost
+  // certainly means manual signups have been hitting the same wall —
+  // appearing to succeed locally while saving nothing to the server at
+  // all, which then matches every "vanishes on another device" and
+  // "couldn't find a business linked to this account" report this app
+  // has ever gotten. Rewritten to create the Supabase Auth account first,
+  // then persist everything through the same service-role server
+  // function used by the Google path (which cannot be silently blocked
+  // by RLS the way a client-authenticated insert can) — and to only
+  // treat this as a successful signup if that actually succeeds.
   const { biz, country, ccy, fn, ln, username, phone, email, pass } = data;
-  const bizId = uid('biz');
-  const userId = uid('user');
-  const shopId = uid('shop');
-  state.business = { id:bizId, name:biz, businessType:'', registrationNumber:'', country, currency:ccy, timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,
-    language:'en', taxName:'VAT', taxPercent:0, subscriptionPlan:'free', createdAt:new Date().toISOString() };
-  state.users.push({ id:userId, businessId:bizId, username, email, emailVerified:true, phone, firstName:fn, lastName:ln,
-    passwordHash: hash(pass),
-    role:'master', isActive:true, canAddGoods:true });
-  state.shops.push({ id:shopId, businessId:bizId, name: biz+" — Main Shop", address:'', phone, email,
-    receiptFooter:'Thank you for your business!', receiptTerms:'Goods sold in good condition. No refund after payment.', auctionDiscountDefault:30 });
-  const groupRetail = {id:uid('grp'),businessId:bizId,name:'Retail'};
-  const groupWholesale = {id:uid('grp'),businessId:bizId,name:'Wholesale'};
-  const groupVip = {id:uid('grp'),businessId:bizId,name:'VIP'};
-  state.customerGroups.push(groupRetail, groupWholesale, groupVip);
-  state.currentShopId = shopId;
-  state.sessionUserId = userId;
-  logAudit('signup','Business created: '+biz);
-  pendingSignupData = null;
 
-  // Create the matching Supabase Auth account + database records
-  try{
-    const { data: authData, error: authErr } = await window.sb.auth.signUp({ email, password: pass });
-    if(!authErr && authData.user){
-      const ownerAuthId = authData.user.id;
-
-      // 1. Insert business immediately
-      await window.sb.from('businesses').insert({
-        id: bizId,
-        name: biz,
-        business_type: '',
-        registration_number: '',
-        country,
-        currency: ccy,
-        timezone: state.business.timezone,
-        language: 'en',
-        tax_name: 'VAT',
-        tax_percent: 0,
-        subscription_plan: 'free',
-        owner_auth_user_id: ownerAuthId
-      });
-
-      // 2. Insert shop
-      await window.sb.from('shops').insert({
-        id: shopId,
-        business_id: bizId,
-        name: biz + " — Main Shop",
-        address: '',
-        phone,
-        email
-      });
-
-      // 3. Insert app_users (THIS WAS THE MISSING LINK)
-      await window.sb.from('app_users').insert({
-        id: userId,
-        business_id: bizId,
-        username,
-        email,
-        phone,
-        first_name: fn,
-        last_name: ln,
-        role: 'master',
-        is_active: true,
-        can_add_goods: true,
-        can_sell: true,
-        can_sell_credit: true,
-        can_record_cash: true,
-        can_void_return: true,
-        can_share: true,
-        password_hash: hash(pass),
-        auth_user_id: ownerAuthId          // ← This was missing before
-      });
-
-      // 4. Insert customer groups
-      for (const g of [groupRetail, groupWholesale, groupVip]) {
-        await window.sb.from('customer_groups').insert({
-          id: g.id,
-          business_id: g.businessId,
-          name: g.name
-        });
-      }
-    }
-  }catch(e){
-    console.error('Signup sync error:', e);
-    // Local account still works even if Supabase fails
+  const { data: authData, error: authErr } = await window.sb.auth.signUp({ email, password: pass });
+  if(authErr || !authData?.user){
+    throw new Error("Couldn't create your account: " + (authErr?.message || "Unknown error"));
   }
+  const ownerAuthId = authData.user.id;
+
+  const { data: sessionData } = await window.sb.auth.getSession();
+  const token = sessionData?.session?.access_token;
+  if(!token){
+    throw new Error("Your account was created, but we couldn't finish setup — please try logging in.");
+  }
+
+  const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/create-google-business`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+token },
+    body: JSON.stringify({
+      name: biz, country, currency: ccy, first_name: fn, last_name: ln, username, phone,
+      password_hash: hash(pass), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+    })
+  });
+  const result = await res.json();
+  if(!res.ok || result.error){
+    throw new Error("Your account was created, but we couldn't finish setting up your business: " + (result.error || 'Unknown error') + " — please contact support rather than trying again, so we don't create a duplicate.");
+  }
+
+  state.business = { id:result.business.id, name:result.business.name, businessType:'', registrationNumber:'',
+    country:result.business.country, currency:result.business.currency,
+    timezone:Intl.DateTimeFormat().resolvedOptions().timeZone, language:'en', taxName:'VAT', taxPercent:0,
+    subscriptionPlan:'free', setupComplete:true, createdAt:new Date().toISOString() };
+  state.users.push({ id:result.user.id, businessId:result.business.id, username:result.user.username,
+    email:result.user.email, phone:result.user.phone, firstName:result.user.firstName, lastName:result.user.lastName,
+    passwordHash: hash(pass), role:'master', isActive:true, canAddGoods:true, canSell:true, canSellCredit:true,
+    canRecordCash:true, canVoidReturn:true });
+  state.shops.push({ id:result.shop.id, businessId:result.business.id, name:result.shop.name, address:'',
+    phone:result.shop.phone, email:result.shop.email,
+    receiptFooter:'Thank you for your business!', receiptTerms:'Goods sold in good condition. No refund after payment.', auctionDiscountDefault:30 });
+  state.customerGroups.push(...result.customerGroups.map(g=>({id:g.id, businessId:result.business.id, name:g.name})));
+  state.currentShopId = result.shop.id;
+  state.sessionUserId = result.user.id;
+  logAudit('signup', 'Business created: '+result.business.name);
 
   render();
 }

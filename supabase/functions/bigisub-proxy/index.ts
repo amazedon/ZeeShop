@@ -172,7 +172,7 @@ Deno.serve(async (req: Request) => {
     const businessId = caller.business_id;
     const { data: biz, error: bizErr } = await admin
       .from("businesses")
-      .select("id, name, currency, country, bill_wallet_balance, bill_markup_percent, psa_account_reference, psa_account_number, psa_bank_name, psa_status")
+      .select("id, name, currency, country, bill_wallet_balance, bill_markup_percent, psa_account_reference, psa_account_number, psa_bank_name, psa_status, psa_last_synced_at")
       .eq("id", businessId)
       .maybeSingle();
     if (bizErr || !biz) return json({ error: "Business not found." }, 404);
@@ -452,9 +452,21 @@ Deno.serve(async (req: Request) => {
     // and only crediting the balance if that insert succeeds, rather than
     // checking-then-inserting, so the two can't race each other into a
     // double credit.
+    //
+    // The lookback window tracks psa_last_synced_at per business rather
+    // than always using a fixed "30 days ago" — a fixed window means a
+    // transfer landing more than 30 days before the NEXT time anyone opens
+    // this screen would fall outside the window forever, not just be
+    // delayed. Using last-synced-at (with a 1-day overlap buffer, in case
+    // Flutterwave's own transaction timestamps lag slightly behind when we
+    // last checked) means every sync only needs to cover the gap since the
+    // previous one, however long that gap was.
     if (action === "sync_psa_wallet") {
       if (!biz.psa_account_reference) return json({ error: "No dedicated account set up yet." }, 400);
-      const from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const lastSyncedAt: string | null = (biz as any).psa_last_synced_at || null;
+      const from = lastSyncedAt
+        ? new Date(new Date(lastSyncedAt).getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+        : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10); // first-ever sync: 30-day initial lookback
       const to = new Date().toISOString().slice(0, 10);
       const flwRes = await fetch(`https://api.flutterwave.com/v3/payout-subaccounts/${biz.psa_account_reference}/transactions?from=${from}&to=${to}`, {
         headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` },
@@ -473,9 +485,9 @@ Deno.serve(async (req: Request) => {
         runningBalance += Number(t.amount);
         synced++;
       }
-      if (synced > 0) {
-        await admin.from("businesses").update({ bill_wallet_balance: runningBalance }).eq("id", businessId);
-      }
+      const bizUpdate: Record<string, unknown> = { psa_last_synced_at: new Date().toISOString() };
+      if (synced > 0) bizUpdate.bill_wallet_balance = runningBalance;
+      await admin.from("businesses").update(bizUpdate).eq("id", businessId);
       return json({ wallet_balance: runningBalance, synced }, 200);
     }
 
@@ -494,6 +506,26 @@ Deno.serve(async (req: Request) => {
   }
 });
 
+// Looks up a plan/exam's real price from Bigisub's own list endpoint
+// before purchasing — used for the services that only receive a plan ID
+// (not a naira amount) from the client, so their balance pre-check is a
+// real check against what will actually be charged, not just "is the
+// balance above zero." Returns null if the plan can't be found or the
+// list call fails — callers treat that as "can't verify, don't proceed"
+// rather than silently allowing an unchecked purchase.
+async function lookupPlanAmount(path: string, preferredKey: string, matchValue: unknown, matchKeys: string[]): Promise<number | null> {
+  try {
+    const raw = await bigisub("GET", path);
+    const list = raw?.[preferredKey] || raw?.data || (Array.isArray(raw) ? raw : []) || [];
+    const item = (Array.isArray(list) ? list : []).find((x: any) => matchKeys.some((k) => String(x?.[k]) === String(matchValue)));
+    if (!item) return null;
+    const amt = Number(item.amount ?? item.price);
+    return Number.isFinite(amt) ? amt : null;
+  } catch (_e) {
+    return null;
+  }
+}
+
 async function handlePurchase(
   admin: ReturnType<typeof createClient>,
   action: string,
@@ -505,7 +537,7 @@ async function handlePurchase(
 ) {
   let serviceLabel = "";
   let recipient = "";
-  let estimatedCost = 0; // 0 means "unknown until Bigisub responds" — see extractCost
+  let estimatedCost = 0; // always resolved to a real, verified amount below before any Bigisub call — see per-branch comments
   let bigisubCall: () => Promise<any>;
 
   if (action === "airtime_purchase") {
@@ -518,6 +550,12 @@ async function handlePurchase(
     const { network, phone_number, plan, ported_number } = params as { network: number; phone_number: string; plan: number; ported_number?: boolean };
     if (!network || !phone_number || !plan) return json({ error: "Missing network, phone_number, or plan." }, 400);
     serviceLabel = "Data"; recipient = String(phone_number);
+    // Only a plan ID comes from the client — verify its real price against
+    // Bigisub's own plan list rather than trusting whatever the client
+    // displayed (client-side prices are for UI only, never authoritative).
+    const price = await lookupPlanAmount(EP.DATA_PLANS, "plans", plan, ["id"]);
+    if (price === null) return json({ error: "Could not verify this plan's price right now — please try again in a moment." }, 502);
+    estimatedCost = price;
     bigisubCall = () => bigisub("POST", EP.DATA_PURCHASE, { network, phone_number, plan, pin: BIGISUB_PIN, ported_number: !!ported_number });
 
   } else if (action === "cable_purchase") {
@@ -542,46 +580,82 @@ async function handlePurchase(
     const { exam, quantity } = params as { exam: string; quantity: number };
     if (!exam || !quantity) return json({ error: "Missing exam or quantity." }, 400);
     serviceLabel = "Result Checker"; recipient = `${exam} × ${quantity}`;
+    const unitPrice = await lookupPlanAmount(EP.RESULT_CHECKER_PRICES, "prices", exam, ["exam", "exam_type", "name"]);
+    if (unitPrice === null) return json({ error: "Could not verify this exam's price right now — please try again in a moment." }, 502);
+    estimatedCost = unitPrice * Number(quantity);
     bigisubCall = () => bigisub("POST", EP.RESULT_CHECKER_PURCHASE, { exam, quantity: Number(quantity), pin_code: BIGISUB_PIN });
 
   } else if (action === "isp_smile_topup") {
     const { plan, phone_number, email, account_id } = params as { plan: number; phone_number: string; email: string; account_id: string };
     if (!plan || !phone_number || !email || !account_id) return json({ error: "Missing plan, phone_number, email, or account_id (verify the account first)." }, 400);
     serviceLabel = "ISP — Smile"; recipient = String(account_id);
+    const price = await lookupPlanAmount(EP.ISP_SMILE_PLANS, "plans", plan, ["id"]);
+    if (price === null) return json({ error: "Could not verify this plan's price right now — please try again in a moment." }, 502);
+    estimatedCost = price;
     bigisubCall = () => bigisub("POST", EP.ISP_SMILE_TOPUP, { plan, phone_number, email, account_id, pin: BIGISUB_PIN });
 
   } else { // isp_spectranet_topup
     const { plan, phone_number, spectranet_number, quantity } = params as { plan: number; phone_number: string; spectranet_number: string; quantity: number };
     if (!plan || !phone_number || !spectranet_number || !quantity) return json({ error: "Missing plan, phone_number, spectranet_number, or quantity." }, 400);
     serviceLabel = "ISP — Spectranet"; recipient = String(spectranet_number);
+    const unitPrice = await lookupPlanAmount(EP.ISP_SPECTRANET_PLANS, "plans", plan, ["id"]);
+    if (unitPrice === null) return json({ error: "Could not verify this plan's price right now — please try again in a moment." }, 502);
+    estimatedCost = unitPrice * Number(quantity);
     bigisubCall = () => bigisub("POST", EP.ISP_SPECTRANET_TOPUP, { plan, phone_number, spectranet_number, quantity: Number(quantity), pin: BIGISUB_PIN });
   }
 
-  // For services where we know the intended amount up front (airtime,
-  // cable, electricity, betting), pre-check the wallet against that.
-  // For plan-based ones where cost is only known from Bigisub's response
-  // (data, result checker, ISP), just require a positive balance to exist
-  // — the AUTHORITATIVE debit amount is always extractCost()'s read of
-  // the real response, never this pre-check figure.
+  // Every branch above now resolves a real, verified estimatedCost before
+  // reaching here — so this is a genuine affordability check for all 8
+  // services, not just the 4 that originally passed a naira amount.
   const preCheckBalance = Number(biz.bill_wallet_balance || 0);
-  if (estimatedCost > 0) {
-    const estimatedSale = Math.round(estimatedCost * (1 + markupPercent / 100) * 100) / 100;
-    if (preCheckBalance < estimatedSale) return json({ error: "Insufficient Bill Wallet balance. Please top up." }, 400);
-  } else if (preCheckBalance <= 0) {
-    return json({ error: "Insufficient Bill Wallet balance. Please top up." }, 400);
+  const estimatedSale = Math.round(estimatedCost * (1 + markupPercent / 100) * 100) / 100;
+  if (preCheckBalance < estimatedSale) return json({ error: "Insufficient Bill Wallet balance. Please top up." }, 400);
+
+  // ---- Idempotency: reserve a row BEFORE calling Bigisub, keyed on the
+  // client's per-attempt reference, so a retry after a timeout — or an
+  // accidental double-tap — can't result in two real purchases. The
+  // client is expected to reuse the same client_ref across retries of the
+  // same attempt (see app.html) and only generate a new one for a genuinely
+  // new purchase. A unique index on (business_id, client_ref) is what
+  // actually enforces this — if two requests for the same client_ref
+  // somehow race each other, only one wins the insert below; the other
+  // gets redirected to read that same row's result instead of calling
+  // Bigisub a second time.
+  const clientRef = (params.client_ref as string | undefined) || null;
+  const serviceKey = action.replace("_purchase", "").replace("_pay", "").replace("_fund", "").replace("_topup", "");
+  let txId = crypto.randomUUID();
+
+  if (clientRef) {
+    const { error: reserveErr } = await admin.from("bill_transactions").insert({
+      id: txId, business_id: businessId, user_id: userId, service: serviceKey,
+      service_label: serviceLabel, recipient, cost_price: estimatedCost, sale_price: 0,
+      status: "pending", client_ref: clientRef,
+    });
+    if (reserveErr) {
+      // Unique-constraint conflict = this exact attempt was already made —
+      // replay its stored result instead of purchasing again.
+      const { data: existing } = await admin.from("bill_transactions").select("*").eq("business_id", businessId).eq("client_ref", clientRef).maybeSingle();
+      if (existing) {
+        const { data: freshBiz } = await admin.from("businesses").select("bill_wallet_balance").eq("id", businessId).maybeSingle();
+        return json({
+          ok: existing.status !== "failed", wallet_balance: Number(freshBiz?.bill_wallet_balance || preCheckBalance),
+          status: existing.status, token: existing.bigisub_response?.token || null,
+          pins: existing.bigisub_response?.pins || null, bigisub_response: existing.bigisub_response, replayed: true,
+        }, 200);
+      }
+      // Conflict happened but the row vanished somehow (shouldn't occur) —
+      // fall through and proceed with a fresh id rather than getting stuck.
+      txId = crypto.randomUUID();
+    }
   }
 
-  const txId = crypto.randomUUID();
-  const serviceKey = action.replace("_purchase", "").replace("_pay", "").replace("_fund", "").replace("_topup", "");
   let bigisubResponse: any;
   try {
     bigisubResponse = await bigisubCall();
   } catch (e) {
-    await admin.from("bill_transactions").insert({
-      id: txId, business_id: businessId, user_id: userId, service: serviceKey,
-      service_label: serviceLabel, recipient, cost_price: estimatedCost, sale_price: 0,
-      status: "failed", bigisub_response: { error: e instanceof Error ? e.message : String(e) },
-    });
+    const failedUpdate = { status: "failed", cost_price: estimatedCost, sale_price: 0, bigisub_response: { error: e instanceof Error ? e.message : String(e) } };
+    if (clientRef) await admin.from("bill_transactions").update(failedUpdate).eq("id", txId);
+    else await admin.from("bill_transactions").insert({ id: txId, business_id: businessId, user_id: userId, service: serviceKey, service_label: serviceLabel, recipient, ...failedUpdate });
     return json({ error: e instanceof Error ? e.message : "Purchase failed." }, 502);
   }
 
@@ -597,11 +671,9 @@ async function handlePurchase(
   const newBalance = Math.max(0, preCheckBalance - salePrice);
   await admin.from("businesses").update({ bill_wallet_balance: newBalance }).eq("id", businessId);
 
-  await admin.from("bill_transactions").insert({
-    id: txId, business_id: businessId, user_id: userId, service: serviceKey,
-    service_label: serviceLabel, recipient, cost_price: costPrice, sale_price: salePrice,
-    status, bigisub_tranx_id: bigisubTranxId, bigisub_response: bigisubResponse,
-  });
+  const finalFields = { cost_price: costPrice, sale_price: salePrice, status, bigisub_tranx_id: bigisubTranxId, bigisub_response: bigisubResponse };
+  if (clientRef) await admin.from("bill_transactions").update(finalFields).eq("id", txId);
+  else await admin.from("bill_transactions").insert({ id: txId, business_id: businessId, user_id: userId, service: serviceKey, service_label: serviceLabel, recipient, ...finalFields });
 
   return json({
     ok: true, wallet_balance: newBalance, status, token: bigisubResponse?.token || null,

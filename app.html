@@ -461,6 +461,7 @@ const I18N = {
 "more_close_day": "Close Day",
 "more_expenses": "Expenses",
 "more_lodging": "Lodging",
+"more_bill_payments": "Bill Payments",
 "more_suppliers": "Suppliers",
 "more_warehouse": "Warehouse",
 "more_notes": "Notes",
@@ -1286,6 +1287,7 @@ if(!state.rooms) state.rooms = [];
 if(!state.lodgingBookings) state.lodgingBookings = [];
 if(!state.dismissedHandoverIds) state.dismissedHandoverIds = [];
 if(!state.stockAdjustments) state.stockAdjustments = [];
+if(!state.billTransactions) state.billTransactions = [];
 migratePhoneNumbers();
 function load(){
   const raw = localStorage.getItem(DB_KEY);
@@ -1307,7 +1309,7 @@ function load(){
     employmentRecords:[], salaryPayments:[], recordOnlyStaff:[], rooms:[], lodgingBookings:[],
     joinCode:null, marketMode:false, pinAttempts:{},
     dismissedHandoverIds:[], /* local-only — per-device "got it" acks, never synced */
-    stockAdjustments:[] };
+    stockAdjustments:[], billTransactions:[] };
 }
 function save(){ localStorage.setItem(DB_KEY, JSON.stringify(state)); }
 function business(){ return state.business; }
@@ -1339,7 +1341,7 @@ function canDo(perm){
   if(!u) return false;
   if(u.role==='master') return true;
   if(u.role==='viewer') return false;
-  if(perm==='canAddGoods' || perm==='canVoidReturn') return !!u[perm];
+  if(perm==='canAddGoods' || perm==='canVoidReturn' || perm==='canBillPayments') return !!u[perm];
   return u[perm] !== false;
 }
 function logAudit(action,details){
@@ -3086,6 +3088,7 @@ function renderRoute(){
     case 'suppliers': return screenSuppliers();
     case 'warehouse': return screenWarehouse();
     case 'lodging': return screenLodging();
+    case 'billpayments': return screenBillPayments();
     case 'faq': return screenFAQ();
     case 'about-us': return screenAboutUs();
     case 'contact-us': return screenContactUs();
@@ -3772,6 +3775,7 @@ function bindRouteEvents(){
   if(route==='suppliers') bindSuppliersEvents();
   if(route==='warehouse') bindWarehouseEvents();
   if(route==='lodging') bindLodgingEvents();
+  if(route==='billpayments') bindBillPaymentsEvents();
   if(route==='faq') bindFAQEvents();
   if(route==='about-us') bindAboutUsEvents();
   if(route==='contact-us') bindContactUsEvents();
@@ -5010,6 +5014,7 @@ function screenMore(){
     {id:'closeday', ic:ICON_LOCK, label:t('more_close_day'), show:!isViewer() && canDo('canRecordCash')},
     {id:'expenses', ic:ICON_CASH, label:t('more_expenses'), show:!isViewer()},
     {id:'lodging', ic:ICON_BED, label:t('more_lodging'), show:!isViewer() && isHotelBiz()},
+    {id:'billpayments', ic:ICON_CARD, label:t('more_bill_payments'), show:!isViewer() && canDo('canBillPayments')},
     {id:'suppliers', ic:ICON_TRUCK, label:t('more_suppliers'), show:!isViewer()},
     {id:'warehouse', ic:ICON_BOX, label:t('more_warehouse'), show:!isViewer() && (isMaster() || canDo('canAddGoods'))},
     {id:'notes', ic:ICON_NOTEBOOK, label:t('more_notes'), show:true},
@@ -8047,6 +8052,893 @@ function openCheckInModal(roomId){
     toast('Guest checked in ✅'); closeSheet(); render();
   });
 }
+/* ============================================================
+   BILL PAYMENTS — VTU / bills powered by Bigisub (api.bigisub.ng)
+   ============================================================
+   Bigisub is called ONLY from the bigisub-proxy Supabase Edge Function —
+   never from this file — because the Bigisub partner token and
+   transaction PIN are shared platform-wide secrets that must never reach
+   the browser. This file collects what the shop wants to buy, shows a
+   cost breakdown (Bigisub cost + your markup = what leaves your Bill
+   Wallet), and posts that to the edge function, which does the actual
+   Bigisub call, debits bill_wallet_balance, and logs the transaction.
+
+   Cable TV, Electricity, Betting, and ISP-Smile are VERIFY-THEN-CHARGE
+   flows: you confirm the customer's name/account first, then charge.
+   Betting's validation_reference is short-lived — fund is called right
+   after validate, never delayed or cached across screens.
+
+   Field names differ across services (Bigisub's API, not a bug here):
+   pin vs pin_code, Customer vs Customer_name vs customer_name, etc. —
+   see bigisub-proxy/index.ts for the full rundown.
+   ============================================================ */
+const BIGISUB_FN_URL = `${SITE_CONTENT_URL}/functions/v1/bigisub-proxy`;
+const BIGISUB_NETWORKS = [ {id:1,name:'MTN'}, {id:2,name:'GLO'}, {id:3,name:'9MOBILE'}, {id:4,name:'AIRTEL'} ];
+// ^ Per Bigisub's docs at time of writing — double-check against your
+// Bigisub dashboard if a purchase comes back "wrong network".
+
+let billScreen = 'hub'; // hub | airtime | data | cable | electricity | betting | resultchecker | isp | history | topup
+let billLoading = false;
+let billWalletBalance = null;
+let billMarkupPercent = null;
+let billMarkupDraft = null;
+let billCurrency = 'NGN';
+
+// Reference data from Bigisub, cached per app session only — prices and
+// plans can change on Bigisub's end at any time, so never persisted.
+let billCache = { dataPlans:null, cablePlans:null, electricityProviders:null, resultCheckerPrices:null, bettingBillers:null, ispSmilePlans:null, ispSpectranetPlans:null };
+
+// Working state for whichever purchase form is open. Reset whenever a
+// tile is opened from the hub (see bindBillPaymentsEvents).
+let billForm = {
+  network:1, phone:'', amount:'', planId:'', ported:false,
+  cableType:'', cardNo:'', cableVerifying:false, cableCustomerName:'',
+  company:'', meterType:'prepaid', meterNo:'', elecVerifying:false, elecCustomerName:'',
+  billerCode:'', customerId:'', bettingValidating:false, bettingCustomerName:'', validationReference:'',
+  examName:'', qty:1,
+  ispProvider:'smile', accountId:'', email:'', spectranetNumber:'', ispVerifying:false, ispCustomerName:'',
+};
+
+let billHistory = [];
+let billHistoryLoading = false;
+
+function billResetForm(){
+  billForm = {
+    network:1, phone:'', amount:'', planId:'', ported:false,
+    cableType:'', cardNo:'', cableVerifying:false, cableCustomerName:'',
+    company:'', meterType:'prepaid', meterNo:'', elecVerifying:false, elecCustomerName:'',
+    billerCode:'', customerId:'', bettingValidating:false, bettingCustomerName:'', validationReference:'',
+    examName:'', qty:1,
+    ispProvider:'smile', accountId:'', email:'', spectranetNumber:'', ispVerifying:false, ispCustomerName:'',
+  };
+}
+
+async function bigisubAuthToken(){
+  const { data } = await window.sb.auth.getSession();
+  return data && data.session ? data.session.access_token : null;
+}
+
+async function callBigisub(action, params){
+  if(!navigator.onLine) throw new Error('You need an internet connection for bill payments.');
+  const token = await bigisubAuthToken();
+  if(!token) throw new Error('Please log in online first (bill payments need a live connection).');
+  const res = await fetch(BIGISUB_FN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+token, 'apikey': SITE_CONTENT_ANON_KEY },
+    body: JSON.stringify({ action, ...params })
+  });
+  let result;
+  try{ result = await res.json(); }catch(e){ throw new Error('Unexpected response from server.'); }
+  if(!res.ok || result.error) throw new Error(result.error || 'Something went wrong.');
+  return result;
+}
+
+function billMarkupMultiplier(){ return 1 + (Number(billMarkupPercent||0)/100); }
+function billCustomerPrice(costPrice){ return Math.round(costPrice * billMarkupMultiplier() * 100)/100; }
+
+/* ---------------- HUB ---------------- */
+function screenBillPayments(){
+  if(billScreen==='history') return screenBillHistory();
+  if(billScreen==='topup') return screenBillTopup();
+  if(billScreen==='airtime') return screenBillAirtime();
+  if(billScreen==='data') return screenBillData();
+  if(billScreen==='cable') return screenBillCable();
+  if(billScreen==='electricity') return screenBillElectricity();
+  if(billScreen==='betting') return screenBillBetting();
+  if(billScreen==='resultchecker') return screenBillResultChecker();
+  if(billScreen==='isp') return screenBillIsp();
+  const tiles = [
+    {id:'airtime', label:'Airtime', hint:'All networks', icon:'📱'},
+    {id:'data', label:'Data Bundles', hint:'MTN, Glo, Airtel, 9mobile', icon:'📶'},
+    {id:'cable', label:'Cable TV', hint:'DSTV, GOTV, Startimes', icon:'📺'},
+    {id:'electricity', label:'Electricity', hint:'Prepaid & postpaid tokens', icon:'💡'},
+    {id:'betting', label:'Fund Betting Wallet', hint:'Bet9ja, SportyBet & more', icon:'🎯'},
+    {id:'resultchecker', label:'Result Checker PINs', hint:'WAEC, NECO, JAMB, NABTEB', icon:'📄'},
+    {id:'isp', label:'Internet (ISP)', hint:'Smile, Spectranet', icon:'📡'},
+  ];
+  return `
+    <h2 class="screen-title">Bill Payments</h2>
+    <div class="card" style="background:var(--marigold);color:#fff;">
+      <div class="subtle" style="color:rgba(255,255,255,0.85);">Bill Wallet Balance</div>
+      <div style="font-size:26px;font-weight:700;margin:4px 0 10px;">
+        ${billLoading ? 'Loading…' : (billWalletBalance===null ? '—' : fmtMoney(billWalletBalance))}
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-sm" style="background:#fff;color:var(--marigold-dark);flex:1;" id="bp-topup-btn">＋ Top Up</button>
+        <button class="btn btn-sm btn-outline" style="border-color:rgba(255,255,255,0.6);color:#fff;flex:1;" id="bp-refresh-btn">↻ Refresh</button>
+      </div>
+    </div>
+    ${isMaster() ? `
+    <div class="card">
+      <div class="t1" style="margin-bottom:6px;">Your markup</div>
+      <p class="subtle" style="margin:0 0 10px;">Added on top of Bigisub's cost for every bill payment you make. This is your profit margin.</p>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input id="bp-markup-input" type="number" min="0" step="0.5" style="max-width:100px;" value="${billMarkupDraft===null?(billMarkupPercent||0):billMarkupDraft}">
+        <span>%</span>
+        <button class="btn btn-outline btn-sm" id="bp-markup-save">Save</button>
+      </div>
+    </div>` : ''}
+    <div class="row2" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      ${tiles.map(t=>`
+        <div class="card" data-bp-tile="${t.id}" style="cursor:pointer;text-align:center;padding:16px 10px;">
+          <div style="font-size:26px;">${t.icon}</div>
+          <div class="t1" style="margin-top:6px;">${t.label}</div>
+          <div class="subtle" style="font-size:11px;">${t.hint}</div>
+        </div>`).join('')}
+    </div>
+    <div class="list-row" data-bp-goto="history" style="cursor:pointer;">
+      <div class="thumb">${ICON_RECEIPT}</div><div class="info"><div class="t1">Transaction History</div></div><div>›</div>
+    </div>
+  `;
+}
+
+function bpHeader(title){
+  return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+    <button id="bp-back" style="background:var(--paper-dim);border:none;width:44px;height:44px;border-radius:12px;font-size:22px;color:var(--ink-text);flex-shrink:0;">←</button>
+    <h2 class="screen-title" style="margin:0;">${title}</h2>
+  </div>`;
+}
+
+async function bpLoadWallet(){
+  billLoading = true; refreshMain();
+  try{
+    const r = await callBigisub('my_wallet_summary', {});
+    billWalletBalance = r.wallet_balance; billMarkupPercent = r.markup_percent; billCurrency = r.currency || 'NGN';
+    if(r.psa_account_number){ billPsaAccountNumber = r.psa_account_number; billPsaBankName = r.psa_bank_name; }
+  }catch(e){ toast(e.message); }
+  billLoading = false; refreshMain();
+}
+
+function bindBillPaymentsEvents(){
+  if(billScreen==='hub'){
+    if(billWalletBalance===null && !billLoading) bpLoadWallet();
+    document.querySelectorAll('[data-bp-tile]').forEach(el=>{
+      el.addEventListener('click', ()=>{ billScreen = el.dataset.bpTile; billResetForm(); refreshMain(); });
+    });
+    const goHist = document.querySelector('[data-bp-goto="history"]');
+    if(goHist) goHist.addEventListener('click', ()=>{ billScreen='history'; billHistory=[]; refreshMain(); });
+    const topupBtn = document.getElementById('bp-topup-btn');
+    if(topupBtn) topupBtn.addEventListener('click', ()=>{ billScreen='topup'; refreshMain(); });
+    const refreshBtn = document.getElementById('bp-refresh-btn');
+    if(refreshBtn) refreshBtn.addEventListener('click', bpLoadWallet);
+    const markupSave = document.getElementById('bp-markup-save');
+    if(markupSave) markupSave.addEventListener('click', async ()=>{
+      const val = Number(document.getElementById('bp-markup-input').value||0);
+      if(val<0){ toast('Markup cannot be negative.'); return; }
+      try{
+        await callBigisub('set_markup', { markup_percent: val });
+        billMarkupPercent = val; billMarkupDraft = null;
+        logAudit('bill_markup_updated', `Set bill payments markup to ${val}%`);
+        toast('Markup updated ✅'); refreshMain();
+      }catch(e){ toast(e.message); }
+    });
+    return;
+  }
+  const back = document.getElementById('bp-back');
+  if(back) back.addEventListener('click', ()=>{ billScreen='hub'; refreshMain(); });
+  if(billScreen==='topup') bindBillTopupEvents();
+  if(billScreen==='airtime') bindBillAirtimeEvents();
+  if(billScreen==='data') bindBillDataEvents();
+  if(billScreen==='cable') bindBillCableEvents();
+  if(billScreen==='electricity') bindBillElectricityEvents();
+  if(billScreen==='betting') bindBillBettingEvents();
+  if(billScreen==='resultchecker') bindBillResultCheckerEvents();
+  if(billScreen==='isp') bindBillIspEvents();
+  if(billScreen==='history') bindBillHistoryEvents();
+}
+
+/* ---------------- TOP UP ----------------
+   Two methods:
+   - Card: Flutterwave's inline checkout, verified synchronously right
+     after payment (fund_wallet_verify) — same pattern as subscriptions.
+   - Bank Transfer: a temporary virtual account (no BVN needed) generated
+     for this exact amount. Crediting happens asynchronously via the
+     flutterwave-webhook function when the transfer lands, so this screen
+     polls every few seconds while it's open to reflect that as soon as
+     it happens rather than making the owner manually refresh. */
+let billTopupMode = 'card'; // 'card' | 'bank' | 'psa'
+let billBankTopup = null;   // { tx_ref, account_number, bank_name, expiry_date, amount } once generated
+let billBankTopupPolling = false;
+let billBankTopupPollTimer = null;
+let billPsaAccountNumber = null; // set from my_wallet_summary once the business has a dedicated account
+let billPsaBankName = null;
+let billPsaLoading = false;
+let billPsaSyncing = false;
+let billPsaPollTimer = null;
+
+function screenBillTopup(){
+  return `
+    ${bpHeader('Top Up Bill Wallet')}
+    <div class="card">
+      <p class="subtle">Fund your Bill Wallet to start selling airtime, data and bills. Payments are processed securely by Flutterwave.</p>
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <button class="btn ${billTopupMode==='card'?'btn-primary':'btn-outline'} btn-sm" id="bp-mode-card" style="flex:1;">Card</button>
+        <button class="btn ${billTopupMode==='bank'?'btn-primary':'btn-outline'} btn-sm" id="bp-mode-bank" style="flex:1;">Bank Transfer</button>
+        <button class="btn ${billTopupMode==='psa'?'btn-primary':'btn-outline'} btn-sm" id="bp-mode-psa" style="flex:1;">My Account</button>
+      </div>
+      ${billTopupMode==='card' ? `
+        <div class="field"><label>Amount (${billCurrency})</label><input id="bp-topup-amount" type="number" min="100" placeholder="e.g. 5000"></div>
+        <button class="btn btn-primary" id="bp-topup-confirm">Fund Wallet</button>
+      ` : billTopupMode==='bank' ? screenBillTopupBank() : screenBillTopupPsa()}
+    </div>
+  `;
+}
+
+function screenBillTopupBank(){
+  if(!billBankTopup){
+    return `
+      <div class="field"><label>Amount (${billCurrency})</label><input id="bp-bank-amount" type="number" min="100" placeholder="e.g. 5000"></div>
+      <button class="btn btn-primary" id="bp-bank-generate">Get Transfer Account</button>
+    `;
+  }
+  const b = billBankTopup;
+  return `
+    <div style="text-align:center;padding:12px 0;">
+      <p class="subtle">Transfer exactly <b>${fmtMoney(b.amount)}</b> to:</p>
+      <div style="font-size:22px;font-weight:700;letter-spacing:1px;margin:6px 0;">${escapeHtml(b.account_number)}</div>
+      <div class="t1">${escapeHtml(b.bank_name)}</div>
+      ${b.expiry_date ? `<p class="subtle" style="font-size:11px;margin-top:6px;">Expires ${new Date(b.expiry_date).toLocaleString()}</p>` : ''}
+      <button class="btn btn-outline btn-sm" id="bp-bank-copy" style="margin-top:10px;">Copy Account Number</button>
+      <p class="subtle" style="margin-top:14px;">${billBankTopupPolling ? 'Waiting for the transfer to land…' : 'Checking…'}</p>
+      <button class="btn btn-outline btn-sm" id="bp-bank-cancel">Start Over</button>
+    </div>
+  `;
+}
+
+function screenBillTopupPsa(){
+  if(billPsaLoading) return `<p class="subtle">Setting up your dedicated account…</p>`;
+  if(!billPsaAccountNumber){
+    return `
+      <p class="subtle">Get one dedicated account number for your business — transfer to it anytime, any amount, and it always credits your Bill Wallet. No need to generate a new one each time.</p>
+      <button class="btn btn-primary" id="bp-psa-setup">Set Up My Dedicated Account</button>
+    `;
+  }
+  return `
+    <div style="text-align:center;padding:12px 0;">
+      <p class="subtle">Your permanent top-up account — transfer any amount, anytime:</p>
+      <div style="font-size:22px;font-weight:700;letter-spacing:1px;margin:6px 0;">${escapeHtml(billPsaAccountNumber)}</div>
+      <div class="t1">${escapeHtml(billPsaBankName||'')}</div>
+      <button class="btn btn-outline btn-sm" id="bp-psa-copy" style="margin-top:10px;">Copy Account Number</button>
+      <br><button class="btn btn-outline btn-sm" id="bp-psa-sync" style="margin-top:10px;">${billPsaSyncing?'Checking…':'↻ Sync Now'}</button>
+      <p class="subtle" style="font-size:11px;margin-top:10px;">Already checking automatically every few seconds while this is open.</p>
+    </div>
+  `;
+}
+
+
+function bindBillTopupEvents(){
+  const modeCard = document.getElementById('bp-mode-card');
+  const modeBank = document.getElementById('bp-mode-bank');
+  if(modeCard) modeCard.addEventListener('click', ()=>{ billTopupMode='card'; bpStopBankPolling(); bpStopPsaPolling(); refreshMain(); });
+  if(modeBank) modeBank.addEventListener('click', ()=>{ billTopupMode='bank'; bpStopPsaPolling(); refreshMain(); });
+  const modePsa = document.getElementById('bp-mode-psa');
+  if(modePsa) modePsa.addEventListener('click', ()=>{ billTopupMode='psa'; bpStopBankPolling(); refreshMain(); });
+  if(billTopupMode==='psa' && billPsaAccountNumber && !billPsaPollTimer) bpStartPsaPolling();
+
+  const psaSetupBtn = document.getElementById('bp-psa-setup');
+  if(psaSetupBtn) psaSetupBtn.addEventListener('click', async ()=>{
+    billPsaLoading = true; refreshMain();
+    try{
+      const r = await callBigisub('get_or_create_psa_account', {});
+      billPsaAccountNumber = r.account_number; billPsaBankName = r.bank_name;
+      logAudit('bill_wallet_psa_setup', `Set up dedicated top-up account ${r.account_number}`);
+      bpStartPsaPolling();
+    }catch(e){ toast(e.message); }
+    billPsaLoading = false; refreshMain();
+  });
+  const psaCopyBtn = document.getElementById('bp-psa-copy');
+  if(psaCopyBtn) psaCopyBtn.addEventListener('click', ()=>{
+    if(navigator.clipboard) navigator.clipboard.writeText(billPsaAccountNumber);
+    toast('Account number copied');
+  });
+  const psaSyncBtn = document.getElementById('bp-psa-sync');
+  if(psaSyncBtn) psaSyncBtn.addEventListener('click', ()=>bpSyncPsaWallet(true));
+
+  const btn = document.getElementById('bp-topup-confirm');
+  if(btn) btn.addEventListener('click', ()=>{
+    const amount = Number(document.getElementById('bp-topup-amount').value||0);
+    if(amount < 100){ toast('Enter at least ₦100.'); return; }
+    if(!navigator.onLine){ toast('You need an internet connection to top up.'); return; }
+    const u = currentUser();
+    const txRef = 'zeeshop_billwallet_' + uid('txn');
+    FlutterwaveCheckout({
+      public_key: FLW_PUBLIC_KEY,
+      tx_ref: txRef,
+      amount: amount,
+      currency: billCurrency,
+      payment_options: 'card',
+      meta: { business_id: business().id, purpose: 'bill_wallet_topup' },
+      customer: { email: (u && u.email) || 'customer@zeeshop.app', name: (u ? (u.firstName+' '+(u.lastName||'')) : 'ZeeShop Customer') },
+      customizations: { title: 'ZeeShop Bill Wallet', description: 'Top up bill payments wallet' },
+      callback: async function(response){
+        if(response && (response.status==='successful' || response.status==='completed')){
+          toast('Confirming payment…');
+          try{
+            const r = await callBigisub('fund_wallet_verify', { transaction_id: response.transaction_id, expected_amount: amount, expected_currency: billCurrency });
+            billWalletBalance = r.wallet_balance;
+            logAudit('bill_wallet_topup', `Funded bill wallet with ${fmtMoney(amount)} (card)`);
+            toast('Wallet funded ✅'); billScreen='hub'; refreshMain();
+          }catch(e){ toast('Payment received, but confirming it failed: '+e.message+'. Contact support if the balance doesn\'t update shortly.'); }
+        } else { toast('Payment was not completed.'); }
+      },
+      onclose: function(){}
+    });
+  });
+
+  const genBtn = document.getElementById('bp-bank-generate');
+  if(genBtn) genBtn.addEventListener('click', async ()=>{
+    const amount = Number(document.getElementById('bp-bank-amount').value||0);
+    if(amount < 100){ toast('Enter at least ₦100.'); return; }
+    genBtn.disabled = true; genBtn.textContent = 'Generating…';
+    try{
+      const r = await callBigisub('generate_bank_transfer_topup', { amount });
+      billBankTopup = r;
+      refreshMain();
+      bpStartBankPolling();
+    }catch(e){ toast(e.message); genBtn.disabled=false; genBtn.textContent='Get Transfer Account'; }
+  });
+  const copyBtn = document.getElementById('bp-bank-copy');
+  if(copyBtn) copyBtn.addEventListener('click', ()=>{
+    if(navigator.clipboard) navigator.clipboard.writeText(billBankTopup.account_number);
+    toast('Account number copied');
+  });
+  const cancelBtn = document.getElementById('bp-bank-cancel');
+  if(cancelBtn) cancelBtn.addEventListener('click', ()=>{ bpStopBankPolling(); billBankTopup=null; refreshMain(); });
+}
+
+function bpStartBankPolling(){
+  billBankTopupPolling = true;
+  bpStopBankPolling(); // clear any previous timer first
+  billBankTopupPollTimer = setInterval(async ()=>{
+    if(!billBankTopup || billScreen!=='topup'){ bpStopBankPolling(); return; }
+    try{
+      const r = await callBigisub('check_bank_transfer_topup', { tx_ref: billBankTopup.tx_ref });
+      if(r.status==='success'){
+        bpStopBankPolling();
+        billWalletBalance = r.wallet_balance;
+        logAudit('bill_wallet_topup', `Funded bill wallet with ${fmtMoney(billBankTopup.amount)} (bank transfer)`);
+        billBankTopup = null;
+        toast('Wallet funded ✅'); billScreen='hub'; refreshMain();
+      }
+    }catch(e){ /* keep polling silently — a single failed check isn't worth interrupting the owner */ }
+  }, 5000);
+}
+function bpStopBankPolling(){
+  billBankTopupPolling = false;
+  if(billBankTopupPollTimer){ clearInterval(billBankTopupPollTimer); billBankTopupPollTimer=null; }
+}
+
+async function bpSyncPsaWallet(manual){
+  if(billPsaSyncing) return;
+  billPsaSyncing = true; if(manual) refreshMain();
+  try{
+    const r = await callBigisub('sync_psa_wallet', {});
+    billWalletBalance = r.wallet_balance;
+    if(r.synced > 0){
+      logAudit('bill_wallet_topup', `Funded bill wallet via dedicated account (${r.synced} transfer${r.synced>1?'s':''} synced)`);
+      if(manual) toast(`Synced ${r.synced} new transfer${r.synced>1?'s':''} ✅`);
+    } else if(manual){
+      toast('No new transfers found yet.');
+    }
+  }catch(e){ if(manual) toast(e.message); }
+  billPsaSyncing = false; refreshMain();
+}
+function bpStartPsaPolling(){
+  bpStopPsaPolling(); // clear any previous timer first
+  billPsaPollTimer = setInterval(()=>{
+    if(!billPsaAccountNumber || billScreen!=='topup' || billTopupMode!=='psa'){ bpStopPsaPolling(); return; }
+    bpSyncPsaWallet(false);
+  }, 8000);
+}
+function bpStopPsaPolling(){
+  if(billPsaPollTimer){ clearInterval(billPsaPollTimer); billPsaPollTimer=null; }
+}
+
+/* ---------------- AIRTIME ---------------- */
+function screenBillAirtime(){
+  const cost = Number(billForm.amount||0);
+  const price = cost>0 ? billCustomerPrice(cost) : 0;
+  return `
+    ${bpHeader('Airtime')}
+    <div class="card">
+      <div class="field"><label>Network</label>
+        <select id="bp-network">${BIGISUB_NETWORKS.map(n=>`<option value="${n.id}" ${billForm.network==n.id?'selected':''}>${n.name}</option>`).join('')}</select>
+      </div>
+      <div class="field"><label>Phone Number</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
+      <div class="field"><label>Amount (₦)</label><input id="bp-amount" type="number" min="50" value="${escAttr(billForm.amount)}" placeholder="e.g. 500"></div>
+      ${cost>0 ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> (${fmtMoney(cost)} + ${billMarkupPercent||0}% markup) — deducted from your Bill Wallet.</p>` : ''}
+      <button class="btn btn-primary" id="bp-airtime-confirm">Buy Airtime</button>
+    </div>
+  `;
+}
+function bindBillAirtimeEvents(){
+  const net = document.getElementById('bp-network'); if(net) net.addEventListener('change', e=>{ billForm.network=e.target.value; });
+  const phone = document.getElementById('bp-phone'); if(phone) phone.addEventListener('input', e=>{ billForm.phone=e.target.value; });
+  const amt = document.getElementById('bp-amount'); if(amt) amt.addEventListener('input', e=>{ billForm.amount=e.target.value; refreshMain(); });
+  const btn = document.getElementById('bp-airtime-confirm');
+  if(btn) btn.addEventListener('click', async ()=>{
+    const amount = Number(billForm.amount||0);
+    if(!billForm.phone.trim() || amount<50){ toast('Enter a valid phone number and amount (min ₦50).'); return; }
+    const price = billCustomerPrice(amount);
+    if(!confirm(`Buy ₦${amount} airtime for ${billForm.phone}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
+    btn.disabled = true; btn.textContent = 'Processing…';
+    try{
+      const r = await callBigisub('airtime_purchase', { network: Number(billForm.network), phone_number: billForm.phone.trim(), amount });
+      billWalletBalance = r.wallet_balance;
+      logAudit('bill_airtime', `Sold ₦${amount} ${BIGISUB_NETWORKS.find(n=>n.id==billForm.network).name} airtime to ${billForm.phone}`);
+      toast('Airtime sent ✅'); billScreen='hub'; refreshMain();
+    }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='Buy Airtime'; }
+  });
+}
+
+/* ---------------- DATA ---------------- */
+async function bpLoadDataPlans(){
+  if(billCache.dataPlans){ refreshMain(); return; }
+  billLoading = true; refreshMain();
+  try{ billCache.dataPlans = (await callBigisub('data_plans', {})).plans || []; }
+  catch(e){ toast(e.message); billCache.dataPlans = []; }
+  billLoading = false; refreshMain();
+}
+function screenBillData(){
+  const plans = (billCache.dataPlans||[]).filter(p=>String(p.network)===String(billForm.network));
+  const chosen = plans.find(p=>String(p.id)===String(billForm.planId));
+  const price = chosen ? billCustomerPrice(Number(chosen.amount||chosen.price||0)) : 0;
+  return `
+    ${bpHeader('Data Bundles')}
+    <div class="card">
+      <div class="field"><label>Network</label>
+        <select id="bp-network">${BIGISUB_NETWORKS.map(n=>`<option value="${n.id}" ${billForm.network==n.id?'selected':''}>${n.name}</option>`).join('')}</select>
+      </div>
+      <div class="field"><label>Phone Number</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
+      <div class="field"><label>Plan</label>
+        <select id="bp-plan" ${billLoading?'disabled':''}>
+          <option value="">${billLoading?'Loading plans…':'Select a plan'}</option>
+          ${plans.map(p=>`<option value="${p.id}" ${billForm.planId==p.id?'selected':''}>${escapeHtml(p.name||p.plan_name||('Plan '+p.id))} — ₦${p.amount||p.price}</option>`).join('')}
+        </select>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;margin:8px 0;font-size:13px;">
+        <input type="checkbox" id="bp-ported" ${billForm.ported?'checked':''}> This number was ported from another network
+      </label>
+      ${chosen ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> (₦${chosen.amount||chosen.price} + ${billMarkupPercent||0}% markup).</p>` : ''}
+      <button class="btn btn-primary" id="bp-data-confirm">Buy Data</button>
+    </div>
+  `;
+}
+function bindBillDataEvents(){
+  if(!billCache.dataPlans) bpLoadDataPlans();
+  const net = document.getElementById('bp-network'); if(net) net.addEventListener('change', e=>{ billForm.network=e.target.value; billForm.planId=''; refreshMain(); });
+  const phone = document.getElementById('bp-phone'); if(phone) phone.addEventListener('input', e=>{ billForm.phone=e.target.value; });
+  const plan = document.getElementById('bp-plan'); if(plan) plan.addEventListener('change', e=>{ billForm.planId=e.target.value; refreshMain(); });
+  const ported = document.getElementById('bp-ported'); if(ported) ported.addEventListener('change', e=>{ billForm.ported=e.target.checked; });
+  const btn = document.getElementById('bp-data-confirm');
+  if(btn) btn.addEventListener('click', async ()=>{
+    const plans = (billCache.dataPlans||[]);
+    const chosen = plans.find(p=>String(p.id)===String(billForm.planId));
+    if(!billForm.phone.trim() || !chosen){ toast('Enter a phone number and select a plan.'); return; }
+    const price = billCustomerPrice(Number(chosen.amount||chosen.price||0));
+    if(!confirm(`Buy ${chosen.name||chosen.plan_name} for ${billForm.phone}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
+    btn.disabled = true; btn.textContent = 'Processing…';
+    try{
+      const r = await callBigisub('data_purchase', { network: Number(billForm.network), phone_number: billForm.phone.trim(), plan: chosen.id, ported_number: !!billForm.ported });
+      billWalletBalance = r.wallet_balance;
+      logAudit('bill_data', `Sold ${chosen.name||chosen.plan_name} data to ${billForm.phone}`);
+      toast('Data sent ✅'); billScreen='hub'; refreshMain();
+    }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='Buy Data'; }
+  });
+}
+
+/* ---------------- CABLE TV (verify → purchase) ---------------- */
+async function bpLoadCablePlans(){
+  if(billCache.cablePlans){ refreshMain(); return; }
+  billLoading = true; refreshMain();
+  try{ billCache.cablePlans = (await callBigisub('cable_plans', {})).plans || []; }
+  catch(e){ toast(e.message); billCache.cablePlans = []; }
+  billLoading = false; refreshMain();
+}
+function screenBillCable(){
+  const providers = [...new Set((billCache.cablePlans||[]).map(p=>p.provider||p.cable_type||p.cable_name))].filter(Boolean);
+  const plans = (billCache.cablePlans||[]).filter(p=>(p.provider||p.cable_type||p.cable_name)===billForm.cableType);
+  const chosen = plans.find(p=>String(p.id)===String(billForm.planId));
+  const price = chosen ? billCustomerPrice(Number(chosen.amount||chosen.price||0)) : 0;
+  const verified = !!billForm.cableCustomerName;
+  return `
+    ${bpHeader('Cable TV')}
+    <div class="card">
+      <div class="field"><label>Provider</label>
+        <select id="bp-cable-provider" ${billLoading||verified?'disabled':''}>
+          <option value="">${billLoading?'Loading…':'Select provider'}</option>
+          ${providers.map(p=>`<option value="${escAttr(p)}" ${billForm.cableType===p?'selected':''}>${escapeHtml(p)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Smart Card / IUC Number</label><input id="bp-cardno" value="${escAttr(billForm.cardNo)}" placeholder="e.g. 1234567890" ${verified?'disabled':''}></div>
+      ${!verified ? `<button class="btn btn-outline" id="bp-cable-verify" ${billForm.cableVerifying?'disabled':''}>${billForm.cableVerifying?'Verifying…':'Verify Card'}</button>` : `
+      <p class="subtle" style="color:var(--marigold-dark);">✓ Verified: <b>${escapeHtml(billForm.cableCustomerName)}</b> <a href="#" id="bp-cable-reverify" style="margin-left:8px;">change</a></p>
+      <div class="field"><label>Plan</label>
+        <select id="bp-plan">
+          <option value="">Select a plan</option>
+          ${plans.map(p=>`<option value="${p.id}" ${billForm.planId==p.id?'selected':''}>${escapeHtml(p.name||p.plan_name||('Plan '+p.id))} — ₦${p.amount||p.price}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Phone Number (for receipt)</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
+      ${chosen ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> (₦${chosen.amount||chosen.price} + ${billMarkupPercent||0}% markup).</p>` : ''}
+      <button class="btn btn-primary" id="bp-cable-confirm">Pay Subscription</button>
+      `}
+    </div>
+  `;
+}
+function bindBillCableEvents(){
+  if(!billCache.cablePlans) bpLoadCablePlans();
+  const prov = document.getElementById('bp-cable-provider'); if(prov) prov.addEventListener('change', e=>{ billForm.cableType=e.target.value; billForm.planId=''; refreshMain(); });
+  const card = document.getElementById('bp-cardno'); if(card) card.addEventListener('input', e=>{ billForm.cardNo=e.target.value; });
+  const plan = document.getElementById('bp-plan'); if(plan) plan.addEventListener('change', e=>{ billForm.planId=e.target.value; refreshMain(); });
+  const phone = document.getElementById('bp-phone'); if(phone) phone.addEventListener('input', e=>{ billForm.phone=e.target.value; });
+  const reverify = document.getElementById('bp-cable-reverify');
+  if(reverify) reverify.addEventListener('click', e=>{ e.preventDefault(); billForm.cableCustomerName=''; billForm.planId=''; refreshMain(); });
+  const verifyBtn = document.getElementById('bp-cable-verify');
+  if(verifyBtn) verifyBtn.addEventListener('click', async ()=>{
+    if(!billForm.cableType || !billForm.cardNo.trim()){ toast('Select a provider and enter the card number.'); return; }
+    billForm.cableVerifying = true; refreshMain();
+    try{
+      const r = await callBigisub('cable_verify', { cable_name: billForm.cableType, card_no: billForm.cardNo.trim() });
+      if(!r.customer_name){ toast('Could not verify this card. Double-check the number.'); billForm.cableVerifying=false; refreshMain(); return; }
+      billForm.cableCustomerName = r.customer_name;
+    }catch(e){ toast(e.message); }
+    billForm.cableVerifying = false; refreshMain();
+  });
+  const btn = document.getElementById('bp-cable-confirm');
+  if(btn) btn.addEventListener('click', async ()=>{
+    const chosen = (billCache.cablePlans||[]).find(p=>String(p.id)===String(billForm.planId));
+    if(!billForm.phone.trim() || !chosen){ toast('Enter a phone number and select a plan.'); return; }
+    const price = billCustomerPrice(Number(chosen.amount||chosen.price||0));
+    if(!confirm(`Pay ${chosen.name||chosen.plan_name} for ${billForm.cableCustomerName}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
+    btn.disabled = true; btn.textContent = 'Processing…';
+    try{
+      const r = await callBigisub('cable_purchase', { cable_type: billForm.cableType, card_no: billForm.cardNo.trim(), phone_number: billForm.phone.trim(), amount: Number(chosen.amount||chosen.price||0), customer_name: billForm.cableCustomerName });
+      billWalletBalance = r.wallet_balance;
+      logAudit('bill_cable', `Paid ${chosen.name||chosen.plan_name} for card ${billForm.cardNo} (${billForm.cableCustomerName})`);
+      toast('Subscription paid ✅'); billScreen='hub'; refreshMain();
+    }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='Pay Subscription'; }
+  });
+}
+
+/* ---------------- ELECTRICITY (verify → pay) ---------------- */
+async function bpLoadElectricityProviders(){
+  if(billCache.electricityProviders){ refreshMain(); return; }
+  billLoading = true; refreshMain();
+  try{ billCache.electricityProviders = (await callBigisub('electricity_providers', {})).providers || []; }
+  catch(e){ toast(e.message); billCache.electricityProviders = []; }
+  billLoading = false; refreshMain();
+}
+function screenBillElectricity(){
+  const providers = billCache.electricityProviders || [];
+  const amount = Number(billForm.amount||0);
+  const price = amount>0 ? billCustomerPrice(amount) : 0;
+  const verified = !!billForm.elecCustomerName;
+  return `
+    ${bpHeader('Electricity')}
+    <div class="card">
+      <div class="field"><label>Disco</label>
+        <select id="bp-elec-provider" ${billLoading||verified?'disabled':''}>
+          <option value="">${billLoading?'Loading…':'Select provider'}</option>
+          ${providers.map(p=>`<option value="${p.id||p.code||p.company}" ${billForm.company==(p.id||p.code||p.company)?'selected':''}>${escapeHtml(p.name||p.provider||p.company)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Meter Type</label>
+        <select id="bp-meter-type" ${verified?'disabled':''}>
+          <option value="prepaid" ${billForm.meterType==='prepaid'?'selected':''}>Prepaid</option>
+          <option value="postpaid" ${billForm.meterType==='postpaid'?'selected':''}>Postpaid</option>
+        </select>
+      </div>
+      <div class="field"><label>Meter Number</label><input id="bp-meter-no" value="${escAttr(billForm.meterNo)}" placeholder="e.g. 04123456789" ${verified?'disabled':''}></div>
+      ${!verified ? `<button class="btn btn-outline" id="bp-elec-verify" ${billForm.elecVerifying?'disabled':''}>${billForm.elecVerifying?'Verifying…':'Verify Meter'}</button>` : `
+      <p class="subtle" style="color:var(--marigold-dark);">✓ Verified: <b>${escapeHtml(billForm.elecCustomerName)}</b> <a href="#" id="bp-elec-reverify" style="margin-left:8px;">change</a></p>
+      <div class="field"><label>Phone Number (for receipt)</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
+      <div class="field"><label>Amount (₦)</label><input id="bp-amount" type="number" min="500" value="${escAttr(billForm.amount)}" placeholder="e.g. 5000"></div>
+      ${amount>0 ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> (${fmtMoney(amount)} + ${billMarkupPercent||0}% markup).</p>` : ''}
+      <button class="btn btn-primary" id="bp-elec-confirm">Buy Token</button>
+      `}
+    </div>
+  `;
+}
+function bindBillElectricityEvents(){
+  if(!billCache.electricityProviders) bpLoadElectricityProviders();
+  const prov = document.getElementById('bp-elec-provider'); if(prov) prov.addEventListener('change', e=>{ billForm.company=e.target.value; });
+  const mtype = document.getElementById('bp-meter-type'); if(mtype) mtype.addEventListener('change', e=>{ billForm.meterType=e.target.value; });
+  const mno = document.getElementById('bp-meter-no'); if(mno) mno.addEventListener('input', e=>{ billForm.meterNo=e.target.value; });
+  const phone = document.getElementById('bp-phone'); if(phone) phone.addEventListener('input', e=>{ billForm.phone=e.target.value; });
+  const amt = document.getElementById('bp-amount'); if(amt) amt.addEventListener('input', e=>{ billForm.amount=e.target.value; refreshMain(); });
+  const reverify = document.getElementById('bp-elec-reverify');
+  if(reverify) reverify.addEventListener('click', e=>{ e.preventDefault(); billForm.elecCustomerName=''; refreshMain(); });
+  const verifyBtn = document.getElementById('bp-elec-verify');
+  if(verifyBtn) verifyBtn.addEventListener('click', async ()=>{
+    if(!billForm.company || !billForm.meterNo.trim()){ toast('Select a disco and enter the meter number.'); return; }
+    billForm.elecVerifying = true; refreshMain();
+    try{
+      const r = await callBigisub('electricity_verify', { company: billForm.company, meter_no: billForm.meterNo.trim(), meter_type: billForm.meterType });
+      if(!r.customer_name){ toast('Could not verify this meter. Double-check the number.'); billForm.elecVerifying=false; refreshMain(); return; }
+      billForm.elecCustomerName = r.customer_name;
+    }catch(e){ toast(e.message); }
+    billForm.elecVerifying = false; refreshMain();
+  });
+  const btn = document.getElementById('bp-elec-confirm');
+  if(btn) btn.addEventListener('click', async ()=>{
+    const amount = Number(billForm.amount||0);
+    if(!billForm.phone.trim() || amount<500){ toast('Enter a phone number and an amount of at least ₦500.'); return; }
+    const price = billCustomerPrice(amount);
+    if(!confirm(`Buy ₦${amount} token for ${billForm.elecCustomerName}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
+    btn.disabled = true; btn.textContent = 'Processing…';
+    try{
+      const r = await callBigisub('electricity_pay', { company: billForm.company, meter_no: billForm.meterNo.trim(), meter_type: billForm.meterType, phone_number: billForm.phone.trim(), amount, customer_name: billForm.elecCustomerName });
+      billWalletBalance = r.wallet_balance;
+      const token = r.token || (r.bigisub_response && r.bigisub_response.token);
+      logAudit('bill_electricity', `Sold ₦${amount} token for meter ${billForm.meterNo} (${billForm.elecCustomerName})`);
+      toast(token ? `Token: ${token}` : 'Token purchased ✅');
+      billScreen='hub'; refreshMain();
+    }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='Buy Token'; }
+  });
+}
+
+/* ---------------- BETTING (validate → fund, immediately) ---------------- */
+async function bpLoadBettingBillers(){
+  if(billCache.bettingBillers){ refreshMain(); return; }
+  billLoading = true; refreshMain();
+  try{ billCache.bettingBillers = (await callBigisub('betting_billers', {})).billers || []; }
+  catch(e){ toast(e.message); billCache.bettingBillers = []; }
+  billLoading = false; refreshMain();
+}
+function screenBillBetting(){
+  const billers = billCache.bettingBillers || [];
+  const amount = Number(billForm.amount||0);
+  const price = amount>0 ? billCustomerPrice(amount) : 0;
+  return `
+    ${bpHeader('Fund Betting Wallet')}
+    <div class="card">
+      <div class="field"><label>Platform</label>
+        <select id="bp-biller" ${billLoading?'disabled':''}>
+          <option value="">${billLoading?'Loading…':'Select platform'}</option>
+          ${billers.map(b=>`<option value="${b.id||b.code||b.biller_code}" ${billForm.billerCode==(b.id||b.code||b.biller_code)?'selected':''}>${escapeHtml(b.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Customer/Betting ID</label><input id="bp-customer-id" value="${escAttr(billForm.customerId)}" placeholder="e.g. 123456"></div>
+      <div class="field"><label>Amount (₦)</label><input id="bp-amount" type="number" min="100" value="${escAttr(billForm.amount)}" placeholder="e.g. 1000"></div>
+      ${amount>0 ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> (${fmtMoney(amount)} + ${billMarkupPercent||0}% markup).</p>` : ''}
+      <p class="subtle" style="font-size:11px;">We'll confirm the account name right before funding — this platform expires that confirmation quickly, so there's no separate "verify" step here.</p>
+      <button class="btn btn-primary" id="bp-betting-confirm">${billForm.bettingValidating?'Validating…':'Fund Wallet'}</button>
+    </div>
+  `;
+}
+function bindBillBettingEvents(){
+  if(!billCache.bettingBillers) bpLoadBettingBillers();
+  const biller = document.getElementById('bp-biller'); if(biller) biller.addEventListener('change', e=>{ billForm.billerCode=e.target.value; });
+  const cid = document.getElementById('bp-customer-id'); if(cid) cid.addEventListener('input', e=>{ billForm.customerId=e.target.value; });
+  const amt = document.getElementById('bp-amount'); if(amt) amt.addEventListener('input', e=>{ billForm.amount=e.target.value; refreshMain(); });
+  const btn = document.getElementById('bp-betting-confirm');
+  if(btn) btn.addEventListener('click', async ()=>{
+    const amount = Number(billForm.amount||0);
+    if(!billForm.billerCode || !billForm.customerId.trim() || amount<100){ toast('Select a platform, enter the customer ID, and an amount of at least ₦100.'); return; }
+    btn.disabled = true; btn.textContent = 'Validating…';
+    let validation;
+    try{
+      validation = await callBigisub('betting_validate', { biller_code: billForm.billerCode, customer_id: billForm.customerId.trim() });
+    }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='Fund Wallet'; return; }
+    const price = billCustomerPrice(amount);
+    if(!confirm(`Fund ${validation.customer_name||billForm.customerId} with ₦${amount}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)){
+      btn.disabled=false; btn.textContent='Fund Wallet'; return;
+    }
+    btn.textContent = 'Funding…';
+    try{
+      const r = await callBigisub('betting_fund', { biller_code: billForm.billerCode, customer_id: billForm.customerId.trim(), customer_name: validation.customer_name, amount, validation_reference: validation.validation_reference });
+      billWalletBalance = r.wallet_balance;
+      logAudit('bill_betting', `Funded ${billForm.customerId} (${validation.customer_name}) with ₦${amount}`);
+      toast('Wallet funded ✅'); billScreen='hub'; refreshMain();
+    }catch(e){ toast(e.message + ' — if this was a timeout on the validation reference, please try again.'); btn.disabled=false; btn.textContent='Fund Wallet'; }
+  });
+}
+
+/* ---------------- RESULT CHECKER (Education) ---------------- */
+async function bpLoadResultCheckerPrices(){
+  if(billCache.resultCheckerPrices){ refreshMain(); return; }
+  billLoading = true; refreshMain();
+  try{ billCache.resultCheckerPrices = (await callBigisub('result_checker_prices', {})).prices || []; }
+  catch(e){ toast(e.message); billCache.resultCheckerPrices = []; }
+  billLoading = false; refreshMain();
+}
+function screenBillResultChecker(){
+  const exams = billCache.resultCheckerPrices || [];
+  const chosen = exams.find(x=>String(x.exam||x.exam_type||x.name)===String(billForm.examName));
+  const qty = Math.max(1, Number(billForm.qty||1));
+  const unit = chosen ? Number(chosen.amount||chosen.price||0) : 0;
+  const price = chosen ? billCustomerPrice(unit*qty) : 0;
+  return `
+    ${bpHeader('Result Checker PINs')}
+    <div class="card">
+      <div class="field"><label>Exam</label>
+        <select id="bp-exam" ${billLoading?'disabled':''}>
+          <option value="">${billLoading?'Loading…':'Select exam'}</option>
+          ${exams.map(x=>`<option value="${escAttr(x.exam||x.exam_type||x.name)}" ${billForm.examName==(x.exam||x.exam_type||x.name)?'selected':''}>${escapeHtml(x.name||x.exam||x.exam_type)} — ₦${x.amount||x.price}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Quantity</label><input id="bp-qty" type="number" min="1" value="${qty}"></div>
+      ${chosen ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> (₦${unit} × ${qty} + ${billMarkupPercent||0}% markup).</p>` : ''}
+      <button class="btn btn-primary" id="bp-rc-confirm">Buy PIN(s)</button>
+    </div>
+  `;
+}
+function bindBillResultCheckerEvents(){
+  if(!billCache.resultCheckerPrices) bpLoadResultCheckerPrices();
+  const exam = document.getElementById('bp-exam'); if(exam) exam.addEventListener('change', e=>{ billForm.examName=e.target.value; refreshMain(); });
+  const qty = document.getElementById('bp-qty'); if(qty) qty.addEventListener('input', e=>{ billForm.qty=e.target.value; refreshMain(); });
+  const btn = document.getElementById('bp-rc-confirm');
+  if(btn) btn.addEventListener('click', async ()=>{
+    const exams = billCache.resultCheckerPrices||[];
+    const chosen = exams.find(x=>String(x.exam||x.exam_type||x.name)===String(billForm.examName));
+    const qtyNum = Math.max(1, Number(billForm.qty||1));
+    if(!chosen){ toast('Select an exam.'); return; }
+    const price = billCustomerPrice(Number(chosen.amount||chosen.price||0)*qtyNum);
+    if(!confirm(`Buy ${qtyNum} × ${chosen.name||chosen.exam} PIN(s)? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
+    btn.disabled = true; btn.textContent = 'Processing…';
+    try{
+      const r = await callBigisub('result_checker_purchase', { exam: chosen.exam||chosen.exam_type||chosen.name, quantity: qtyNum });
+      billWalletBalance = r.wallet_balance;
+      const pins = r.pins || (r.bigisub_response && r.bigisub_response.pins);
+      logAudit('bill_result_checker', `Bought ${qtyNum} × ${chosen.name||chosen.exam} PIN(s)`);
+      toast(pins ? 'PIN(s) generated — see receipt in history' : 'PIN(s) purchased ✅');
+      billScreen='hub'; refreshMain();
+    }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='Buy PIN(s)'; }
+  });
+}
+
+/* ---------------- ISP: Smile (verify → topup) & Spectranet (direct topup) ---------------- */
+async function bpLoadIspPlans(provider){
+  const key = provider==='smile' ? 'ispSmilePlans' : 'ispSpectranetPlans';
+  if(billCache[key]){ refreshMain(); return; }
+  billLoading = true; refreshMain();
+  try{ billCache[key] = (await callBigisub(provider==='smile'?'isp_smile_plans':'isp_spectranet_plans', {})).plans || []; }
+  catch(e){ toast(e.message); billCache[key] = []; }
+  billLoading = false; refreshMain();
+}
+function screenBillIsp(){
+  const isSmile = billForm.ispProvider==='smile';
+  const plans = (isSmile ? billCache.ispSmilePlans : billCache.ispSpectranetPlans) || [];
+  const chosen = plans.find(p=>String(p.id)===String(billForm.planId));
+  const price = chosen ? billCustomerPrice(Number(chosen.amount||chosen.price||0)) : 0;
+  const verified = !isSmile || !!billForm.ispCustomerName; // Spectranet has no verify step
+  return `
+    ${bpHeader('Internet (ISP)')}
+    <div class="card">
+      <div class="field"><label>Provider</label>
+        <select id="bp-isp-provider">
+          <option value="smile" ${isSmile?'selected':''}>Smile</option>
+          <option value="spectranet" ${!isSmile?'selected':''}>Spectranet</option>
+        </select>
+      </div>
+      ${isSmile ? `
+        <div class="field"><label>Account ID</label><input id="bp-account-id" value="${escAttr(billForm.accountId)}" placeholder="e.g. 12345678" ${verified?'disabled':''}></div>
+        ${!verified ? `<button class="btn btn-outline" id="bp-isp-verify" ${billForm.ispVerifying?'disabled':''}>${billForm.ispVerifying?'Verifying…':'Verify Account'}</button>` : `
+        <p class="subtle" style="color:var(--marigold-dark);">✓ Verified: <b>${escapeHtml(billForm.ispCustomerName)}</b> <a href="#" id="bp-isp-reverify" style="margin-left:8px;">change</a></p>`}
+      ` : `
+        <div class="field"><label>Spectranet Device Number</label><input id="bp-spectranet-number" value="${escAttr(billForm.spectranetNumber)}" placeholder="e.g. SP12345"></div>
+      `}
+      ${verified ? `
+      <div class="field"><label>Plan</label>
+        <select id="bp-plan" ${billLoading?'disabled':''}>
+          <option value="">${billLoading?'Loading…':'Select a plan'}</option>
+          ${plans.map(p=>`<option value="${p.id}" ${billForm.planId==p.id?'selected':''}>${escapeHtml(p.name||p.plan_name||('Plan '+p.id))} — ₦${p.amount||p.price}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Phone Number</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
+      ${isSmile ? `<div class="field"><label>Email</label><input id="bp-email" type="email" value="${escAttr(billForm.email)}" placeholder="customer@email.com"></div>` : `<div class="field"><label>Quantity</label><input id="bp-qty" type="number" min="1" value="${billForm.qty||1}"></div>`}
+      ${chosen ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> (₦${chosen.amount||chosen.price} + ${billMarkupPercent||0}% markup).</p>` : ''}
+      <button class="btn btn-primary" id="bp-isp-confirm">Buy Plan</button>
+      ` : ''}
+    </div>
+  `;
+}
+function bindBillIspEvents(){
+  const provider = document.getElementById('bp-isp-provider');
+  if(provider) provider.addEventListener('change', e=>{ billForm.ispProvider=e.target.value; billForm.planId=''; billForm.ispCustomerName=''; refreshMain(); });
+  if(!billCache[billForm.ispProvider==='smile'?'ispSmilePlans':'ispSpectranetPlans']) bpLoadIspPlans(billForm.ispProvider);
+
+  const acct = document.getElementById('bp-account-id'); if(acct) acct.addEventListener('input', e=>{ billForm.accountId=e.target.value; });
+  const spNum = document.getElementById('bp-spectranet-number'); if(spNum) spNum.addEventListener('input', e=>{ billForm.spectranetNumber=e.target.value; });
+  const plan = document.getElementById('bp-plan'); if(plan) plan.addEventListener('change', e=>{ billForm.planId=e.target.value; refreshMain(); });
+  const phone = document.getElementById('bp-phone'); if(phone) phone.addEventListener('input', e=>{ billForm.phone=e.target.value; });
+  const email = document.getElementById('bp-email'); if(email) email.addEventListener('input', e=>{ billForm.email=e.target.value; });
+  const qty = document.getElementById('bp-qty'); if(qty) qty.addEventListener('input', e=>{ billForm.qty=e.target.value; });
+  const reverify = document.getElementById('bp-isp-reverify');
+  if(reverify) reverify.addEventListener('click', e=>{ e.preventDefault(); billForm.ispCustomerName=''; refreshMain(); });
+  const verifyBtn = document.getElementById('bp-isp-verify');
+  if(verifyBtn) verifyBtn.addEventListener('click', async ()=>{
+    if(!billForm.accountId.trim()){ toast('Enter the Smile account ID.'); return; }
+    billForm.ispVerifying = true; refreshMain();
+    try{
+      const r = await callBigisub('isp_smile_verify', { account_id: billForm.accountId.trim() });
+      if(!r.customer_name){ toast('Could not verify this account. Double-check the ID.'); billForm.ispVerifying=false; refreshMain(); return; }
+      billForm.ispCustomerName = r.customer_name;
+    }catch(e){ toast(e.message); }
+    billForm.ispVerifying = false; refreshMain();
+  });
+  const btn = document.getElementById('bp-isp-confirm');
+  if(btn) btn.addEventListener('click', async ()=>{
+    const isSmile = billForm.ispProvider==='smile';
+    const plans = (isSmile ? billCache.ispSmilePlans : billCache.ispSpectranetPlans) || [];
+    const chosen = plans.find(p=>String(p.id)===String(billForm.planId));
+    if(!chosen || !billForm.phone.trim()){ toast('Select a plan and enter a phone number.'); return; }
+    if(isSmile && !billForm.email.trim()){ toast('Enter an email for the Smile top-up.'); return; }
+    if(!isSmile && !billForm.spectranetNumber.trim()){ toast('Enter the Spectranet device number.'); return; }
+    const price = billCustomerPrice(Number(chosen.amount||chosen.price||0));
+    if(!confirm(`Buy ${chosen.name||chosen.plan_name}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
+    btn.disabled = true; btn.textContent = 'Processing…';
+    try{
+      const r = isSmile
+        ? await callBigisub('isp_smile_topup', { plan: chosen.id, phone_number: billForm.phone.trim(), email: billForm.email.trim(), account_id: billForm.accountId.trim() })
+        : await callBigisub('isp_spectranet_topup', { plan: chosen.id, phone_number: billForm.phone.trim(), spectranet_number: billForm.spectranetNumber.trim(), quantity: Math.max(1,Number(billForm.qty||1)) });
+      billWalletBalance = r.wallet_balance;
+      logAudit('bill_isp', `Bought ${chosen.name||chosen.plan_name} (${isSmile?'Smile':'Spectranet'})`);
+      toast('Plan purchased ✅'); billScreen='hub'; refreshMain();
+    }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='Buy Plan'; }
+  });
+}
+
+/* ---------------- HISTORY / REQUERY ---------------- */
+async function bpLoadHistory(){
+  billHistoryLoading = true; refreshMain();
+  try{ billHistory = (await callBigisub('list_transactions', {})).transactions || []; }
+  catch(e){ toast(e.message); }
+  billHistoryLoading = false; refreshMain();
+}
+function screenBillHistory(){
+  return `
+    ${bpHeader('Transaction History')}
+    ${billHistoryLoading ? `<p class="subtle">Loading…</p>` : (billHistory.length===0 ? `<p class="subtle">No bill payments yet.</p>` : billHistory.map(tx=>`
+      <div class="list-row">
+        <div class="info">
+          <div class="t1">${escapeHtml(tx.service_label || tx.service)} — ${escapeHtml(tx.recipient||'')}</div>
+          <div class="t2 subtle">${new Date(tx.created_at).toLocaleString()} · ${fmtMoney(tx.sale_price)}</div>
+        </div>
+        <span class="pill ${tx.status==='success'?'pill-green':tx.status==='failed'?'pill-red':'pill-amber'}">${tx.status}</span>
+        ${tx.status==='pending' ? `<button class="btn btn-outline btn-sm" data-bp-requery="${tx.id}" style="margin-left:8px;">Check</button>` : ''}
+      </div>
+    `).join(''))}
+  `;
+}
+function bindBillHistoryEvents(){
+  if(billHistory.length===0 && !billHistoryLoading) bpLoadHistory();
+  document.querySelectorAll('[data-bp-requery]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const id = btn.dataset.bpRequery;
+      btn.disabled = true; btn.textContent = '…';
+      try{
+        const tx = billHistory.find(x=>x.id===id);
+        const action = (tx && tx.service==='betting') ? 'betting_requery' : 'requery';
+        const r = await callBigisub(action, { transaction_id: id });
+        if(tx) tx.status = r.status || tx.status;
+        toast('Status: '+(r.status||'unknown')); refreshMain();
+      }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='Check'; }
+    });
+  });
+}
+
 /* ============================================================
    ABOUT US / CONTACT US — content managed centrally from the
    ZeeShop Admin Dashboard (Supabase), not stored on this device.

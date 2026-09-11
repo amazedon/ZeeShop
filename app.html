@@ -8072,7 +8072,13 @@ function openCheckInModal(roomId){
    pin vs pin_code, Customer vs Customer_name vs customer_name, etc. —
    see bigisub-proxy/index.ts for the full rundown.
    ============================================================ */
-const BIGISUB_FN_URL = `${SITE_CONTENT_URL}/functions/v1/bigisub-proxy`;
+// BIGISUB_FN_URL intentionally NOT declared here as a top-level const —
+// SITE_CONTENT_URL isn't defined until much later in this file (the
+// Supabase client setup block), and a top-level const referencing it here
+// would throw "Cannot access before initialization" the instant the page
+// loads, before anything ever renders. Computed lazily inside
+// callBigisub() below instead, where it's only ever evaluated well after
+// the whole script — including that later block — has already run.
 const BIGISUB_NETWORKS = [ {id:1,name:'MTN'}, {id:2,name:'GLO'}, {id:3,name:'9MOBILE'}, {id:4,name:'AIRTEL'} ];
 // ^ Per Bigisub's docs at time of writing — double-check against your
 // Bigisub dashboard if a purchase comes back "wrong network".
@@ -8113,6 +8119,17 @@ function billResetForm(){
   };
 }
 
+// One reference per purchase ATTEMPT, not per click — lazily created and
+// kept on billForm so that clicking "Buy" again after a failed/timed-out
+// request (without changing any field) reuses the same ref, letting the
+// server recognize it as a retry rather than a brand-new purchase. Only
+// clears when billResetForm() runs, i.e. when leaving for a genuinely
+// different purchase.
+function billGetClientRef(){
+  if(!billForm._clientRef) billForm._clientRef = uid('bp');
+  return billForm._clientRef;
+}
+
 async function bigisubAuthToken(){
   const { data } = await window.sb.auth.getSession();
   return data && data.session ? data.session.access_token : null;
@@ -8122,7 +8139,7 @@ async function callBigisub(action, params){
   if(!navigator.onLine) throw new Error('You need an internet connection for bill payments.');
   const token = await bigisubAuthToken();
   if(!token) throw new Error('Please log in online first (bill payments need a live connection).');
-  const res = await fetch(BIGISUB_FN_URL, {
+  const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/bigisub-proxy`, {
     method: 'POST',
     headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+token, 'apikey': SITE_CONTENT_ANON_KEY },
     body: JSON.stringify({ action, ...params })
@@ -8445,6 +8462,7 @@ async function bpSyncPsaWallet(manual){
 }
 function bpStartPsaPolling(){
   bpStopPsaPolling(); // clear any previous timer first
+  bpSyncPsaWallet(false); // check immediately rather than waiting for the first 8s tick
   billPsaPollTimer = setInterval(()=>{
     if(!billPsaAccountNumber || billScreen!=='topup' || billTopupMode!=='psa'){ bpStopPsaPolling(); return; }
     bpSyncPsaWallet(false);
@@ -8483,7 +8501,7 @@ function bindBillAirtimeEvents(){
     if(!confirm(`Buy ₦${amount} airtime for ${billForm.phone}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     btn.disabled = true; btn.textContent = 'Processing…';
     try{
-      const r = await callBigisub('airtime_purchase', { network: Number(billForm.network), phone_number: billForm.phone.trim(), amount });
+      const r = await callBigisub('airtime_purchase', { network: Number(billForm.network), phone_number: billForm.phone.trim(), amount, client_ref: billGetClientRef() });
       billWalletBalance = r.wallet_balance;
       logAudit('bill_airtime', `Sold ₦${amount} ${BIGISUB_NETWORKS.find(n=>n.id==billForm.network).name} airtime to ${billForm.phone}`);
       toast('Airtime sent ✅'); billScreen='hub'; refreshMain();
@@ -8539,7 +8557,7 @@ function bindBillDataEvents(){
     if(!confirm(`Buy ${chosen.name||chosen.plan_name} for ${billForm.phone}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     btn.disabled = true; btn.textContent = 'Processing…';
     try{
-      const r = await callBigisub('data_purchase', { network: Number(billForm.network), phone_number: billForm.phone.trim(), plan: chosen.id, ported_number: !!billForm.ported });
+      const r = await callBigisub('data_purchase', { network: Number(billForm.network), phone_number: billForm.phone.trim(), plan: chosen.id, ported_number: !!billForm.ported, client_ref: billGetClientRef() });
       billWalletBalance = r.wallet_balance;
       logAudit('bill_data', `Sold ${chosen.name||chosen.plan_name} data to ${billForm.phone}`);
       toast('Data sent ✅'); billScreen='hub'; refreshMain();
@@ -8613,7 +8631,7 @@ function bindBillCableEvents(){
     if(!confirm(`Pay ${chosen.name||chosen.plan_name} for ${billForm.cableCustomerName}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     btn.disabled = true; btn.textContent = 'Processing…';
     try{
-      const r = await callBigisub('cable_purchase', { cable_type: billForm.cableType, card_no: billForm.cardNo.trim(), phone_number: billForm.phone.trim(), amount: Number(chosen.amount||chosen.price||0), customer_name: billForm.cableCustomerName });
+      const r = await callBigisub('cable_purchase', { cable_type: billForm.cableType, card_no: billForm.cardNo.trim(), phone_number: billForm.phone.trim(), amount: Number(chosen.amount||chosen.price||0), customer_name: billForm.cableCustomerName, client_ref: billGetClientRef() });
       billWalletBalance = r.wallet_balance;
       logAudit('bill_cable', `Paid ${chosen.name||chosen.plan_name} for card ${billForm.cardNo} (${billForm.cableCustomerName})`);
       toast('Subscription paid ✅'); billScreen='hub'; refreshMain();
@@ -8688,7 +8706,7 @@ function bindBillElectricityEvents(){
     if(!confirm(`Buy ₦${amount} token for ${billForm.elecCustomerName}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     btn.disabled = true; btn.textContent = 'Processing…';
     try{
-      const r = await callBigisub('electricity_pay', { company: billForm.company, meter_no: billForm.meterNo.trim(), meter_type: billForm.meterType, phone_number: billForm.phone.trim(), amount, customer_name: billForm.elecCustomerName });
+      const r = await callBigisub('electricity_pay', { company: billForm.company, meter_no: billForm.meterNo.trim(), meter_type: billForm.meterType, phone_number: billForm.phone.trim(), amount, customer_name: billForm.elecCustomerName, client_ref: billGetClientRef() });
       billWalletBalance = r.wallet_balance;
       const token = r.token || (r.bigisub_response && r.bigisub_response.token);
       logAudit('bill_electricity', `Sold ₦${amount} token for meter ${billForm.meterNo} (${billForm.elecCustomerName})`);
@@ -8747,7 +8765,7 @@ function bindBillBettingEvents(){
     }
     btn.textContent = 'Funding…';
     try{
-      const r = await callBigisub('betting_fund', { biller_code: billForm.billerCode, customer_id: billForm.customerId.trim(), customer_name: validation.customer_name, amount, validation_reference: validation.validation_reference });
+      const r = await callBigisub('betting_fund', { biller_code: billForm.billerCode, customer_id: billForm.customerId.trim(), customer_name: validation.customer_name, amount, validation_reference: validation.validation_reference, client_ref: billGetClientRef() });
       billWalletBalance = r.wallet_balance;
       logAudit('bill_betting', `Funded ${billForm.customerId} (${validation.customer_name}) with ₦${amount}`);
       toast('Wallet funded ✅'); billScreen='hub'; refreshMain();
@@ -8798,7 +8816,7 @@ function bindBillResultCheckerEvents(){
     if(!confirm(`Buy ${qtyNum} × ${chosen.name||chosen.exam} PIN(s)? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     btn.disabled = true; btn.textContent = 'Processing…';
     try{
-      const r = await callBigisub('result_checker_purchase', { exam: chosen.exam||chosen.exam_type||chosen.name, quantity: qtyNum });
+      const r = await callBigisub('result_checker_purchase', { exam: chosen.exam||chosen.exam_type||chosen.name, quantity: qtyNum, client_ref: billGetClientRef() });
       billWalletBalance = r.wallet_balance;
       const pins = r.pins || (r.bigisub_response && r.bigisub_response.pins);
       logAudit('bill_result_checker', `Bought ${qtyNum} × ${chosen.name||chosen.exam} PIN(s)`);
@@ -8891,8 +8909,8 @@ function bindBillIspEvents(){
     btn.disabled = true; btn.textContent = 'Processing…';
     try{
       const r = isSmile
-        ? await callBigisub('isp_smile_topup', { plan: chosen.id, phone_number: billForm.phone.trim(), email: billForm.email.trim(), account_id: billForm.accountId.trim() })
-        : await callBigisub('isp_spectranet_topup', { plan: chosen.id, phone_number: billForm.phone.trim(), spectranet_number: billForm.spectranetNumber.trim(), quantity: Math.max(1,Number(billForm.qty||1)) });
+        ? await callBigisub('isp_smile_topup', { plan: chosen.id, phone_number: billForm.phone.trim(), email: billForm.email.trim(), account_id: billForm.accountId.trim(), client_ref: billGetClientRef() })
+        : await callBigisub('isp_spectranet_topup', { plan: chosen.id, phone_number: billForm.phone.trim(), spectranet_number: billForm.spectranetNumber.trim(), quantity: Math.max(1,Number(billForm.qty||1)), client_ref: billGetClientRef() });
       billWalletBalance = r.wallet_balance;
       logAudit('bill_isp', `Bought ${chosen.name||chosen.plan_name} (${isSmile?'Smile':'Spectranet'})`);
       toast('Plan purchased ✅'); billScreen='hub'; refreshMain();

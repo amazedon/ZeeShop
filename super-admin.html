@@ -65,6 +65,17 @@
   .row-expand{cursor:pointer;color:var(--marigold-dark);font-weight:700;font-size:12px;background:none;border:none;padding:4px 0;}
   .unauthorized{max-width:420px;text-align:center;}
   @media(max-width:640px){.stats-row{grid-template-columns:1fr 1fr;}}
+
+  .section-nav{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:22px;}
+  .section-nav a{color:var(--ink);background:#fff;border:1px solid var(--line);padding:7px 13px;border-radius:999px;font-size:12.5px;font-weight:700;text-decoration:none;}
+  .section-nav a:hover{border-color:var(--marigold-dark);}
+  .section-heading{font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--text-dim);margin:28px 0 10px;}
+  .section-heading:first-of-type{margin-top:0;}
+  .bp-badge{display:inline-block;padding:3px 10px;border-radius:999px;font-size:11.5px;font-weight:800;}
+  .bp-success{background:var(--green-bg);color:var(--green);}
+  .bp-failed{background:var(--red-bg);color:var(--red);}
+  .bp-pending{background:#FDF1DC;color:var(--marigold-dark);}
+  .warn-note{background:#FDF1DC;color:var(--marigold-dark);padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:14px;font-weight:600;}
 </style>
 </head>
 <body>
@@ -94,50 +105,113 @@
     <button id="logout-btn">Log Out</button>
   </div>
   <main>
-    <div class="stats-row">
-      <div class="stat-card"><div class="num" id="stat-total">0</div><div class="label">Total Businesses</div></div>
-      <div class="stat-card"><div class="num" id="stat-free">0</div><div class="label">Free Plan</div></div>
-      <div class="stat-card"><div class="num" id="stat-pro">0</div><div class="label">Pro Plan</div></div>
-      <div class="stat-card"><div class="num" id="stat-boss">0</div><div class="label">Boss Plan</div></div>
+    <div class="section-nav">
+      <a href="#businesses-section">Businesses</a>
+      <a href="#bill-payments-section">Bill Payments</a>
+      <a href="#content-section">Platform Content</a>
+      <a href="#notify-section">Notifications</a>
     </div>
 
-    <div class="card">
-      <h2>🌐 Landing Page Content</h2>
-      <p class="subtle">Edits the About Us and Contact Us text shown on zed.ememart.com and inside the app's own About/Contact screens — one shared set of text for the whole platform, not per-business.</p>
-      <div id="site-content-status"></div>
-      <div id="site-content-editor">
-        <p class="subtle">Loading…</p>
+    <div id="businesses-section">
+      <div class="section-heading">Businesses & Subscriptions</div>
+      <div class="stats-row">
+        <div class="stat-card"><div class="num" id="stat-total">0</div><div class="label">Total Businesses</div></div>
+        <div class="stat-card"><div class="num" id="stat-free">0</div><div class="label">Free Plan</div></div>
+        <div class="stat-card"><div class="num" id="stat-pro">0</div><div class="label">Pro Plan</div></div>
+        <div class="stat-card"><div class="num" id="stat-boss">0</div><div class="label">Boss Plan</div></div>
+      </div>
+
+      <div class="card">
+        <h2>All Registered Businesses</h2>
+        <p class="subtle">Synced from businesses that have signed up and connected online at least once — offline-only signups appear here once their device reconnects.</p>
+        <div id="biz-status"></div>
+        <div class="toolbar">
+          <input type="search" id="biz-search" placeholder="Search by business name, country, or business ID…">
+          <button class="btn-outline-sm" id="export-csv-btn">⬇ Export CSV</button>
+        </div>
+        <div class="table-wrap">
+          <table id="biz-table">
+            <thead>
+              <tr><th>Business</th><th>Owner</th><th>Country</th><th>Plan</th><th>Staff</th><th>Signed Up</th><th>Actions</th></tr>
+            </thead>
+            <tbody id="biz-tbody"></tbody>
+          </table>
+        </div>
+        <div id="biz-empty" class="empty-note hidden">No businesses have synced yet.</div>
+        <div id="biz-no-match" class="empty-note hidden">No businesses match that search.</div>
       </div>
     </div>
 
-    <div class="card">
-      <h2>📣 Send Notification</h2>
-      <p class="subtle">Sends a push notification to devices with notifications enabled. Leave "Target Business" blank to send to everyone across the platform.</p>
-      <div id="broadcast-status"></div>
-      <div class="field"><label>Title</label><input id="bc-title" placeholder="e.g. New feature: Auto-Renewal"></div>
-      <div class="field"><label>Message</label><input id="bc-body" placeholder="Short message body"></div>
-      <div class="field"><label>Target Business ID (optional)</label><input id="bc-business-id" placeholder="Leave blank for all businesses"></div>
-      <button class="btn btn-primary" id="send-broadcast-btn">Send Notification</button>
+    <div id="bill-payments-section">
+      <div class="section-heading">💳 Bill Payments</div>
+
+      <div class="card">
+        <h2>Bigisub Platform Wallet</h2>
+        <p class="subtle">The ONE shared Bigisub balance that funds every business's airtime/data/bill purchases. If this runs dry, purchases fail for everyone — regardless of any individual business's own Bill Wallet balance. Keep an eye on this.</p>
+        <div id="bp-bigisub-balance-box"><p class="subtle">Loading…</p></div>
+      </div>
+
+      <div class="stats-row" style="grid-template-columns:repeat(4,1fr);">
+        <div class="stat-card"><div class="num" id="bp-stat-wallets">0</div><div class="label">Business Wallets Funded</div></div>
+        <div class="stat-card"><div class="num" id="bp-stat-liability">—</div><div class="label">Total Wallet Liability</div></div>
+        <div class="stat-card"><div class="num" id="bp-stat-transactions">0</div><div class="label">Transactions</div></div>
+        <div class="stat-card"><div class="num" id="bp-stat-profit">—</div><div class="label">Profit (markups)</div></div>
+      </div>
+
+      <div class="card">
+        <h2>By Service</h2>
+        <p class="subtle">Successful-transaction volume and revenue, broken down by service.</p>
+        <div id="bp-by-service-box"><p class="subtle">Loading…</p></div>
+      </div>
+
+      <div class="card">
+        <h2>Business Wallets & Markups</h2>
+        <p class="subtle">Every business that has funded a Bill Wallet or set up a dedicated top-up account.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Business</th><th>Wallet Balance</th><th>Markup</th><th>Dedicated Account</th></tr></thead>
+            <tbody id="bp-wallets-tbody"></tbody>
+          </table>
+        </div>
+        <div id="bp-wallets-empty" class="empty-note hidden">No business has funded a Bill Wallet yet.</div>
+      </div>
+
+      <div class="card">
+        <h2>Recent Transactions</h2>
+        <p class="subtle">Latest 30 across the whole platform. Pending or failed ones can be manually re-checked with Bigisub.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Business</th><th>Service</th><th>Recipient</th><th>Amount</th><th>Status</th><th>When</th><th></th></tr></thead>
+            <tbody id="bp-recent-tbody"></tbody>
+          </table>
+        </div>
+        <div id="bp-recent-empty" class="empty-note hidden">No bill payment transactions yet.</div>
+      </div>
     </div>
 
-    <div class="card">
-      <h2>All Registered Businesses</h2>
-      <p class="subtle">Synced from businesses that have signed up and connected online at least once — offline-only signups appear here once their device reconnects.</p>
-      <div id="biz-status"></div>
-      <div class="toolbar">
-        <input type="search" id="biz-search" placeholder="Search by business name, country, or business ID…">
-        <button class="btn-outline-sm" id="export-csv-btn">⬇ Export CSV</button>
+    <div id="content-section">
+      <div class="section-heading">Platform Content</div>
+      <div class="card">
+        <h2>🌐 Landing Page Content</h2>
+        <p class="subtle">Edits the About Us and Contact Us text shown on zed.ememart.com and inside the app's own About/Contact screens — one shared set of text for the whole platform, not per-business.</p>
+        <div id="site-content-status"></div>
+        <div id="site-content-editor">
+          <p class="subtle">Loading…</p>
+        </div>
       </div>
-      <div class="table-wrap">
-        <table id="biz-table">
-          <thead>
-            <tr><th>Business</th><th>Owner</th><th>Country</th><th>Plan</th><th>Staff</th><th>Signed Up</th><th>Actions</th></tr>
-          </thead>
-          <tbody id="biz-tbody"></tbody>
-        </table>
+    </div>
+
+    <div id="notify-section">
+      <div class="section-heading">Notifications</div>
+      <div class="card">
+        <h2>📣 Send Notification</h2>
+        <p class="subtle">Sends a push notification to devices with notifications enabled. Leave "Target Business" blank to send to everyone across the platform.</p>
+        <div id="broadcast-status"></div>
+        <div class="field"><label>Title</label><input id="bc-title" placeholder="e.g. New feature: Auto-Renewal"></div>
+        <div class="field"><label>Message</label><input id="bc-body" placeholder="Short message body"></div>
+        <div class="field"><label>Target Business ID (optional)</label><input id="bc-business-id" placeholder="Leave blank for all businesses"></div>
+        <button class="btn btn-primary" id="send-broadcast-btn">Send Notification</button>
       </div>
-      <div id="biz-empty" class="empty-note hidden">No businesses have synced yet.</div>
-      <div id="biz-no-match" class="empty-note hidden">No businesses match that search.</div>
     </div>
   </main>
 </div>
@@ -239,6 +313,7 @@
     dashScreen.classList.remove('hidden');
     loadBusinesses();
     loadSiteContent();
+    loadBillPaymentsOverview();
   }
 
   const SITE_SECTIONS = [
@@ -296,6 +371,102 @@
       });
     }catch(e){
       box.innerHTML = `<div class="err">Could not load: ${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  function fmtNaira(n){
+    if(n===null || n===undefined) return '—';
+    return '₦' + Number(n).toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  async function loadBillPaymentsOverview(){
+    const balBox = document.getElementById('bp-bigisub-balance-box');
+    try{
+      const r = await callAdminApi('bill_payments_overview', {});
+
+      // Bigisub platform wallet — the one number that matters most here.
+      if(r.bigisub_error){
+        balBox.innerHTML = `<div class="warn-note">Could not fetch Bigisub's balance: ${escapeHtml(r.bigisub_error)}</div>`;
+      }else{
+        balBox.innerHTML = `<div style="font-size:32px;font-weight:900;color:var(--ink);">${fmtNaira(r.bigisub_wallet_balance)}</div>`;
+      }
+
+      document.getElementById('bp-stat-wallets').textContent = r.businesses_with_wallet || 0;
+      document.getElementById('bp-stat-liability').textContent = fmtNaira(r.total_bill_wallet_balance);
+      document.getElementById('bp-stat-transactions').textContent = r.total_transactions || 0;
+      document.getElementById('bp-stat-profit').textContent = fmtNaira(r.total_profit);
+
+      // By service
+      const svcBox = document.getElementById('bp-by-service-box');
+      const services = Object.keys(r.by_service || {});
+      if(services.length === 0){
+        svcBox.innerHTML = '<p class="subtle">No transactions yet.</p>';
+      }else{
+        svcBox.innerHTML = `
+          <div class="table-wrap"><table>
+            <thead><tr><th>Service</th><th>Count</th><th>Revenue</th></tr></thead>
+            <tbody>
+              ${services.map(s=>`<tr><td>${escapeHtml(s)}</td><td>${r.by_service[s].count}</td><td>${fmtNaira(r.by_service[s].revenue)}</td></tr>`).join('')}
+            </tbody>
+          </table></div>
+        `;
+      }
+
+      // Business wallets & markups — only businesses that have actually
+      // funded a wallet or set up a dedicated account, not every business.
+      const walletBusinesses = (r.businesses || []).filter(b => Number(b.bill_wallet_balance||0) > 0 || b.psa_account_number);
+      const walletsTbody = document.getElementById('bp-wallets-tbody');
+      const walletsEmpty = document.getElementById('bp-wallets-empty');
+      if(walletBusinesses.length === 0){
+        walletsTbody.innerHTML = '';
+        walletsEmpty.classList.remove('hidden');
+      }else{
+        walletsEmpty.classList.add('hidden');
+        walletsTbody.innerHTML = walletBusinesses.map(b => `
+          <tr>
+            <td>${escapeHtml(b.name || '—')}</td>
+            <td>${fmtNaira(b.bill_wallet_balance)}</td>
+            <td>${b.bill_markup_percent ?? 0}%</td>
+            <td>${b.psa_account_number ? `${escapeHtml(b.psa_account_number)} <span class="subtle">(${escapeHtml(b.psa_bank_name||'')})</span>` : '<span class="subtle">Not set up</span>'}</td>
+          </tr>
+        `).join('');
+      }
+
+      // Recent transactions, with Retry for anything not yet successful.
+      const recentTbody = document.getElementById('bp-recent-tbody');
+      const recentEmpty = document.getElementById('bp-recent-empty');
+      const recent = r.recent_transactions || [];
+      if(recent.length === 0){
+        recentTbody.innerHTML = '';
+        recentEmpty.classList.remove('hidden');
+      }else{
+        recentEmpty.classList.add('hidden');
+        recentTbody.innerHTML = recent.map(t => `
+          <tr>
+            <td>${escapeHtml(t.business_name)}</td>
+            <td>${escapeHtml(t.service_label || '—')}</td>
+            <td>${escapeHtml(t.recipient || '—')}</td>
+            <td>${fmtNaira(t.sale_price)}</td>
+            <td><span class="bp-badge bp-${t.status==='success'?'success':t.status==='failed'?'failed':'pending'}">${escapeHtml(t.status)}</span></td>
+            <td>${new Date(t.created_at).toLocaleString()}</td>
+            <td>${t.status!=='success' ? `<button class="btn-outline-sm" data-bp-retry="${t.id}">Retry</button>` : ''}</td>
+          </tr>
+        `).join('');
+        document.querySelectorAll('[data-bp-retry]').forEach(btn=>{
+          btn.addEventListener('click', async ()=>{
+            btn.disabled = true; btn.textContent = '…';
+            try{
+              const result = await callAdminApi('retry_bill_transaction', { transaction_id: btn.dataset.bpRetry });
+              loadBillPaymentsOverview(); // simplest correct refresh — re-pulls everything, including this row's new status
+            }catch(e){
+              alert('Retry failed: ' + e.message);
+              btn.disabled = false; btn.textContent = 'Retry';
+            }
+          });
+        });
+      }
+    }catch(e){
+      balBox.innerHTML = `<div class="err">Could not load bill payments overview: ${escapeHtml(e.message)}</div>`;
     }
   }
 

@@ -37,6 +37,25 @@ const corsHeaders = {
 
 const VALID_PLANS = ["free", "pro", "boss"];
 
+// Same Bigisub credentials bigisub-proxy/index.ts uses — Supabase secrets
+// are shared project-wide across every edge function, so nothing extra
+// needs to be set here. This function only ever reads Bigisub data
+// (platform wallet balance, transaction requery) for monitoring — it
+// never makes a purchase, so it doesn't need BIGISUB_PIN.
+const BIGISUB_BASE = Deno.env.get("BIGISUB_BASE_URL") || "https://api.bigisub.ng";
+const BIGISUB_TOKEN = Deno.env.get("BIGISUB_TOKEN") || "";
+
+async function bigisub(method: "GET" | "POST", path: string) {
+  const res = await fetch(`${BIGISUB_BASE}${path}`, {
+    method,
+    headers: { Authorization: `Token ${BIGISUB_TOKEN}`, "Content-Type": "application/json" },
+  });
+  let data: any = null;
+  try { data = await res.json(); } catch (_e) { /* non-JSON response */ }
+  if (!res.ok) throw new Error((data && (data.message || data.detail)) || `Bigisub request failed (${res.status})`);
+  return data;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   try {
@@ -255,6 +274,125 @@ Deno.serve(async (req: Request) => {
       }).then((r) => { if (r.error) console.log("audit_log_platform insert skipped:", r.error.message); });
 
       return json({ ok: true, changed: changes }, 200);
+    }
+
+    // BILL PAYMENTS OVERVIEW — platform-wide monitoring for the Bigisub/
+    // Flutterwave bill-payments feature. Three things a platform owner
+    // actually needs eyes on, none of which are visible from inside any
+    // single business's own app:
+    //   1. Bigisub's own wallet balance — the ONE shared balance that
+    //      funds every business's purchases. If this runs dry, purchases
+    //      fail for everyone regardless of individual Bill Wallet
+    //      balances, so it's the single most operationally important
+    //      number here.
+    //   2. Aggregate Bill Wallet liability — the sum of what every
+    //      business has prepaid and is still owed as spendable credit.
+    //   3. Revenue/profit from markups, and recent activity to spot
+    //      stuck transactions needing manual intervention.
+    // The transaction query below is capped at the last 2000 rows for
+    // aggregation — an honest approximation, not a true unlimited total.
+    // At real scale this should become a database-side aggregate (a SQL
+    // view or RPC) instead of pulling rows into JS to sum them.
+    if (action === "bill_payments_overview") {
+      let bigisubWalletBalance: number | null = null;
+      let bigisubError: string | null = null;
+      if (!BIGISUB_TOKEN) {
+        bigisubError = "BIGISUB_TOKEN isn't set on this function yet.";
+      } else {
+        try {
+          const w = await bigisub("GET", "/api/v2/financial/wallet/balance/");
+          bigisubWalletBalance = w?.balance ?? w?.data?.balance ?? w?.wallet_balance ?? null;
+        } catch (e) {
+          bigisubError = e instanceof Error ? e.message : "Could not reach Bigisub.";
+        }
+      }
+
+      const { data: businesses, error: bizErr } = await admin
+        .from("businesses")
+        .select("id, name, bill_wallet_balance, bill_markup_percent, psa_account_number, psa_bank_name");
+      if (bizErr) return json({ error: bizErr.message }, 500);
+
+      const bizNameById: Record<string, string> = {};
+      let totalBillWallet = 0;
+      let businessesWithWallet = 0;
+      (businesses || []).forEach((b: any) => {
+        bizNameById[b.id] = b.name || "(unnamed)";
+        const bal = Number(b.bill_wallet_balance || 0);
+        totalBillWallet += bal;
+        if (bal > 0 || b.psa_account_number) businessesWithWallet++;
+      });
+
+      const { data: txns, error: txErr } = await admin
+        .from("bill_transactions")
+        .select("business_id, service, status, cost_price, sale_price")
+        .order("created_at", { ascending: false })
+        .limit(2000);
+      if (txErr) return json({ error: txErr.message }, 500);
+
+      let totalRevenue = 0, totalCost = 0;
+      const byStatus: Record<string, number> = {};
+      const byService: Record<string, { count: number; revenue: number }> = {};
+      (txns || []).forEach((t: any) => {
+        byStatus[t.status] = (byStatus[t.status] || 0) + 1;
+        if (!byService[t.service]) byService[t.service] = { count: 0, revenue: 0 };
+        byService[t.service].count++;
+        if (t.status === "success") {
+          totalRevenue += Number(t.sale_price || 0);
+          totalCost += Number(t.cost_price || 0);
+          byService[t.service].revenue += Number(t.sale_price || 0);
+        }
+      });
+
+      const { data: recent, error: recentErr } = await admin
+        .from("bill_transactions")
+        .select("id, business_id, service_label, recipient, sale_price, status, created_at, bigisub_tranx_id")
+        .order("created_at", { ascending: false })
+        .limit(30);
+      if (recentErr) return json({ error: recentErr.message }, 500);
+      const recentWithNames = (recent || []).map((t: any) => ({ ...t, business_name: bizNameById[t.business_id] || "(deleted business)" }));
+
+      return json({
+        bigisub_wallet_balance: bigisubWalletBalance, bigisub_error: bigisubError,
+        total_bill_wallet_balance: totalBillWallet, businesses_with_wallet: businessesWithWallet,
+        businesses: businesses || [],
+        total_transactions: (txns || []).length, transactions_capped_at: 2000,
+        total_revenue: totalRevenue, total_cost: totalCost, total_profit: totalRevenue - totalCost,
+        by_status: byStatus, by_service: byService,
+        recent_transactions: recentWithNames,
+      }, 200);
+    }
+
+    // Force a status re-check on ANY business's bill-payment transaction
+    // (not just your own, unlike the equivalent action in bigisub-proxy) —
+    // for manually unsticking a pending/failed transaction a business
+    // reports as stuck, without needing to go into their account.
+    if (action === "retry_bill_transaction") {
+      const transactionId = params.transaction_id;
+      if (!transactionId) return json({ error: "Missing transaction_id" }, 400);
+      const { data: tx, error: txErr } = await admin.from("bill_transactions").select("*").eq("id", transactionId).maybeSingle();
+      if (txErr) return json({ error: txErr.message }, 500);
+      if (!tx) return json({ error: "Transaction not found." }, 404);
+      if (!tx.bigisub_tranx_id) return json({ error: "This transaction has no Bigisub reference to check." }, 400);
+
+      // Betting uses its own dedicated requery endpoint (GET, query param);
+      // everything else uses the generic anubis requery (POST, path param).
+      // Same caveat as in bigisub-proxy: the betting query param name is a
+      // best guess, not confirmed from docs.
+      const data = tx.service === "betting"
+        ? await bigisub("GET", `/api/v2/betting/requery/?reference=${encodeURIComponent(tx.bigisub_tranx_id)}`)
+        : await bigisub("POST", `/api/v2/anubis/transactions/${tx.bigisub_tranx_id}/requery/`);
+      const statusStr = (data?.Status || data?.status || "").toString().toLowerCase();
+      const newStatus = statusStr.includes("success") ? "success" : statusStr.includes("fail") ? "failed" : tx.status;
+      await admin.from("bill_transactions").update({ status: newStatus, bigisub_response: data }).eq("id", transactionId);
+
+      await admin.from("audit_log_platform").insert({
+        actor_auth_user_id: callerData.user.id,
+        action: "retry_bill_transaction",
+        target_business_id: tx.business_id,
+        detail: `Re-checked transaction ${transactionId} — status: ${newStatus}.`,
+      }).then((r) => { if (r.error) console.log("audit_log_platform insert skipped:", r.error.message); });
+
+      return json({ status: newStatus }, 200);
     }
 
     // SITE CONTENT — the public landing page and in-app About/Contact

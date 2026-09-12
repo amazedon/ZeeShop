@@ -163,19 +163,22 @@ Deno.serve(async (req: Request) => {
       .eq("auth_user_id", callerData.user.id)
       .maybeSingle();
     if (callerRowErr) return json({ error: callerRowErr.message }, 500);
-    if (!caller || caller.is_active === false) return json({ error: "Account not found or inactive." }, 403);
+    if (!caller) return json({ error: `Account not found. No app_users row has auth_user_id = ${callerData.user.id}. If this is a staff device-PIN login, that row's auth_user_id may never have been set — check that column for this user in Supabase.` }, 403);
+    if (caller.is_active === false) return json({ error: "This account has been deactivated." }, 403);
 
     const isMaster = caller.role === "master";
     const canTransact = isMaster || (caller.role === "staff" && !!caller.can_bill_payments);
     if (!canTransact) return json({ error: "You don't have permission for bill payments." }, 403);
 
     const businessId = caller.business_id;
+    if (!businessId) return json({ error: `Your account (app_users.id = ${caller.id}) has no business_id set — it isn't linked to a business on the server yet. This can happen if this account was created/updated locally and hasn't finished syncing. Try again once the device shows fully synced (check the sync status dot), or check that row's business_id directly in Supabase.` }, 404);
     const { data: biz, error: bizErr } = await admin
       .from("businesses")
       .select("id, name, currency, country, bill_wallet_balance, bill_markup_percent, psa_account_reference, psa_account_number, psa_bank_name, psa_status, psa_last_synced_at")
       .eq("id", businessId)
       .maybeSingle();
-    if (bizErr || !biz) return json({ error: "Business not found." }, 404);
+    if (bizErr) return json({ error: bizErr.message }, 500);
+    if (!biz) return json({ error: `No business found with id = ${businessId} (from your app_users.business_id). That id doesn't match any row in businesses — check for a mismatch (e.g. a locally-generated id that never got the server-assigned one back) directly in Supabase.` }, 404);
 
     const { action, ...params } = await req.json();
     const markupPercent = Number(biz.bill_markup_percent || 0);

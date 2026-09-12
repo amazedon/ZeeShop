@@ -8181,8 +8181,8 @@ function screenBillPayments(){
         ${billLoading ? 'Loading…' : (billWalletBalance===null ? '—' : fmtMoney(billWalletBalance))}
       </div>
       <div style="display:flex;gap:8px;">
-        <button class="btn btn-sm" style="background:#fff;color:var(--marigold-dark);flex:1;" id="bp-topup-btn">＋ Top Up</button>
-        <button class="btn btn-sm btn-outline" style="border-color:rgba(255,255,255,0.6);color:#fff;flex:1;" id="bp-refresh-btn">↻ Refresh</button>
+        <button class="btn btn-sm" style="background:#fff;color:var(--marigold-dark);flex:1;" id="bp-topup-btn">＋ Add Money</button>
+        <button class="btn btn-sm btn-outline" style="border-color:rgba(255,255,255,0.6);color:#fff;flex:1;" id="bp-history-btn">🕐 History</button>
       </div>
     </div>
     ${isMaster() ? `
@@ -8236,8 +8236,8 @@ function bindBillPaymentsEvents(){
     if(goHist) goHist.addEventListener('click', ()=>{ billScreen='history'; billHistory=[]; refreshMain(); });
     const topupBtn = document.getElementById('bp-topup-btn');
     if(topupBtn) topupBtn.addEventListener('click', ()=>{ billScreen='topup'; refreshMain(); });
-    const refreshBtn = document.getElementById('bp-refresh-btn');
-    if(refreshBtn) refreshBtn.addEventListener('click', bpLoadWallet);
+    const historyBtn = document.getElementById('bp-history-btn');
+    if(historyBtn) historyBtn.addEventListener('click', ()=>{ billScreen='history'; billHistory=[]; refreshMain(); });
     const markupSave = document.getElementById('bp-markup-save');
     if(markupSave) markupSave.addEventListener('click', async ()=>{
       const val = Number(document.getElementById('bp-markup-input').value||0);
@@ -8285,7 +8285,7 @@ let billPsaPollTimer = null;
 
 function screenBillTopup(){
   return `
-    ${bpHeader('Top Up Bill Wallet')}
+    ${bpHeader('Add Money')}
     <div class="card">
       <p class="subtle">Fund your Bill Wallet to start selling airtime, data and bills. Payments are processed securely by Flutterwave.</p>
       <div style="display:flex;gap:8px;margin-bottom:12px;">

@@ -409,7 +409,12 @@ Deno.serve(async (req: Request) => {
           account_name: biz.name || "ZeeShop Business",
           email: callerData.user.email || `business-${businessId}@zeeshop.app`,
           mobilenumber: caller.phone || "08000000000",
-          country: biz.country || "NG",
+          // Hardcoded, not biz.country — Bigisub and every service in this
+          // feature are Nigeria-only, and biz.country likely stores a full
+          // name ("Nigeria") rather than the ISO2 code ("NG") Flutterwave's
+          // PSA endpoint actually requires, which is what triggered
+          // "country length must be 2 characters long."
+          country: "NG",
         }),
       });
       const flwData = await flwRes.json();

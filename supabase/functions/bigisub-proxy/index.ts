@@ -185,7 +185,7 @@ Deno.serve(async (req: Request) => {
     if (!businessId) return json({ error: `Your account (app_users.id = ${caller.id}) has no business_id set — it isn't linked to a business on the server yet. This can happen if this account was created/updated locally and hasn't finished syncing. Try again once the device shows fully synced (check the sync status dot), or check that row's business_id directly in Supabase.` }, 404);
     const { data: biz, error: bizErr } = await admin
       .from("businesses")
-      .select("id, name, currency, country, bill_wallet_balance, bill_markup_percent, bill_payments_pin_hash, psa_account_reference, psa_account_number, psa_bank_name, psa_status, psa_last_synced_at")
+      .select("id, name, currency, country, bill_wallet_balance, bill_markup_percent, bill_payments_pin_hash, bill_flat_fee_airtime, bill_flat_fee_electricity, bill_flat_fee_betting, psa_account_reference, psa_account_number, psa_bank_name, psa_status, psa_last_synced_at")
       .eq("id", businessId)
       .maybeSingle();
     if (bizErr) return json({ error: bizErr.message }, 500);
@@ -201,6 +201,11 @@ Deno.serve(async (req: Request) => {
         wallet_balance: Number(biz.bill_wallet_balance || 0), markup_percent: markupPercent, currency,
         psa_account_number: biz.psa_account_number || null, psa_bank_name: biz.psa_bank_name || null, psa_status: biz.psa_status || null,
         bill_pin_set: !!biz.bill_payments_pin_hash,
+        flat_fees: {
+          airtime: Number(biz.bill_flat_fee_airtime || 0),
+          electricity: Number(biz.bill_flat_fee_electricity || 0),
+          betting: Number(biz.bill_flat_fee_betting || 0),
+        },
       }, 200);
     }
     if (action === "data_plans") {
@@ -308,7 +313,7 @@ Deno.serve(async (req: Request) => {
     if (action === "set_bill_pin") {
       if (!isMaster) return json({ error: "Only the business owner can set the Bill Payments PIN." }, 403);
       const pin = String(params.pin || "");
-      if (!/^\d{4,6}$/.test(pin)) return json({ error: "PIN must be 4 to 6 digits." }, 400);
+      if (!/^\d{4}$/.test(pin)) return json({ error: "PIN must be exactly 4 digits." }, 400);
       const hash = await hashPin(pin);
       const { error } = await admin.from("businesses").update({ bill_payments_pin_hash: hash }).eq("id", businessId);
       if (error) return json({ error: error.message }, 500);
@@ -317,6 +322,55 @@ Deno.serve(async (req: Request) => {
     if (action === "clear_bill_pin") {
       if (!isMaster) return json({ error: "Only the business owner can remove the Bill Payments PIN." }, 403);
       const { error } = await admin.from("businesses").update({ bill_payments_pin_hash: null }).eq("id", businessId);
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true }, 200);
+    }
+
+    // Flat fee for the three free-typed-amount services. A percentage
+    // doesn't make sense here — 5% of a ₦100,000 electricity token and 5%
+    // of a ₦100 airtime top-up earn wildly different amounts for the same
+    // effort, so these three earn a fixed naira amount instead, regardless
+    // of the transaction size.
+    if (action === "set_flat_fee") {
+      if (!isMaster) return json({ error: "Only the business owner can change fees." }, 403);
+      const service = String(params.service || "");
+      const column = service === "airtime" ? "bill_flat_fee_airtime" : service === "electricity" ? "bill_flat_fee_electricity" : service === "betting" ? "bill_flat_fee_betting" : null;
+      if (!column) return json({ error: "Unknown service for a flat fee." }, 400);
+      const fee = Number(params.fee);
+      if (Number.isNaN(fee) || fee < 0) return json({ error: "Invalid fee." }, 400);
+      const { error } = await admin.from("businesses").update({ [column]: fee }).eq("id", businessId);
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true, fee }, 200);
+    }
+
+    // Exact sell price per plan, for the catalog-based services. Any plan
+    // without an override set here falls back to bill_markup_percent —
+    // see handlePurchase for exactly where that fallback happens.
+    if (action === "list_price_overrides") {
+      const { data: overrides, error } = await admin.from("bill_price_overrides").select("*").eq("business_id", businessId);
+      if (error) return json({ error: error.message }, 500);
+      return json({ overrides: overrides || [] }, 200);
+    }
+    if (action === "set_price_override") {
+      if (!isMaster) return json({ error: "Only the business owner can set prices." }, 403);
+      const service = String(params.service || "");
+      const planKey = String(params.plan_key || "");
+      const sellPrice = Number(params.sell_price);
+      if (!service || !planKey) return json({ error: "Missing service or plan_key." }, 400);
+      if (Number.isNaN(sellPrice) || sellPrice <= 0) return json({ error: "Enter a valid sell price." }, 400);
+      const { error } = await admin.from("bill_price_overrides").upsert({
+        id: crypto.randomUUID(), business_id: businessId, service, plan_key: planKey,
+        plan_label: params.plan_label ? String(params.plan_label) : null, sell_price: sellPrice,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "business_id,service,plan_key" });
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true }, 200);
+    }
+    if (action === "delete_price_override") {
+      if (!isMaster) return json({ error: "Only the business owner can remove a set price." }, 403);
+      const service = String(params.service || "");
+      const planKey = String(params.plan_key || "");
+      const { error } = await admin.from("bill_price_overrides").delete().eq("business_id", businessId).eq("service", service).eq("plan_key", planKey);
       if (error) return json({ error: error.message }, 500);
       return json({ ok: true }, 200);
     }
@@ -578,30 +632,63 @@ async function lookupPlanAmount(path: string, preferredKey: string, matchValue: 
   }
 }
 
+// Decides the actual sale price using whichever pricing engine applies to
+// this service — flat fee for the three free-typed-amount services, an
+// exact per-plan override (falling back to the percentage markup) for the
+// catalog-based ones. Called twice per purchase: once for the pre-check
+// (against the estimated cost) and once for the real charge (against
+// Bigisub's actual reported cost) — see handlePurchase.
+async function computeSalePrice(
+  admin: ReturnType<typeof createClient>,
+  businessId: string,
+  biz: { bill_flat_fee_airtime?: number; bill_flat_fee_electricity?: number; bill_flat_fee_betting?: number },
+  pricingService: string,
+  planKey: string | null,
+  quantity: number,
+  costPrice: number,
+  markupPercent: number,
+): Promise<number> {
+  const flatFeeColumn: Record<string, number | undefined> = {
+    airtime: biz.bill_flat_fee_airtime, electricity: biz.bill_flat_fee_electricity, betting: biz.bill_flat_fee_betting,
+  };
+  if (pricingService in flatFeeColumn) {
+    return Math.round((costPrice + Number(flatFeeColumn[pricingService] || 0)) * 100) / 100;
+  }
+  if (planKey) {
+    const { data: override } = await admin.from("bill_price_overrides")
+      .select("sell_price").eq("business_id", businessId).eq("service", pricingService).eq("plan_key", planKey).maybeSingle();
+    if (override) return Math.round(Number(override.sell_price) * quantity * 100) / 100;
+  }
+  return Math.round(costPrice * (1 + markupPercent / 100) * 100) / 100; // no override set for this plan yet — fall back to the global markup
+}
+
 async function handlePurchase(
   admin: ReturnType<typeof createClient>,
   action: string,
   params: Record<string, unknown>,
   businessId: string,
-  biz: { bill_wallet_balance: number | null },
+  biz: { bill_wallet_balance: number | null; bill_flat_fee_airtime?: number; bill_flat_fee_electricity?: number; bill_flat_fee_betting?: number },
   markupPercent: number,
   userId: string,
 ) {
   let serviceLabel = "";
   let recipient = "";
   let estimatedCost = 0; // always resolved to a real, verified amount below before any Bigisub call — see per-branch comments
+  let pricingService = ""; // which pricing engine applies — see computeSalePrice
+  let planKey: string | null = null; // for catalog-based services, the plan/exam identifier — null for flat-fee services
+  let quantity = 1; // only meaningfully >1 for result_checker and ISP-Spectranet
   let bigisubCall: () => Promise<any>;
 
   if (action === "airtime_purchase") {
     const { network, phone_number, amount } = params as { network: number; phone_number: string; amount: number };
     if (!network || !phone_number || !amount) return json({ error: "Missing network, phone_number, or amount." }, 400);
-    serviceLabel = "Airtime"; recipient = String(phone_number); estimatedCost = Number(amount);
+    serviceLabel = "Airtime"; recipient = String(phone_number); estimatedCost = Number(amount); pricingService = "airtime";
     bigisubCall = () => bigisub("POST", EP.AIRTIME_PURCHASE, { network, phone_number, amount: String(amount), airtime_type: "vtu", pin: BIGISUB_PIN });
 
   } else if (action === "data_purchase") {
     const { network, phone_number, plan, ported_number } = params as { network: number; phone_number: string; plan: number; ported_number?: boolean };
     if (!network || !phone_number || !plan) return json({ error: "Missing network, phone_number, or plan." }, 400);
-    serviceLabel = "Data"; recipient = String(phone_number);
+    serviceLabel = "Data"; recipient = String(phone_number); pricingService = "data"; planKey = String(plan);
     // Only a plan ID comes from the client — verify its real price against
     // Bigisub's own plan list rather than trusting whatever the client
     // displayed (client-side prices are for UI only, never authoritative).
@@ -611,56 +698,54 @@ async function handlePurchase(
     bigisubCall = () => bigisub("POST", EP.DATA_PURCHASE, { network, phone_number, plan, pin: BIGISUB_PIN, ported_number: !!ported_number });
 
   } else if (action === "cable_purchase") {
-    const { cable_type, card_no, phone_number, amount, customer_name } = params as { cable_type: string; card_no: string; phone_number: string; amount: number; customer_name: string };
+    const { cable_type, card_no, phone_number, amount, customer_name, plan_id } = params as { cable_type: string; card_no: string; phone_number: string; amount: number; customer_name: string; plan_id?: string | number };
     if (!cable_type || !card_no || !phone_number || !amount || !customer_name) return json({ error: "Missing cable_type, card_no, phone_number, amount, or customer_name (verify the card first)." }, 400);
-    serviceLabel = "Cable TV"; recipient = String(card_no); estimatedCost = Number(amount);
+    serviceLabel = "Cable TV"; recipient = String(card_no); estimatedCost = Number(amount); pricingService = "cable";
+    planKey = plan_id != null ? String(plan_id) : null; // older clients without plan_id just fall back to the markup — no override lookup possible without it
     bigisubCall = () => bigisub("POST", EP.CABLE_PURCHASE, { cable_type, card_no, phone_number, amount: Number(amount), Customer: customer_name, pin: BIGISUB_PIN });
 
   } else if (action === "electricity_pay") {
     const { company, meter_no, meter_type, phone_number, amount, customer_name } = params as { company: string; meter_no: string; meter_type: string; phone_number: string; amount: number; customer_name: string };
     if (!company || !meter_no || !meter_type || !phone_number || !amount || !customer_name) return json({ error: "Missing company, meter_no, meter_type, phone_number, amount, or customer_name (verify the meter first)." }, 400);
-    serviceLabel = "Electricity"; recipient = String(meter_no); estimatedCost = Number(amount);
+    serviceLabel = "Electricity"; recipient = String(meter_no); estimatedCost = Number(amount); pricingService = "electricity";
     bigisubCall = () => bigisub("POST", EP.ELECTRICITY_PAY, { company, meter_no, meter_type, phone_number, amount: Number(amount), Customer_name: customer_name, pin: BIGISUB_PIN });
 
   } else if (action === "betting_fund") {
     const { biller_code, customer_id, customer_name, amount, validation_reference } = params as { biller_code: string; customer_id: string; customer_name: string; amount: number; validation_reference: string };
     if (!biller_code || !customer_id || !customer_name || !amount || !validation_reference) return json({ error: "Missing biller_code, customer_id, customer_name, amount, or validation_reference (validate first — and don't delay before funding, the reference is short-lived)." }, 400);
-    serviceLabel = "Betting Wallet"; recipient = String(customer_id); estimatedCost = Number(amount);
+    serviceLabel = "Betting Wallet"; recipient = String(customer_id); estimatedCost = Number(amount); pricingService = "betting";
     bigisubCall = () => bigisub("POST", EP.BETTING_FUND, { biller_code, customer_id, customer_name, amount: Number(amount), validation_reference, pin_code: BIGISUB_PIN });
 
   } else if (action === "result_checker_purchase") {
-    const { exam, quantity } = params as { exam: string; quantity: number };
-    if (!exam || !quantity) return json({ error: "Missing exam or quantity." }, 400);
-    serviceLabel = "Result Checker"; recipient = `${exam} × ${quantity}`;
+    const { exam, quantity: qty } = params as { exam: string; quantity: number };
+    if (!exam || !qty) return json({ error: "Missing exam or quantity." }, 400);
+    serviceLabel = "Result Checker"; recipient = `${exam} × ${qty}`; pricingService = "result_checker"; planKey = String(exam); quantity = Number(qty);
     const unitPrice = await lookupPlanAmount(EP.RESULT_CHECKER_PRICES, "prices", exam, ["exam", "exam_type", "name"]);
     if (unitPrice === null) return json({ error: "Could not verify this exam's price right now — please try again in a moment." }, 502);
-    estimatedCost = unitPrice * Number(quantity);
-    bigisubCall = () => bigisub("POST", EP.RESULT_CHECKER_PURCHASE, { exam, quantity: Number(quantity), pin_code: BIGISUB_PIN });
+    estimatedCost = unitPrice * quantity;
+    bigisubCall = () => bigisub("POST", EP.RESULT_CHECKER_PURCHASE, { exam, quantity, pin_code: BIGISUB_PIN });
 
   } else if (action === "isp_smile_topup") {
     const { plan, phone_number, email, account_id } = params as { plan: number; phone_number: string; email: string; account_id: string };
     if (!plan || !phone_number || !email || !account_id) return json({ error: "Missing plan, phone_number, email, or account_id (verify the account first)." }, 400);
-    serviceLabel = "ISP — Smile"; recipient = String(account_id);
+    serviceLabel = "ISP — Smile"; recipient = String(account_id); pricingService = "isp_smile"; planKey = String(plan);
     const price = await lookupPlanAmount(EP.ISP_SMILE_PLANS, "plans", plan, ["id"]);
     if (price === null) return json({ error: "Could not verify this plan's price right now — please try again in a moment." }, 502);
     estimatedCost = price;
     bigisubCall = () => bigisub("POST", EP.ISP_SMILE_TOPUP, { plan, phone_number, email, account_id, pin: BIGISUB_PIN });
 
   } else { // isp_spectranet_topup
-    const { plan, phone_number, spectranet_number, quantity } = params as { plan: number; phone_number: string; spectranet_number: string; quantity: number };
-    if (!plan || !phone_number || !spectranet_number || !quantity) return json({ error: "Missing plan, phone_number, spectranet_number, or quantity." }, 400);
-    serviceLabel = "ISP — Spectranet"; recipient = String(spectranet_number);
+    const { plan, phone_number, spectranet_number, quantity: qty } = params as { plan: number; phone_number: string; spectranet_number: string; quantity: number };
+    if (!plan || !phone_number || !spectranet_number || !qty) return json({ error: "Missing plan, phone_number, spectranet_number, or quantity." }, 400);
+    serviceLabel = "ISP — Spectranet"; recipient = String(spectranet_number); pricingService = "isp_spectranet"; planKey = String(plan); quantity = Number(qty);
     const unitPrice = await lookupPlanAmount(EP.ISP_SPECTRANET_PLANS, "plans", plan, ["id"]);
     if (unitPrice === null) return json({ error: "Could not verify this plan's price right now — please try again in a moment." }, 502);
-    estimatedCost = unitPrice * Number(quantity);
-    bigisubCall = () => bigisub("POST", EP.ISP_SPECTRANET_TOPUP, { plan, phone_number, spectranet_number, quantity: Number(quantity), pin: BIGISUB_PIN });
+    estimatedCost = unitPrice * quantity;
+    bigisubCall = () => bigisub("POST", EP.ISP_SPECTRANET_TOPUP, { plan, phone_number, spectranet_number, quantity, pin: BIGISUB_PIN });
   }
 
-  // Every branch above now resolves a real, verified estimatedCost before
-  // reaching here — so this is a genuine affordability check for all 8
-  // services, not just the 4 that originally passed a naira amount.
   const preCheckBalance = Number(biz.bill_wallet_balance || 0);
-  const estimatedSale = Math.round(estimatedCost * (1 + markupPercent / 100) * 100) / 100;
+  const estimatedSale = await computeSalePrice(admin, businessId, biz, pricingService, planKey, quantity, estimatedCost, markupPercent);
   if (preCheckBalance < estimatedSale) return json({ error: "Insufficient Bill Wallet balance. Please top up." }, 400);
 
   // ---- Idempotency: reserve a row BEFORE calling Bigisub, keyed on the
@@ -712,7 +797,12 @@ async function handlePurchase(
   }
 
   const costPrice = extractCost(bigisubResponse, estimatedCost);
-  const salePrice = Math.round(costPrice * (1 + markupPercent / 100) * 100) / 100;
+  // Recomputed against Bigisub's ACTUAL reported cost, not just the
+  // pre-check estimate — for flat-fee services this can differ slightly
+  // if Bigisub's real charge isn't exactly what was estimated; for
+  // override-priced plans it's identical to estimatedSale either way,
+  // since a fixed sell price doesn't depend on the underlying cost at all.
+  const salePrice = await computeSalePrice(admin, businessId, biz, pricingService, planKey, quantity, costPrice, markupPercent);
   const bigisubTranxId = extractTranxId(bigisubResponse);
   const status = extractStatus(bigisubResponse);
 

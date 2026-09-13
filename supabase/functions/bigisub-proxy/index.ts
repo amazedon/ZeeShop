@@ -141,6 +141,17 @@ function extractCustomerName(data: any): string {
   return data?.customer_name || data?.Customer_name || data?.Customer || data?.name || "";
 }
 
+// SHA-256 hash for the shared Bill Payments PIN — no plaintext PIN is ever
+// stored, and it's verified server-side (not just checked in the browser)
+// since a client-side-only check would do nothing to stop someone with
+// basic dev tools access from bypassing it — the whole point of this PIN
+// is to stop casual misuse of an unlocked, already-logged-in device.
+async function hashPin(pin: string): Promise<string> {
+  const data = new TextEncoder().encode(pin);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   try {
@@ -174,7 +185,7 @@ Deno.serve(async (req: Request) => {
     if (!businessId) return json({ error: `Your account (app_users.id = ${caller.id}) has no business_id set — it isn't linked to a business on the server yet. This can happen if this account was created/updated locally and hasn't finished syncing. Try again once the device shows fully synced (check the sync status dot), or check that row's business_id directly in Supabase.` }, 404);
     const { data: biz, error: bizErr } = await admin
       .from("businesses")
-      .select("id, name, currency, country, bill_wallet_balance, bill_markup_percent, psa_account_reference, psa_account_number, psa_bank_name, psa_status, psa_last_synced_at")
+      .select("id, name, currency, country, bill_wallet_balance, bill_markup_percent, bill_payments_pin_hash, psa_account_reference, psa_account_number, psa_bank_name, psa_status, psa_last_synced_at")
       .eq("id", businessId)
       .maybeSingle();
     if (bizErr) return json({ error: bizErr.message }, 500);
@@ -189,6 +200,7 @@ Deno.serve(async (req: Request) => {
       return json({
         wallet_balance: Number(biz.bill_wallet_balance || 0), markup_percent: markupPercent, currency,
         psa_account_number: biz.psa_account_number || null, psa_bank_name: biz.psa_bank_name || null, psa_status: biz.psa_status || null,
+        bill_pin_set: !!biz.bill_payments_pin_hash,
       }, 200);
     }
     if (action === "data_plans") {
@@ -287,6 +299,26 @@ Deno.serve(async (req: Request) => {
       const { error } = await admin.from("businesses").update({ bill_markup_percent: pct }).eq("id", businessId);
       if (error) return json({ error: error.message }, 500);
       return json({ ok: true, markup_percent: pct }, 200);
+    }
+
+    // One shared PIN, set by the owner, required before every purchase
+    // once set. Never stored as plaintext — only its SHA-256 hash, which
+    // is all that's needed to verify a later attempt without being able
+    // to recover the original PIN from the database.
+    if (action === "set_bill_pin") {
+      if (!isMaster) return json({ error: "Only the business owner can set the Bill Payments PIN." }, 403);
+      const pin = String(params.pin || "");
+      if (!/^\d{4,6}$/.test(pin)) return json({ error: "PIN must be 4 to 6 digits." }, 400);
+      const hash = await hashPin(pin);
+      const { error } = await admin.from("businesses").update({ bill_payments_pin_hash: hash }).eq("id", businessId);
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true }, 200);
+    }
+    if (action === "clear_bill_pin") {
+      if (!isMaster) return json({ error: "Only the business owner can remove the Bill Payments PIN." }, 403);
+      const { error } = await admin.from("businesses").update({ bill_payments_pin_hash: null }).eq("id", businessId);
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true }, 200);
     }
 
     // ---------- wallet top-up (Flutterwave verify → credit) ----------
@@ -505,6 +537,18 @@ Deno.serve(async (req: Request) => {
       "betting_fund", "result_checker_purchase", "isp_smile_topup", "isp_spectranet_topup",
     ];
     if (PURCHASE_ACTIONS.includes(action)) {
+      // Enforced once here, centrally, rather than duplicated inside each
+      // of the 8 branches in handlePurchase — every purchase goes through
+      // this one gate. If no PIN has ever been set for this business,
+      // purchases proceed exactly as before (this is opt-in, not forced
+      // on existing installs); once a PIN exists, it's required every time.
+      if (biz.bill_payments_pin_hash) {
+        const suppliedPin = String(params.bill_pin || "");
+        const suppliedHash = suppliedPin ? await hashPin(suppliedPin) : null;
+        if (!suppliedPin || suppliedHash !== biz.bill_payments_pin_hash) {
+          return json({ error: "Incorrect Bill Payments PIN." }, 403);
+        }
+      }
       return await handlePurchase(admin, action, params, businessId, biz, markupPercent, caller.id);
     }
 

@@ -8297,6 +8297,19 @@ async function bpLoadWallet(){
   }catch(e){ toast(e.message); }
   billLoading = false; refreshMain();
   if(billPriceOverrides===null) bpLoadPriceOverrides().then(refreshMain);
+  // Catches any bank-transfer top-up left stuck as "pending" — including
+  // ones generated before the webhook was configured correctly, where
+  // there's no longer any screen showing that specific transfer to
+  // manually re-check. Silent unless it actually finds something.
+  try{
+    const rec = await callBigisub('reconcile_pending_bank_transfers', {});
+    if(rec.credited > 0){
+      billWalletBalance = rec.wallet_balance;
+      logAudit('bill_wallet_topup', `Recovered ${rec.credited} previously-stuck bank transfer top-up(s)`);
+      toast(`Found and credited ${rec.credited} pending transfer${rec.credited>1?'s':''} ✅`);
+      refreshMain();
+    }
+  }catch(e){ /* silent — this is a background safety net, not a user-facing action */ }
 }
 
 // Lets Settings show accurate PIN status even if Bill Payments has never

@@ -446,18 +446,80 @@ Deno.serve(async (req: Request) => {
       }, 200);
     }
 
-    // Lets the app poll after showing the account details, in case the
-    // webhook lands before the shop owner comes back to check manually.
+    // Lets the app poll after showing the account details. Doesn't just
+    // read the stored row anymore — if it's still "pending," this now
+    // independently asks Flutterwave directly (via verify_by_reference,
+    // using OUR OWN generated tx_ref — no Flutterwave transaction ID
+    // needed, which matters because we'd never have gotten one if the
+    // webhook never fired). This makes the whole bank-transfer flow
+    // self-healing the same way sync_psa_wallet already is for dedicated
+    // accounts: the webhook is the fast path, this is the fallback that
+    // still finds the money even if the webhook was never configured
+    // correctly, misfired, or hasn't been set up yet.
     if (action === "check_bank_transfer_topup") {
       const txRef = params.tx_ref;
       if (!txRef) return json({ error: "Missing tx_ref." }, 400);
-      const { data: topup } = await admin.from("wallet_topups").select("status").eq("flutterwave_tx_ref", txRef).eq("business_id", businessId).maybeSingle();
+      const { data: topup } = await admin.from("wallet_topups").select("id, status, amount").eq("flutterwave_tx_ref", txRef).eq("business_id", businessId).maybeSingle();
       if (!topup) return json({ error: "Top-up not found." }, 404);
       if (topup.status === "success") {
         const { data: freshBiz } = await admin.from("businesses").select("bill_wallet_balance").eq("id", businessId).maybeSingle();
         return json({ status: "success", wallet_balance: Number(freshBiz?.bill_wallet_balance || 0) }, 200);
       }
+
+      if (FLW_SECRET_KEY) {
+        try {
+          const flwRes = await fetch(`https://api.flutterwave.com/v3/transactions/verify_by_reference?tx_ref=${encodeURIComponent(String(txRef))}`, {
+            headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` },
+          });
+          const flwData = await flwRes.json();
+          const tx = flwData?.data;
+          if (flwRes.ok && flwData?.status === "success" && tx?.status === "successful") {
+            const { data: freshBiz } = await admin.from("businesses").select("bill_wallet_balance").eq("id", businessId).maybeSingle();
+            const newBalance = Number(freshBiz?.bill_wallet_balance || 0) + Number(tx.amount);
+            await admin.from("businesses").update({ bill_wallet_balance: newBalance }).eq("id", businessId);
+            await admin.from("wallet_topups").update({ status: "success", flutterwave_transaction_id: String(tx.id) }).eq("id", topup.id);
+            return json({ status: "success", wallet_balance: newBalance }, 200);
+          }
+        } catch (_e) {
+          // Flutterwave lookup failed (network hiccup, etc.) — fall through
+          // to reporting the stored status rather than erroring the poll.
+        }
+      }
       return json({ status: topup.status }, 200);
+    }
+
+    // Catches any bank-transfer top-up left stuck as "pending" — including
+    // ones generated before this reconciliation logic existed, where the
+    // client has since navigated away and lost the one screen that used to
+    // be the only way to re-check a specific transfer. Runs automatically
+    // whenever the Bill Payments hub loads (see bpLoadWallet client-side),
+    // not just while a transfer's account-details screen happens to still
+    // be open — so a transfer made hours or days ago still gets found and
+    // credited the next time the owner opens the app, not just today's.
+    if (action === "reconcile_pending_bank_transfers") {
+      const { data: pending } = await admin.from("wallet_topups")
+        .select("id, flutterwave_tx_ref, amount").eq("business_id", businessId).eq("status", "pending")
+        .not("flutterwave_tx_ref", "is", null).limit(20);
+      let credited = 0;
+      let runningBalance = Number(biz.bill_wallet_balance || 0);
+      if (FLW_SECRET_KEY) {
+        for (const topup of pending || []) {
+          try {
+            const flwRes = await fetch(`https://api.flutterwave.com/v3/transactions/verify_by_reference?tx_ref=${encodeURIComponent(String(topup.flutterwave_tx_ref))}`, {
+              headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` },
+            });
+            const flwData = await flwRes.json();
+            const tx = flwData?.data;
+            if (flwRes.ok && flwData?.status === "success" && tx?.status === "successful") {
+              runningBalance += Number(tx.amount);
+              await admin.from("wallet_topups").update({ status: "success", flutterwave_transaction_id: String(tx.id) }).eq("id", topup.id);
+              credited++;
+            }
+          } catch (_e) { /* skip this one, try the rest */ }
+        }
+      }
+      if (credited > 0) await admin.from("businesses").update({ bill_wallet_balance: runningBalance }).eq("id", businessId);
+      return json({ credited, wallet_balance: runningBalance }, 200);
     }
 
     // ---------- wallet top-up (dedicated permanent account — Payout Subaccounts) ----------

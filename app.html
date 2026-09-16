@@ -6494,10 +6494,22 @@ function screenSettings(){
     <div class="card">
       <div class="t1" style="margin-bottom:6px;">Bill Payments PIN</div>
       <p class="subtle" style="margin:0 0 10px;">${billPinSet ? 'Required before every bill payment purchase — stops anyone picking up an unlocked device from spending your Bill Wallet.' : 'Not set yet — anyone with access to a logged-in device can currently make bill payment purchases. Set a PIN to require it before every purchase.'}</p>
+      ${!billPinSet ? `
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         <input id="bp-pin-input" type="password" inputmode="numeric" maxlength="4" placeholder="4-digit PIN" style="max-width:120px;" value="${escAttr(billPinDraft)}">
-        <button class="btn btn-outline btn-sm" id="bp-pin-save">${billPinSet?'Reset PIN':'Set PIN'}</button>
+        <button class="btn btn-outline btn-sm" id="bp-pin-save">Set PIN</button>
       </div>
+      ` : !billPinOtpSent ? `
+      <button class="btn btn-outline btn-sm" id="bp-pin-send-otp" ${billPinOtpSending?'disabled':''}>${billPinOtpSending?'Sending…':'Send Code to My Email'}</button>
+      ` : `
+      <p class="subtle" style="margin:0 0 10px;">Code sent to <b>${escapeHtml(billPinOtpMaskedEmail)}</b> — expires in 5 minutes.</p>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <input id="bp-pin-otp" inputmode="numeric" maxlength="6" placeholder="6-digit code" style="max-width:120px;" value="${escAttr(billPinOtpDraft)}">
+        <input id="bp-pin-input" type="password" inputmode="numeric" maxlength="4" placeholder="New PIN" style="max-width:110px;" value="${escAttr(billPinDraft)}">
+        <button class="btn btn-outline btn-sm" id="bp-pin-save">Reset PIN</button>
+      </div>
+      <a href="#" id="bp-pin-resend" style="display:inline-block;margin-top:8px;font-size:12px;">Resend code</a>
+      `}
     </div>` : ''}
     ${isMaster()?`
     <div class="card">
@@ -6563,14 +6575,21 @@ function bindSettingsEvents(){
   if(isMaster() && !billPinStatusLoaded) bpLoadPinStatus();
   const pinInput = document.getElementById('bp-pin-input');
   if(pinInput) pinInput.addEventListener('input', e=>{ billPinDraft = e.target.value.replace(/\D/g,'').slice(0,4); });
+  const pinOtpInput = document.getElementById('bp-pin-otp');
+  if(pinOtpInput) pinOtpInput.addEventListener('input', e=>{ billPinOtpDraft = e.target.value.replace(/\D/g,'').slice(0,6); });
+  const pinSendOtp = document.getElementById('bp-pin-send-otp');
+  if(pinSendOtp) pinSendOtp.addEventListener('click', ()=>billSendPinOtp());
+  const pinResend = document.getElementById('bp-pin-resend');
+  if(pinResend) pinResend.addEventListener('click', (e)=>{ e.preventDefault(); billSendPinOtp(); });
   const pinSave = document.getElementById('bp-pin-save');
   if(pinSave) pinSave.addEventListener('click', async ()=>{
     const pin = billPinDraft;
     if(!/^\d{4}$/.test(pin)){ toast('PIN must be exactly 4 digits.'); return; }
     const wasAlreadySet = billPinSet;
+    if(wasAlreadySet && !/^\d{6}$/.test(billPinOtpDraft)){ toast('Enter the 6-digit code sent to your email.'); return; }
     try{
-      await callBigisub('set_bill_pin', { pin });
-      billPinSet = true; billPinDraft = '';
+      await callBigisub('set_bill_pin', { pin, otp: billPinOtpDraft });
+      billPinSet = true; billPinDraft = ''; billPinOtpDraft = ''; billPinOtpSent = false;
       logAudit('bill_pin_updated', wasAlreadySet ? 'Reset the Bill Payments PIN' : 'Set the Bill Payments PIN');
       toast('PIN saved ✅'); refreshMain();
     }catch(e){ toast(e.message); }
@@ -8115,6 +8134,10 @@ let billMarkupDraft = null;
 let billPinSet = false;
 let billPinStatusLoaded = false; // Settings loads this independently of ever having opened Bill Payments
 let billPinDraft = ''; // in-progress PIN entry in the settings field, cleared after save
+let billPinOtpSent = false; // whether a reset code has been requested this session
+let billPinOtpSending = false;
+let billPinOtpDraft = ''; // entered 6-digit code
+let billPinOtpMaskedEmail = '';
 let billFlatFees = { airtime: 0, electricity: 0, betting: 0 };
 let billFlatFeeDrafts = {}; // in-progress edits in the pricing screen, keyed by service
 let billPriceOverrides = null; // fetched once from list_price_overrides, refreshed when the pricing screen loads
@@ -8322,6 +8345,27 @@ async function bpLoadPinStatus(){
     billPinSet = !!r.bill_pin_set; billPinStatusLoaded = true;
   }catch(e){ /* silent — Settings still renders fine either way, just without knowing PIN status yet */ }
   refreshMain();
+}
+
+// Separate edge function, not part of bigisub-proxy — it's the same
+// Termii email-OTP setup already used for password reset, just scoped to
+// the Bill Payments PIN with its own table so codes can't cross flows.
+async function billSendPinOtp(){
+  if(billPinOtpSending) return;
+  billPinOtpSending = true; refreshMain();
+  try{
+    const token = await bigisubAuthToken();
+    if(!token) throw new Error('Please log in online first.');
+    const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/send-bill-pin-otp`, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+token, 'apikey': SITE_CONTENT_ANON_KEY },
+    });
+    const result = await res.json();
+    if(!res.ok || result.error) throw new Error(result.error || 'Could not send the code.');
+    billPinOtpSent = true; billPinOtpMaskedEmail = result.sent_to || 'your email'; billPinOtpDraft = '';
+    toast('Code sent ✅');
+  }catch(e){ toast(e.message); }
+  billPinOtpSending = false; refreshMain();
 }
 
 function bindBillPaymentsEvents(){

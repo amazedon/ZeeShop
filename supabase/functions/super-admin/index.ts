@@ -362,6 +362,33 @@ Deno.serve(async (req: Request) => {
       }, 200);
     }
 
+    // Platform-wide visibility into what Bigisub is actually charging
+    // right now — pulled live, same endpoints bigisub-proxy uses for the
+    // per-business "Manage Prices" screen, just surfaced here too so you
+    // don't need to open a specific business's account to see current
+    // costs. Read-only — this never sets or changes anything, since
+    // pricing decisions belong to each business individually via their
+    // own markup/flat-fee/override settings.
+    if (action === "bigisub_service_prices") {
+      if (!BIGISUB_TOKEN) return json({ error: "BIGISUB_TOKEN isn't set on this function yet." }, 500);
+      const fetchList = async (path: string, key: string) => {
+        try {
+          const data = await bigisub("GET", path);
+          return data?.[key] || data?.data || (Array.isArray(data) ? data : []) || [];
+        } catch (e) {
+          return { error: e instanceof Error ? e.message : "Could not fetch." };
+        }
+      };
+      const [dataPlans, cablePlans, resultCheckerPrices, ispSmilePlans, ispSpectranetPlans] = await Promise.all([
+        fetchList("/api/v2/vtu/data/plans/", "plans"),
+        fetchList("/api/v2/vtu/cable/plans/", "plans"),
+        fetchList("/api/v2/bills/result-checker/prices/", "prices"),
+        fetchList("/api/v2/isp/smile/plans/", "plans"),
+        fetchList("/api/v2/isp/spectranet/plans/", "plans"),
+      ]);
+      return json({ data_plans: dataPlans, cable_plans: cablePlans, result_checker_prices: resultCheckerPrices, isp_smile_plans: ispSmilePlans, isp_spectranet_plans: ispSpectranetPlans }, 200);
+    }
+
     // Force a status re-check on ANY business's bill-payment transaction
     // (not just your own, unlike the equivalent action in bigisub-proxy) —
     // for manually unsticking a pending/failed transaction a business

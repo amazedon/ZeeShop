@@ -187,6 +187,13 @@
         </div>
         <div id="bp-recent-empty" class="empty-note hidden">No bill payment transactions yet.</div>
       </div>
+
+      <div class="card">
+        <h2>Bigisub Service Prices</h2>
+        <p class="subtle">Live from Bigisub right now — the actual cost each business's markup/flat-fee/set-price sits on top of. Read-only; pricing decisions belong to each business individually.</p>
+        <button class="btn-outline-sm" id="bp-prices-refresh" style="margin-bottom:10px;">↻ Refresh</button>
+        <div id="bp-prices-box"><p class="subtle">Loading…</p></div>
+      </div>
     </div>
 
     <div id="content-section">
@@ -314,6 +321,7 @@
     loadBusinesses();
     loadSiteContent();
     loadBillPaymentsOverview();
+    loadBigisubServicePrices();
   }
 
   const SITE_SECTIONS = [
@@ -467,6 +475,39 @@
       }
     }catch(e){
       balBox.innerHTML = `<div class="err">Could not load bill payments overview: ${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  function renderPriceTable(title, list, priceKey){
+    if(list && list.error) return `<p class="subtle" style="margin-top:10px;"><b>${escapeHtml(title)}:</b> could not load — ${escapeHtml(list.error)}</p>`;
+    if(!list || list.length===0) return `<p class="subtle" style="margin-top:10px;"><b>${escapeHtml(title)}:</b> no plans returned.</p>`;
+    return `
+      <div style="margin-top:14px;">
+        <div class="t1" style="margin-bottom:6px;">${escapeHtml(title)}</div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Plan</th><th>Cost</th></tr></thead>
+          <tbody>
+            ${list.map(p=>`<tr><td>${escapeHtml(p.name||p.plan_name||p.exam||p.exam_type||('#'+p.id))}</td><td>${fmtNaira(p[priceKey]||p.amount||p.price)}</td></tr>`).join('')}
+          </tbody>
+        </table></div>
+      </div>
+    `;
+  }
+
+  async function loadBigisubServicePrices(){
+    const box = document.getElementById('bp-prices-box');
+    box.innerHTML = '<p class="subtle">Loading…</p>';
+    try{
+      const r = await callAdminApi('bigisub_service_prices', {});
+      box.innerHTML = [
+        renderPriceTable('Data Bundles', r.data_plans, 'amount'),
+        renderPriceTable('Cable TV', r.cable_plans, 'amount'),
+        renderPriceTable('Result Checker', r.result_checker_prices, 'amount'),
+        renderPriceTable('Internet — Smile', r.isp_smile_plans, 'amount'),
+        renderPriceTable('Internet — Spectranet', r.isp_spectranet_plans, 'amount'),
+      ].join('');
+    }catch(e){
+      box.innerHTML = `<div class="err">Could not load Bigisub prices: ${escapeHtml(e.message)}</div>`;
     }
   }
 
@@ -712,6 +753,7 @@
     renderBizTable(filtered);
   }
   document.getElementById('biz-search').addEventListener('input', applySearchFilter);
+  document.getElementById('bp-prices-refresh').addEventListener('click', loadBigisubServicePrices);
 
   document.getElementById('export-csv-btn').addEventListener('click', ()=>{
     if(allBusinesses.length === 0) return;

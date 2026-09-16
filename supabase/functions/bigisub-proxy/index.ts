@@ -170,7 +170,7 @@ Deno.serve(async (req: Request) => {
     // keyed by auth_user_id — same lookup pattern as super-admin/index.ts.
     const { data: caller, error: callerRowErr } = await admin
       .from("app_users")
-      .select("id, business_id, role, is_active, can_bill_payments, phone")
+      .select("id, business_id, role, is_active, can_bill_payments, phone, email")
       .eq("auth_user_id", callerData.user.id)
       .maybeSingle();
     if (callerRowErr) return json({ error: callerRowErr.message }, 500);
@@ -314,6 +314,24 @@ Deno.serve(async (req: Request) => {
       if (!isMaster) return json({ error: "Only the business owner can set the Bill Payments PIN." }, 403);
       const pin = String(params.pin || "");
       if (!/^\d{4}$/.test(pin)) return json({ error: "PIN must be exactly 4 digits." }, 400);
+      // A PIN already exists — require a valid, unused, unexpired OTP code
+      // (sent via send-bill-pin-otp, using your existing Termii setup)
+      // before overwriting it. Real OTP, not just re-entering the old PIN —
+      // this is also what makes recovering a genuinely forgotten PIN
+      // possible, which a "must know the current PIN" check never could.
+      if (biz.bill_payments_pin_hash) {
+        const otp = String(params.otp || "");
+        if (!/^\d{6}$/.test(otp)) return json({ error: "Enter the 6-digit code sent to your email." }, 400);
+        const otpHash = await hashPin(otp); // same SHA-256 helper works for any numeric code, not just 4-digit PINs
+        const { data: otpRow, error: otpErr } = await admin.from("bill_pin_reset_otp_codes")
+          .select("id, expires_at, consumed_at").eq("business_id", businessId).eq("code_hash", otpHash)
+          .order("created_at", { ascending: false }).limit(1).maybeSingle();
+        if (otpErr) return json({ error: otpErr.message }, 500);
+        if (!otpRow || otpRow.consumed_at || new Date(otpRow.expires_at).getTime() < Date.now()) {
+          return json({ error: "That code is invalid or has expired. Request a new one." }, 403);
+        }
+        await admin.from("bill_pin_reset_otp_codes").update({ consumed_at: new Date().toISOString() }).eq("id", otpRow.id);
+      }
       const hash = await hashPin(pin);
       const { error } = await admin.from("businesses").update({ bill_payments_pin_hash: hash }).eq("id", businessId);
       if (error) return json({ error: error.message }, 500);

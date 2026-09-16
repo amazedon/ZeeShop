@@ -1,0 +1,119 @@
+// supabase/functions/send-bill-pin-otp/index.ts
+//
+// Generates a 6-digit code, stores its hash (5-minute expiry) in
+// bill_pin_reset_otp_codes, and asks Termii to email it — same pattern,
+// same Termii call, same secrets as send-reset-otp and send-signup-otp,
+// just a separate table so a code from one flow can never be reused in
+// another.
+//
+// Unlike send-reset-otp (used BEFORE login, for a forgotten password),
+// this one is called by someone ALREADY logged in as a business owner who
+// wants to reset the shared Bill Payments PIN. So instead of trusting a
+// client-supplied email address, this looks up the caller's OWN email
+// from their own app_users row — the destination is never something the
+// client gets to choose, which is what stops someone from redirecting the
+// code to an email address they control.
+
+import { createClient } from "npm:@supabase/supabase-js@2";
+
+const TERMII_API_KEY = Deno.env.get("TERMII_API_KEY")!;
+const TERMII_BASE_URL = Deno.env.get("TERMII_BASE_URL")!; // e.g. https://v3.api.termii.com
+const TERMII_EMAIL_CONFIG_ID = Deno.env.get("TERMII_EMAIL_CONFIG_ID")!;
+
+const admin = createClient(
+  Deno.env.get("SUPABASE_URL")!,
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+);
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+
+async function sha256(text: string): Promise<string> {
+  const data = new TextEncoder().encode(text);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hashBuffer)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+
+  try {
+    const authHeader = req.headers.get("Authorization") || "";
+    const token = authHeader.replace(/^Bearer\s+/i, "");
+    if (!token) return new Response(JSON.stringify({ error: "Not authenticated." }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+
+    const { data: callerData, error: callerErr } = await admin.auth.getUser(token);
+    if (callerErr || !callerData?.user) {
+      return new Response(JSON.stringify({ error: "Not authenticated." }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    const { data: caller, error: callerRowErr } = await admin
+      .from("app_users")
+      .select("business_id, role, email, is_active")
+      .eq("auth_user_id", callerData.user.id)
+      .maybeSingle();
+    if (callerRowErr) throw new Error(callerRowErr.message);
+    if (!caller || caller.is_active === false) {
+      return new Response(JSON.stringify({ error: "Account not found or inactive." }), { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+    if (caller.role !== "master") {
+      return new Response(JSON.stringify({ error: "Only the business owner can reset the Bill Payments PIN." }), { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+    if (!caller.email) {
+      return new Response(JSON.stringify({ error: "No email address on file for this account — cannot send a code." }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    const { data: recent } = await admin
+      .from("bill_pin_reset_otp_codes")
+      .select("created_at")
+      .eq("business_id", caller.business_id)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (recent && recent[0] && Date.now() - new Date(recent[0].created_at).getTime() < 60_000) {
+      return new Response(JSON.stringify({ error: "Please wait a minute before requesting another code." }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const codeHash = await sha256(code);
+    const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
+
+    const { error: dbError } = await admin.from("bill_pin_reset_otp_codes").insert({
+      business_id: caller.business_id,
+      email: caller.email,
+      code_hash: codeHash,
+      expires_at: expiresAt,
+    });
+    if (dbError) throw new Error("Could not save the code: " + dbError.message);
+
+    const termiiRes = await fetch(`${TERMII_BASE_URL}/api/email/otp/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: TERMII_API_KEY,
+        email_address: caller.email,
+        code,
+        emailConfigurationId: TERMII_EMAIL_CONFIG_ID,
+      }),
+    });
+    const termiiData = await termiiRes.json();
+    console.log("Termii response:", JSON.stringify(termiiData));
+    if (!termiiRes.ok || termiiData.code !== "ok") {
+      throw new Error("Termii could not send the email: " + JSON.stringify(termiiData));
+    }
+
+    // Masked, not the full address — this response reaches the browser,
+    // and the point of sending to a server-known email is defeated if the
+    // full address just gets echoed back for anyone looking at the screen.
+    const maskedEmail = caller.email.replace(/^(.{2}).*(@.*)$/, "$1***$2");
+    return new Response(JSON.stringify({ success: true, sent_to: maskedEmail }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: err.message || "Something went wrong." }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+});

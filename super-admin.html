@@ -480,7 +480,7 @@
 
   function renderPriceTable(title, list, priceKey){
     if(list && list.error) return `<p class="subtle" style="margin-top:10px;"><b>${escapeHtml(title)}:</b> could not load — ${escapeHtml(list.error)}</p>`;
-    if(!list || list.length===0) return `<p class="subtle" style="margin-top:10px;"><b>${escapeHtml(title)}:</b> no plans returned.</p>`;
+    if(!Array.isArray(list) || list.length===0) return `<p class="subtle" style="margin-top:10px;"><b>${escapeHtml(title)}:</b> no plans returned.</p>`;
     return `
       <div style="margin-top:14px;">
         <div class="t1" style="margin-bottom:6px;">${escapeHtml(title)}</div>

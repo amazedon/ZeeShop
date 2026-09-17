@@ -146,6 +146,27 @@ function extractCustomerName(data: any): string {
 // since a client-side-only check would do nothing to stop someone with
 // basic dev tools access from bypassing it — the whole point of this PIN
 // is to stop casual misuse of an unlocked, already-logged-in device.
+// Bigisub's list endpoints were assumed to always return a flat array —
+// they don't always. Some come back grouped into an object (e.g. keyed by
+// network or provider name) rather than one flat list, and calling
+// .map() on that from the client crashed with "list.map is not a
+// function" instead of ever showing a plan. This guarantees a flat array
+// either way: passes a real array straight through, flattens a grouped
+// object's array values into one list, and only falls back to empty if
+// neither shape is found — never crashes the caller either way.
+function normalizeList(data: any, key: string): any[] {
+  const candidate = data?.[key] ?? data?.data ?? data;
+  if (Array.isArray(candidate)) return candidate;
+  if (candidate && typeof candidate === "object") {
+    const flattened: any[] = [];
+    for (const v of Object.values(candidate)) {
+      if (Array.isArray(v)) flattened.push(...v);
+    }
+    if (flattened.length > 0) return flattened;
+  }
+  return [];
+}
+
 async function hashPin(pin: string): Promise<string> {
   const data = new TextEncoder().encode(pin);
   const digest = await crypto.subtle.digest("SHA-256", data);
@@ -210,31 +231,31 @@ Deno.serve(async (req: Request) => {
     }
     if (action === "data_plans") {
       const data = await bigisub("GET", EP.DATA_PLANS);
-      return json({ plans: data?.plans || data?.data || data || [] }, 200);
+      return json({ plans: normalizeList(data, "plans") }, 200);
     }
     if (action === "cable_plans") {
       const data = await bigisub("GET", EP.CABLE_PLANS);
-      return json({ plans: data?.plans || data?.data || data || [] }, 200);
+      return json({ plans: normalizeList(data, "plans") }, 200);
     }
     if (action === "electricity_providers") {
       const data = await bigisub("GET", EP.ELECTRICITY_PROVIDERS);
-      return json({ providers: data?.providers || data?.data || data || [] }, 200);
+      return json({ providers: normalizeList(data, "providers") }, 200);
     }
     if (action === "result_checker_prices") {
       const data = await bigisub("GET", EP.RESULT_CHECKER_PRICES);
-      return json({ prices: data?.prices || data?.data || data || [] }, 200);
+      return json({ prices: normalizeList(data, "prices") }, 200);
     }
     if (action === "betting_billers") {
       const data = await bigisub("GET", EP.BETTING_BILLERS);
-      return json({ billers: data?.billers || data?.data || data || [] }, 200);
+      return json({ billers: normalizeList(data, "billers") }, 200);
     }
     if (action === "isp_smile_plans") {
       const data = await bigisub("GET", EP.ISP_SMILE_PLANS);
-      return json({ plans: data?.plans || data?.data || data || [] }, 200);
+      return json({ plans: normalizeList(data, "plans") }, 200);
     }
     if (action === "isp_spectranet_plans") {
       const data = await bigisub("GET", EP.ISP_SPECTRANET_PLANS);
-      return json({ plans: data?.plans || data?.data || data || [] }, 200);
+      return json({ plans: normalizeList(data, "plans") }, 200);
     }
 
     // ---------- verify-before-charge steps ----------
@@ -702,8 +723,8 @@ Deno.serve(async (req: Request) => {
 async function lookupPlanAmount(path: string, preferredKey: string, matchValue: unknown, matchKeys: string[]): Promise<number | null> {
   try {
     const raw = await bigisub("GET", path);
-    const list = raw?.[preferredKey] || raw?.data || (Array.isArray(raw) ? raw : []) || [];
-    const item = (Array.isArray(list) ? list : []).find((x: any) => matchKeys.some((k) => String(x?.[k]) === String(matchValue)));
+    const list = normalizeList(raw, preferredKey);
+    const item = list.find((x: any) => matchKeys.some((k) => String(x?.[k]) === String(matchValue)));
     if (!item) return null;
     const amt = Number(item.amount ?? item.price);
     return Number.isFinite(amt) ? amt : null;

@@ -371,10 +371,26 @@ Deno.serve(async (req: Request) => {
     // own markup/flat-fee/override settings.
     if (action === "bigisub_service_prices") {
       if (!BIGISUB_TOKEN) return json({ error: "BIGISUB_TOKEN isn't set on this function yet." }, 500);
+      // Some of Bigisub's list endpoints come back grouped into an object
+      // (e.g. keyed by network name) rather than one flat array — this
+      // guarantees a flat array either way instead of ever handing the
+      // client something list.map() would crash on.
+      const normalizeList = (data: any, key: string): any[] => {
+        const candidate = data?.[key] ?? data?.data ?? data;
+        if (Array.isArray(candidate)) return candidate;
+        if (candidate && typeof candidate === "object") {
+          const flattened: any[] = [];
+          for (const v of Object.values(candidate)) {
+            if (Array.isArray(v)) flattened.push(...v);
+          }
+          if (flattened.length > 0) return flattened;
+        }
+        return [];
+      };
       const fetchList = async (path: string, key: string) => {
         try {
           const data = await bigisub("GET", path);
-          return data?.[key] || data?.data || (Array.isArray(data) ? data : []) || [];
+          return normalizeList(data, key);
         } catch (e) {
           return { error: e instanceof Error ? e.message : "Could not fetch." };
         }

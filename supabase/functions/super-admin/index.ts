@@ -28,7 +28,7 @@
 // The panel works fine without it — the suspend/reactivate button just
 // won't appear until the column exists.
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

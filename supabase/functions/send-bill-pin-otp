@@ -14,7 +14,7 @@
 // client gets to choose, which is what stops someone from redirecting the
 // code to an email address they control.
 
-import { createClient } from "npm:@supabase/supabase-js@2";
+import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
 const TERMII_API_KEY = Deno.env.get("TERMII_API_KEY")!;
 const TERMII_BASE_URL = Deno.env.get("TERMII_BASE_URL")!; // e.g. https://v3.api.termii.com

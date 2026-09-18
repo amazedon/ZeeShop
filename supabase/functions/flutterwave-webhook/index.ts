@@ -23,7 +23,7 @@
 // Authenticity here comes from the verif-hash header check below, NOT
 // from Supabase's JWT verification — that's why --no-verify-jwt is safe.
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
 function extractPsaAccountNumber(data: any): string | null {
   // Best-effort — tighten to the exact field once a real PSA webhook

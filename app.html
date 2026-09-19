@@ -8139,6 +8139,7 @@ let billPinOtpSending = false;
 let billPinOtpDraft = ''; // entered 6-digit code
 let billPinOtpMaskedEmail = '';
 let billFlatFees = { airtime: 0, electricity: 0, betting: 0 };
+let billEstimatedFeePercent = 2.0; // Flutterwave's estimated cut on Bank Transfer / My Account top-ups — shown before funding, not charged by us
 let billFlatFeeDrafts = {}; // in-progress edits in the pricing screen, keyed by service
 let billPriceOverrides = null; // fetched once from list_price_overrides, refreshed when the pricing screen loads
 let billPriceDrafts = {}; // in-progress sell-price edits in the pricing screen, keyed by `${service}:${planKey}`
@@ -8316,6 +8317,7 @@ async function bpLoadWallet(){
     billWalletBalance = r.wallet_balance; billMarkupPercent = r.markup_percent; billCurrency = r.currency || 'NGN';
     billPinSet = !!r.bill_pin_set; billPinStatusLoaded = true;
     if(r.flat_fees) billFlatFees = r.flat_fees;
+    if(r.estimated_fee_percent) billEstimatedFeePercent = r.estimated_fee_percent;
     if(r.psa_account_number){ billPsaAccountNumber = r.psa_account_number; billPsaBankName = r.psa_bank_name; }
   }catch(e){ toast(e.message); }
   billLoading = false; refreshMain();
@@ -8420,6 +8422,7 @@ function bindBillPaymentsEvents(){
      it happens rather than making the owner manually refresh. */
 let billTopupMode = 'card'; // 'card' | 'bank' | 'psa'
 let billBankTopup = null;   // { tx_ref, account_number, bank_name, expiry_date, amount } once generated
+let billBankAmountDraft = ''; // live-updated as they type, so the fee preview updates before generating an account
 let billBankTopupPolling = false;
 let billBankTopupPollTimer = null;
 let billPsaAccountNumber = null; // set from my_wallet_summary once the business has a dedicated account
@@ -8448,17 +8451,22 @@ function screenBillTopup(){
 
 function screenBillTopupBank(){
   if(!billBankTopup){
+    const amt = Number(billBankAmountDraft||0);
+    const estNet = amt>0 ? Math.round(amt * (1 - billEstimatedFeePercent/100) * 100)/100 : 0;
     return `
-      <div class="field"><label>Amount (${billCurrency})</label><input id="bp-bank-amount" type="number" min="100" placeholder="e.g. 5000"></div>
+      <div class="field"><label>Amount (${billCurrency})</label><input id="bp-bank-amount" type="number" min="100" placeholder="e.g. 5000" value="${escAttr(billBankAmountDraft)}"></div>
+      ${amt>0 ? `<p class="subtle">Flutterwave charges an estimated ${billEstimatedFeePercent}% on transfers — you'll send ${fmtMoney(amt)}, approximately <b>${fmtMoney(estNet)}</b> will be credited to your Bill Wallet.</p>` : `<p class="subtle" style="font-size:11px;">Flutterwave charges an estimated ${billEstimatedFeePercent}% fee on transfers, deducted automatically before crediting your wallet.</p>`}
       <button class="btn btn-primary" id="bp-bank-generate">Get Transfer Account</button>
     `;
   }
   const b = billBankTopup;
+  const estNet = Math.round(Number(b.amount) * (1 - billEstimatedFeePercent/100) * 100)/100;
   return `
     <div style="text-align:center;padding:12px 0;">
       <p class="subtle">Transfer exactly <b>${fmtMoney(b.amount)}</b> to:</p>
       <div style="font-size:22px;font-weight:700;letter-spacing:1px;margin:6px 0;">${escapeHtml(b.account_number)}</div>
       <div class="t1">${escapeHtml(b.bank_name)}</div>
+      <p class="subtle" style="font-size:11px;margin-top:4px;">After Flutterwave's estimated ${billEstimatedFeePercent}% fee, approximately ${fmtMoney(estNet)} will be credited.</p>
       ${b.expiry_date ? `<p class="subtle" style="font-size:11px;margin-top:6px;">Expires ${new Date(b.expiry_date).toLocaleString()}</p>` : ''}
       <button class="btn btn-outline btn-sm" id="bp-bank-copy" style="margin-top:10px;">Copy Account Number</button>
       <p class="subtle" style="margin-top:14px;">${billBankTopupPolling ? 'Waiting for the transfer to land…' : 'Checking…'}</p>
@@ -8472,6 +8480,7 @@ function screenBillTopupPsa(){
   if(!billPsaAccountNumber){
     return `
       <p class="subtle">Get one dedicated account number for your business — transfer to it anytime, any amount, and it always credits your Bill Wallet. No need to generate a new one each time.</p>
+      <p class="subtle" style="font-size:11px;">Flutterwave charges an estimated ${billEstimatedFeePercent}% fee on funds received here, deducted automatically before crediting your wallet — not charged separately.</p>
       <button class="btn btn-primary" id="bp-psa-setup">Set Up My Dedicated Account</button>
     `;
   }
@@ -8480,6 +8489,7 @@ function screenBillTopupPsa(){
       <p class="subtle">Your permanent top-up account — transfer any amount, anytime:</p>
       <div style="font-size:22px;font-weight:700;letter-spacing:1px;margin:6px 0;">${escapeHtml(billPsaAccountNumber)}</div>
       <div class="t1">${escapeHtml(billPsaBankName||'')}</div>
+      <p class="subtle" style="font-size:11px;margin-top:4px;">An estimated ${billEstimatedFeePercent}% Flutterwave fee is deducted from whatever you transfer before it's credited.</p>
       <button class="btn btn-outline btn-sm" id="bp-psa-copy" style="margin-top:10px;">Copy Account Number</button>
       <br><button class="btn btn-outline btn-sm" id="bp-psa-sync" style="margin-top:10px;">${billPsaSyncing?'Checking…':'↻ Sync Now'}</button>
       <p class="subtle" style="font-size:11px;margin-top:10px;">Already checking automatically every few seconds while this is open.</p>
@@ -8547,14 +8557,16 @@ function bindBillTopupEvents(){
     });
   });
 
+  const bankAmountInput = document.getElementById('bp-bank-amount');
+  if(bankAmountInput) bankAmountInput.addEventListener('input', e=>{ billBankAmountDraft = e.target.value; refreshMain(); });
   const genBtn = document.getElementById('bp-bank-generate');
   if(genBtn) genBtn.addEventListener('click', async ()=>{
-    const amount = Number(document.getElementById('bp-bank-amount').value||0);
+    const amount = Number(billBankAmountDraft||0);
     if(amount < 100){ toast('Enter at least ₦100.'); return; }
     genBtn.disabled = true; genBtn.textContent = 'Generating…';
     try{
       const r = await callBigisub('generate_bank_transfer_topup', { amount });
-      billBankTopup = r;
+      billBankTopup = r; billBankAmountDraft = '';
       refreshMain();
       bpStartBankPolling();
     }catch(e){ toast(e.message); genBtn.disabled=false; genBtn.textContent='Get Transfer Account'; }
@@ -8565,7 +8577,7 @@ function bindBillTopupEvents(){
     toast('Account number copied');
   });
   const cancelBtn = document.getElementById('bp-bank-cancel');
-  if(cancelBtn) cancelBtn.addEventListener('click', ()=>{ bpStopBankPolling(); billBankTopup=null; refreshMain(); });
+  if(cancelBtn) cancelBtn.addEventListener('click', ()=>{ bpStopBankPolling(); billBankTopup=null; billBankAmountDraft=''; refreshMain(); });
 }
 
 function bpStartBankPolling(){

@@ -59,6 +59,12 @@ Deno.serve(async (req: Request) => {
     const interval = meta.interval;
     const currency = data.currency;
     const amount = Number(data.amount);
+    // Only for the two Bill Payments wallet-crediting branches below — the
+    // subscription-upgrade logic further down deliberately keeps using the
+    // gross `amount` above, since that's verifying the customer paid
+    // enough for their plan, unrelated to Flutterwave's fee. This is what
+    // actually lands in your account after their fee is deducted.
+    const settledAmount = Number(data.amount_settled ?? data.amount);
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -82,9 +88,9 @@ Deno.serve(async (req: Request) => {
         if (!topup || topup.status === "success") return new Response("ok", { status: 200 }); // unknown, or already credited (webhook retry)
 
         const { data: biz } = await adminClient.from("businesses").select("bill_wallet_balance").eq("id", topup.business_id).maybeSingle();
-        const newBalance = Number(biz?.bill_wallet_balance || 0) + amount;
+        const newBalance = Number(biz?.bill_wallet_balance || 0) + settledAmount;
         await adminClient.from("businesses").update({ bill_wallet_balance: newBalance }).eq("id", topup.business_id);
-        await adminClient.from("wallet_topups").update({ status: "success", flutterwave_transaction_id: transactionId }).eq("id", topup.id);
+        await adminClient.from("wallet_topups").update({ status: "success", flutterwave_transaction_id: transactionId, amount: settledAmount }).eq("id", topup.id);
         return new Response("ok — bill wallet funded (bank transfer)", { status: 200 });
       }
 
@@ -105,12 +111,12 @@ Deno.serve(async (req: Request) => {
         if (!biz) return new Response("ok", { status: 200 }); // account number we don't recognize — nothing to do
 
         const { error: insertErr } = await adminClient.from("wallet_topups").insert({
-          id: crypto.randomUUID(), business_id: biz.id, amount,
+          id: crypto.randomUUID(), business_id: biz.id, amount: settledAmount,
           flutterwave_transaction_id: dedupeKey, status: "success",
         });
         if (insertErr) return new Response("ok — already processed", { status: 200 }); // unique-constraint conflict = already recorded
 
-        const newBalance = Number(biz.bill_wallet_balance || 0) + amount;
+        const newBalance = Number(biz.bill_wallet_balance || 0) + settledAmount;
         await adminClient.from("businesses").update({ bill_wallet_balance: newBalance }).eq("id", biz.id);
         return new Response("ok — bill wallet funded (dedicated account)", { status: 200 });
       }

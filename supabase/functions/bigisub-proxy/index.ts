@@ -57,6 +57,20 @@ const BIGISUB_BASE = Deno.env.get("BIGISUB_BASE_URL") || "https://api.bigisub.ng
 const BIGISUB_TOKEN = Deno.env.get("BIGISUB_TOKEN") || "";
 const BIGISUB_PIN = Deno.env.get("BIGISUB_PIN") || ""; // the Bigisub ACCOUNT's transaction PIN — never entered by shop staff
 const FLW_SECRET_KEY = Deno.env.get("FLW_SECRET_KEY") || ""; // same Flutterwave secret key your verify-payment function already uses
+// Used only for the "estimated fee" shown to the person BEFORE they fund
+// their wallet (Bank Transfer / My Account) — the ACTUAL amount credited
+// always comes from Flutterwave's own amount_settled field wherever it's
+// available (see fund_wallet_verify, check_bank_transfer_topup,
+// reconcile_pending_bank_transfers), never from this estimate. Only
+// sync_psa_wallet falls back to this percentage for the real deduction
+// too, since that specific Flutterwave endpoint's response doesn't expose
+// a fee field the way the main transaction-verify ones do. Defaults to
+// Flutterwave's officially published Nigeria local-card rate (2.0%) —
+// override with the real FLW_ESTIMATED_FEE_PERCENT secret once you've
+// confirmed your account's actual contracted bank-transfer rate from
+// Flutterwave's dashboard (Settings → Pricing), which can differ from
+// the public rate.
+const FLW_ESTIMATED_FEE_PERCENT = Number(Deno.env.get("FLW_ESTIMATED_FEE_PERCENT")) || 2.0;
 
 const EP = {
   WALLET_BALANCE: "/api/v2/financial/wallet/balance/",
@@ -222,6 +236,7 @@ Deno.serve(async (req: Request) => {
         wallet_balance: Number(biz.bill_wallet_balance || 0), markup_percent: markupPercent, currency,
         psa_account_number: biz.psa_account_number || null, psa_bank_name: biz.psa_bank_name || null, psa_status: biz.psa_status || null,
         bill_pin_set: !!biz.bill_payments_pin_hash,
+        estimated_fee_percent: FLW_ESTIMATED_FEE_PERCENT,
         flat_fees: {
           airtime: Number(biz.bill_flat_fee_airtime || 0),
           electricity: Number(biz.bill_flat_fee_electricity || 0),
@@ -432,12 +447,17 @@ Deno.serve(async (req: Request) => {
       const { data: existing } = await admin.from("wallet_topups").select("id").eq("flutterwave_transaction_id", String(transaction_id)).maybeSingle();
       if (existing) return json({ error: "This payment has already been credited." }, 400);
 
-      const newBalance = Number(biz.bill_wallet_balance || 0) + Number(tx.amount);
+      // Credit what Flutterwave actually settles to you, not the gross
+      // amount the customer paid — amount_settled already has their fee
+      // deducted, so this is what keeps you from silently absorbing it.
+      // Falls back to the gross amount only if that field is ever absent.
+      const settledAmount = Number(tx.amount_settled ?? tx.amount);
+      const newBalance = Number(biz.bill_wallet_balance || 0) + settledAmount;
       const { error: updErr } = await admin.from("businesses").update({ bill_wallet_balance: newBalance }).eq("id", businessId);
       if (updErr) return json({ error: updErr.message }, 500);
 
       await admin.from("wallet_topups").insert({
-        id: crypto.randomUUID(), business_id: businessId, amount: tx.amount,
+        id: crypto.randomUUID(), business_id: businessId, amount: settledAmount,
         flutterwave_tx_ref: tx.tx_ref, flutterwave_transaction_id: String(transaction_id), status: "success",
       });
 
@@ -513,10 +533,11 @@ Deno.serve(async (req: Request) => {
           const flwData = await flwRes.json();
           const tx = flwData?.data;
           if (flwRes.ok && flwData?.status === "success" && tx?.status === "successful") {
+            const settledAmount = Number(tx.amount_settled ?? tx.amount);
             const { data: freshBiz } = await admin.from("businesses").select("bill_wallet_balance").eq("id", businessId).maybeSingle();
-            const newBalance = Number(freshBiz?.bill_wallet_balance || 0) + Number(tx.amount);
+            const newBalance = Number(freshBiz?.bill_wallet_balance || 0) + settledAmount;
             await admin.from("businesses").update({ bill_wallet_balance: newBalance }).eq("id", businessId);
-            await admin.from("wallet_topups").update({ status: "success", flutterwave_transaction_id: String(tx.id) }).eq("id", topup.id);
+            await admin.from("wallet_topups").update({ status: "success", flutterwave_transaction_id: String(tx.id), amount: settledAmount }).eq("id", topup.id);
             return json({ status: "success", wallet_balance: newBalance }, 200);
           }
         } catch (_e) {
@@ -550,8 +571,9 @@ Deno.serve(async (req: Request) => {
             const flwData = await flwRes.json();
             const tx = flwData?.data;
             if (flwRes.ok && flwData?.status === "success" && tx?.status === "successful") {
-              runningBalance += Number(tx.amount);
-              await admin.from("wallet_topups").update({ status: "success", flutterwave_transaction_id: String(tx.id) }).eq("id", topup.id);
+              const settledAmount = Number(tx.amount_settled ?? tx.amount);
+              runningBalance += settledAmount;
+              await admin.from("wallet_topups").update({ status: "success", flutterwave_transaction_id: String(tx.id), amount: settledAmount }).eq("id", topup.id);
               credited++;
             }
           } catch (_e) { /* skip this one, try the rest */ }
@@ -672,12 +694,20 @@ Deno.serve(async (req: Request) => {
       let runningBalance = Number(biz.bill_wallet_balance || 0);
       for (const t of txns) {
         if (t.type !== "credit" || t.status !== "successful" || !t.reference) continue;
+        // This endpoint's own response doesn't include amount_settled or
+        // any fee field the way the main transaction-verify endpoints do
+        // (only id/type/amount/currency/narration/status/reference/
+        // created_at are documented) — so unlike every other top-up path
+        // in this file, there's no real fee figure to deduct here. Falls
+        // back to the same estimated percentage shown to the person
+        // before funding, applied to what actually gets credited.
+        const netAmount = Math.round(Number(t.amount) * (1 - FLW_ESTIMATED_FEE_PERCENT / 100) * 100) / 100;
         const { error: insertErr } = await admin.from("wallet_topups").insert({
-          id: crypto.randomUUID(), business_id: businessId, amount: t.amount,
+          id: crypto.randomUUID(), business_id: businessId, amount: netAmount,
           flutterwave_transaction_id: String(t.reference), status: "success",
         });
         if (insertErr) continue; // unique-constraint conflict = already recorded (by webhook or a prior sync) — skip, don't double-credit
-        runningBalance += Number(t.amount);
+        runningBalance += netAmount;
         synced++;
       }
       const bizUpdate: Record<string, unknown> = { psa_last_synced_at: new Date().toISOString() };

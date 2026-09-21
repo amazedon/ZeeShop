@@ -6615,15 +6615,18 @@ function screenSettings(){
   const b = business();
   return `
     ${subHeader("Settings")}
+
+    <div class="section-head"><h3>Appearance</h3></div>
     <div class="card">
-      <div class="settings-row" style="justify-content:space-between;display:flex;">
+      <div class="settings-row" style="justify-content:space-between;display:flex;border-bottom:none;padding:0;">
         <div class="info"><div class="t1">Dark Mode</div><div class="t2">Dark UI, low animation — easier at night, saves battery</div></div>
         <label class="switch"><input type="checkbox" id="toggle-market" ${state.marketMode?'checked':''}><span class="slider-tog"></span></label>
       </div>
     </div>
+
+    <div class="section-head"><h3>Account</h3></div>
     <div class="card">
-      <div class="t1" style="margin-bottom:10px;">Business</div>
-      <div class="t2">${b.name}</div>
+      <div class="t1" style="margin-bottom:10px;">${b.name}</div>
       <div class="t2">${b.country} · ${b.currency}</div>
       <div class="t2" style="margin-top:6px;">Plan: <b style="color:var(--marigold-dark);text-transform:capitalize;">${effectivePlan()}</b></div>
       ${b.autoRenewEnabled ? `
@@ -6631,11 +6634,60 @@ function screenSettings(){
         ${isMaster()?`<button class="btn btn-outline btn-sm" id="disable-autorenew" style="margin-top:8px;">Turn Off Auto-Renewal</button>`:''}
       ` : ''}
       ${isMaster()?`<button class="btn btn-outline btn-sm" id="upgrade-plan" style="margin-top:10px;">View Plans</button>`:''}
-      <div class="t2" style="margin-top:14px;">
-        ${ICON_BELL} Notifications: <b style="color:${b.pushEnabled?'var(--green)':'var(--text-dim)'};">${b.pushEnabled?'ON':'OFF'}</b>
-      </div>
-      <button class="btn btn-outline btn-sm" id="toggle-push" style="margin-top:6px;">${b.pushEnabled?'Turn Off Notifications':'Enable Notifications'}</button>
     </div>
+    <div class="card">
+      <div class="settings-row" style="justify-content:space-between;display:flex;border-bottom:none;padding:0;">
+        <div class="info"><div class="t1">Notifications</div><div class="t2">Alerts for low stock, expiring goods, and overdue credit</div></div>
+        <span class="pill" style="background:${b.pushEnabled?'var(--green-bg)':'var(--paper-dim)'};color:${b.pushEnabled?'var(--green)':'var(--text-dim)'};">${b.pushEnabled?'ON':'OFF'}</span>
+      </div>
+      <button class="btn btn-outline btn-sm" id="toggle-push" style="margin-top:10px;">${b.pushEnabled?'Turn Off Notifications':'Enable Notifications'}</button>
+    </div>
+
+    ${isMaster()?`
+    <div class="section-head"><h3>Shop &amp; Receipts</h3></div>
+    <div class="card">
+      <div class="t1" style="margin-bottom:10px;">This Shop</div>
+      <div class="field"><label>Shop Name</label><input id="set-shopname" value="${currentShop().name}"></div>
+      <div class="field"><label>Address</label><input id="set-address" value="${currentShop().address||''}"></div>
+      <div class="field"><label>Receipt Footer</label><input id="set-footer" value="${currentShop().receiptFooter||''}"></div>
+      <div class="field"><label>Receipt Terms <span class="subtle">(sale conditions, shown on every receipt)</span></label><textarea id="set-terms" rows="2">${currentShop().receiptTerms!=null?currentShop().receiptTerms:'Goods sold in good condition. No refund after payment.'}</textarea></div>
+      <button class="btn btn-outline" id="save-shop-settings">Save</button>
+    </div>
+    <div class="card">
+      <div class="t1" style="margin-bottom:10px;">Business Logo <span class="subtle" style="font-weight:400;">(shows on your receipts)</span></div>
+      ${b.logoDataUrl ? `
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;">
+          <img src="${b.logoDataUrl}" style="width:64px;height:64px;object-fit:contain;border:1px solid var(--line);border-radius:10px;background:#fff;">
+          <button class="btn btn-outline btn-sm" id="remove-logo-btn">Remove Logo</button>
+        </div>
+      ` : `<p class="subtle" style="margin-bottom:10px;">No logo uploaded yet.</p>`}
+      <input type="file" id="logo-upload-input" accept="image/*">
+      <p class="subtle" style="margin-top:6px;">Square images work best. It's shrunk down automatically before saving.</p>
+    </div>
+    <div class="card">
+      <div class="t1" style="margin-bottom:10px;">Business Type <span class="subtle" style="font-weight:400;">(shows on your receipts)</span></div>
+      ${bizTypeSelectHTML('set-biztype', b.businessType||'')}
+      <div style="height:10px;"></div>
+      <button class="btn btn-outline btn-sm" id="save-biztype">Save</button>
+    </div>
+    <div class="card">
+      <div class="t1" style="margin-bottom:6px;">Business Registration Number <span class="subtle" style="font-weight:400;">(shows on your receipts)</span></div>
+      <p class="t2" style="margin-bottom:10px;">Your CAC number or other official registration/tax ID — lets customers verify your business is real through official records, not just this app.</p>
+      <input id="set-regnumber" value="${escAttr(b.registrationNumber||'')}" placeholder="e.g. RC1234567">
+      <div style="height:10px;"></div>
+      <button class="btn btn-outline btn-sm" id="save-regnumber">Save</button>
+    </div>
+    <div class="card">
+      <div class="t1" style="margin-bottom:10px;">Tax <span class="subtle" style="font-weight:400;">(applied automatically at checkout)</span></div>
+      <div class="row2">
+        <div class="field"><label>Tax Name</label><input id="set-taxname" value="${escAttr(b.taxName||'VAT')}"></div>
+        <div class="field"><label>Tax %</label><input id="set-taxpct" type="number" min="0" step="0.1" value="${b.taxPercent||0}"></div>
+      </div>
+      <button class="btn btn-outline btn-sm" id="save-tax">Save</button>
+    </div>
+    `:''}
+
+    <div class="section-head"><h3>Security</h3></div>
     ${isMaster()?`
     <div class="card">
       <div class="t1" style="margin-bottom:6px;">Bill Payments PIN</div>
@@ -6657,51 +6709,12 @@ function screenSettings(){
       <a href="#" id="bp-pin-resend" style="display:inline-block;margin-top:8px;font-size:12px;">Resend code</a>
       `}
     </div>` : ''}
-    ${isMaster()?`
     <div class="card">
-      <div class="t1" style="margin-bottom:10px;">Business Logo <span class="subtle" style="font-weight:400;">(shows on your receipts)</span></div>
-      ${b.logoDataUrl ? `
-        <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;">
-          <img src="${b.logoDataUrl}" style="width:64px;height:64px;object-fit:contain;border:1px solid var(--line);border-radius:10px;background:#fff;">
-          <button class="btn btn-outline btn-sm" id="remove-logo-btn">Remove Logo</button>
-        </div>
-      ` : `<p class="subtle" style="margin-bottom:10px;">No logo uploaded yet.</p>`}
-      <input type="file" id="logo-upload-input" accept="image/*">
-      <p class="subtle" style="margin-top:6px;">Square images work best. It's shrunk down automatically before saving.</p>
-    </div>` : ''}
-    ${isMaster()?`
-    <div class="card">
-      <div class="t1" style="margin-bottom:10px;">Business Type <span class="subtle" style="font-weight:400;">(shows on your receipts)</span></div>
-      ${bizTypeSelectHTML('set-biztype', b.businessType||'')}
-      <div style="height:10px;"></div>
-      <button class="btn btn-outline btn-sm" id="save-biztype">Save</button>
-    </div>` : ''}
-    ${isMaster()?`
-    <div class="card">
-      <div class="t1" style="margin-bottom:6px;">Business Registration Number <span class="subtle" style="font-weight:400;">(shows on your receipts)</span></div>
-      <p class="t2" style="margin-bottom:10px;">Your CAC number or other official registration/tax ID — lets customers verify your business is real through official records, not just this app.</p>
-      <input id="set-regnumber" value="${escAttr(b.registrationNumber||'')}" placeholder="e.g. RC1234567">
-      <div style="height:10px;"></div>
-      <button class="btn btn-outline btn-sm" id="save-regnumber">Save</button>
-    </div>` : ''}
-    ${isMaster()?`
-    <div class="card">
-      <div class="t1" style="margin-bottom:10px;">Tax <span class="subtle" style="font-weight:400;">(applied automatically at checkout)</span></div>
-      <div class="row2">
-        <div class="field"><label>Tax Name</label><input id="set-taxname" value="${escAttr(b.taxName||'VAT')}"></div>
-        <div class="field"><label>Tax %</label><input id="set-taxpct" type="number" min="0" step="0.1" value="${b.taxPercent||0}"></div>
-      </div>
-      <button class="btn btn-outline btn-sm" id="save-tax">Save</button>
-    </div>` : ''}
-    ${isMaster()?`
-    <div class="card">
-      <div class="t1" style="margin-bottom:10px;">This Shop</div>
-      <div class="field"><label>Shop Name</label><input id="set-shopname" value="${currentShop().name}"></div>
-      <div class="field"><label>Address</label><input id="set-address" value="${currentShop().address||''}"></div>
-      <div class="field"><label>Receipt Footer</label><input id="set-footer" value="${currentShop().receiptFooter||''}"></div>
-      <div class="field"><label>Receipt Terms <span class="subtle">(sale conditions, shown on every receipt)</span></label><textarea id="set-terms" rows="2">${currentShop().receiptTerms!=null?currentShop().receiptTerms:'Goods sold in good condition. No refund after payment.'}</textarea></div>
-      <button class="btn btn-outline" id="save-shop-settings">Save</button>
+      <button class="btn btn-outline" id="lock-device">${ICON_LOCK} Lock Screen</button>
     </div>
+
+    ${isMaster()?`
+    <div class="section-head"><h3>Data &amp; Account</h3></div>
     <div class="card">
       <div class="t1" style="margin-bottom:6px;color:var(--red);">Danger Zone</div>
       <div class="t2" style="margin-bottom:10px;">Export all business data as CSV, or permanently delete your business (GDPR — wiped within 30 days).</div>
@@ -6711,9 +6724,6 @@ function screenSettings(){
       </div>
     </div>
     `:''}
-    <div class="card">
-      <button class="btn btn-outline" id="lock-device">${ICON_LOCK} Lock Screen</button>
-    </div>
   `;
 }
 function bindSettingsEvents(){
@@ -9375,11 +9385,35 @@ function screenBillHistory(){
           <div class="t1">${escapeHtml(tx.service_label || tx.service)} — ${escapeHtml(tx.recipient||'')}</div>
           <div class="t2 subtle">${new Date(tx.created_at).toLocaleString()} · ${fmtMoney(tx.sale_price)}</div>
         </div>
-        <span class="pill ${tx.status==='success'?'pill-green':tx.status==='failed'?'pill-red':'pill-amber'}">${tx.status}</span>
-        ${tx.status==='pending' ? `<button class="btn btn-outline btn-sm" data-bp-requery="${tx.id}" style="margin-left:8px;">Check</button>` : ''}
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;">
+          <span class="pill ${tx.status==='success'?'pill-green':tx.status==='failed'?'pill-red':'pill-amber'}">${tx.status}</span>
+          <div style="display:flex;gap:6px;">
+            ${tx.status==='pending' ? `<button class="btn btn-outline btn-sm" data-bp-requery="${tx.id}">Check</button>` : ''}
+            <button class="btn btn-outline btn-sm" data-bp-share="${tx.id}" aria-label="Share this transaction" title="Share">${ICON_EXPORT}</button>
+          </div>
+        </div>
       </div>
     `).join(''))}
   `;
+}
+// Plain-text summary of a single Bill Payments transaction — deliberately
+// text, not a generated image: these are simple list entries (deposits,
+// top-ups, failed attempts, purchases) rather than formal sale receipts,
+// so a readable message the recipient can paste anywhere covers every
+// status and service type without needing a distinct visual per type.
+function billTxShareText(tx){
+  const statusLabel = tx.status==='success' ? 'Successful' : tx.status==='failed' ? 'Failed' : (tx.status ? tx.status[0].toUpperCase()+tx.status.slice(1) : 'Pending');
+  const lines = [
+    `${business()?.name || 'ZeeShop'} — Bill Payment`,
+    `${tx.service_label || tx.service || 'Transaction'}`,
+    `Status: ${statusLabel}`,
+  ];
+  if(tx.recipient) lines.push(`Recipient: ${tx.recipient}`);
+  lines.push(`Amount: ${fmtMoney(tx.sale_price)}`);
+  if(tx.created_at) lines.push(`Date: ${new Date(tx.created_at).toLocaleString()}`);
+  const ref = tx.reference || tx.id;
+  if(ref) lines.push(`Ref: ${ref}`);
+  return lines.join('\n');
 }
 function bindBillHistoryEvents(){
   if(billHistory.length===0 && !billHistoryLoading) bpLoadHistory();
@@ -9394,6 +9428,20 @@ function bindBillHistoryEvents(){
         if(tx) tx.status = r.status || tx.status;
         toast('Status: '+(r.status||'unknown')); refreshMain();
       }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='Check'; }
+    });
+  });
+  document.querySelectorAll('[data-bp-share]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const tx = billHistory.find(x=>x.id===btn.dataset.bpShare);
+      if(!tx) return;
+      const shareText = billTxShareText(tx);
+      if(navigator.share){
+        try{ await navigator.share({title: (business()?.name||'ZeeShop')+' — Transaction', text: shareText}); logAudit('bill_tx_shared', `Shared ${tx.service_label||tx.service||'bill'} transaction (${tx.status})`); }
+        catch(err){ /* user cancelled — not an error */ }
+      } else {
+        try{ await navigator.clipboard.writeText(shareText); toast('Sharing not supported here — copied to clipboard instead ✅'); }
+        catch(err){ toast("Couldn't share or copy on this browser."); }
+      }
     });
   });
 }
@@ -9546,7 +9594,11 @@ const FAQ_GROUPS = [
     { q:"What are Notes for?", a:"A place to jot down anything worth remembering for your shop — a supplier's contact, a reminder, anything. Go to More → Notes. Marking a note as a handover note also surfaces it as a banner on the Home screen for the next person who logs in, until they dismiss it." },
   ]},
   { category: "Home Screen", items: [
-    { q:"What's the \"Today's Snapshot\" section on my Home screen?", a:"A quick summary of expenses and credit given out today, calculated entirely from your own device — nothing is sent anywhere to generate it. Only the Owner sees this." },
+    { q:"What's the \"Today's Snapshot\" section on my Home screen?", a:"A horizontally-scrollable row of today's key numbers — Wallet Balance, Sales Today, Today's Profit (or Cash In for staff), Expenses Today, and Credit Given Today — calculated entirely from your own device. Expenses and Credit Given are only shown to the Owner." },
+    { q:"What's the Wallet Balance card for?", a:"It's your Bill Payments wallet balance, shown right on Home so you always know if you can make a bill payments sale. If it's empty or not yet funded, it shows ₦0 with a Fund Wallet button so the feature stays easy to find." },
+    { q:"How do I hide one of the numbers on my Home screen from view?", a:"Tap the eye icon on that card — each card (Wallet Balance, Sales, Profit, Expenses, Credit) has its own independent toggle, so you can mask just the ones you don't want visible, for example if someone's looking over your shoulder. It stays masked as you move around the app, and resets to visible again the next time you log in." },
+    { q:"What are the Airtime, Data, Electricity and More tiles on Home?", a:"Shortcuts straight into Bill Payments. Airtime, Data, and Electricity jump directly to that purchase screen; More opens the full Bill Payments hub for everything else — Cable TV, Betting, Result Checker PINs, Internet (ISP), Transaction History, and Manage Prices." },
+    { q:"Where did the New Sale and Close Day buttons on Home go?", a:"New Sale still has its own tab in the bottom navigation — always one tap away. Close Day moved into More → Close Day (or Close My Shift for staff), keeping the Home screen focused on today's numbers and bill payments." },
     { q:"What's \"Recent Activity\" on my Home screen?", a:"A live feed of what your staff have been doing — sales, restocks, edits — across every device, not just the one you're holding. Only the Owner sees this." },
     { q:"What does the small dot next to the bell icon mean?", a:"It shows your sync status at a glance: green means everything's up to date, amber means changes are waiting to reach the cloud (normal if you've just gone offline), and red means something's stuck and worth checking your connection for." },
     { q:"Is there a built-in calculator?", a:"Yes — go to More → Calculator for quick math without leaving the app." },

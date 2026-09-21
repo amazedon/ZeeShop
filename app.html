@@ -195,34 +195,30 @@ main{flex:1;padding:14px 14px 90px;max-width:640px;margin:0 auto;width:100%;}
 .stat-box.accent .val{color:var(--marigold);}
 
 /* consolidated horizontally-scrollable metric cards row (Home dashboard).
-   Each card gets its own accent color (top bar + icon chip) via inline
-   style, set from CARD_META in JS — this keeps the color itself mode-
-   agnostic (works the same in light/dark) while the card surface, border
-   and text keep using the theme variables so Dark Mode / Market Mode
-   recolors them correctly instead of leaving stale white surfaces. */
+   Each card is a full colored gradient (set inline from CARD_META in JS,
+   Kuda/fintech-app style) with white text baked in directly — that's
+   deliberate: because the color isn't theme-driven, these cards already
+   look identical and correct in Dark Mode / Market Mode with zero extra
+   dark-mode CSS needed, instead of relying on variables that can drift
+   out of sync with new markup. */
 .metric-scroll{
   display:flex;gap:10px;overflow-x:auto;padding:2px 2px 6px;margin-bottom:4px;
   scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;
 }
 .metric-scroll::-webkit-scrollbar{height:4px;}
 .metric-card{
-  background:#fff;border:1px solid var(--line);border-top:3px solid var(--accent,var(--line));
-  border-radius:12px;padding:12px 14px 14px;min-width:158px;flex:0 0 auto;scroll-snap-align:start;
+  border:none;border-radius:14px;padding:16px;min-width:172px;flex:0 0 auto;
+  scroll-snap-align:start;color:#fff;box-shadow:0 4px 14px rgba(0,0,0,0.16);
 }
-.metric-top{display:flex;align-items:center;justify-content:space-between;gap:8px;}
-.metric-icon{
-  width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;
-  font-size:15px;flex-shrink:0;background:var(--accent-tint,var(--paper-dim));
-}
-.metric-card .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-dim);font-weight:700;margin-top:9px;}
-.metric-card .val{font-size:20px;font-weight:900;color:var(--ink-text);margin-top:4px;white-space:nowrap;}
-.eye-btn{background:none;border:none;padding:2px;display:flex;align-items:center;color:var(--text-dim);flex-shrink:0;}
-.metric-actions{display:flex;gap:6px;margin-top:9px;}
+.metric-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;}
+.metric-card .lbl{font-size:12.5px;color:rgba(255,255,255,0.88);font-weight:600;margin-top:8px;}
+.metric-card .val{font-size:22px;font-weight:900;color:#fff;margin-top:2px;white-space:nowrap;}
+.eye-btn{background:none;border:none;padding:2px;display:flex;align-items:center;color:#fff;flex-shrink:0;opacity:0.9;}
+.metric-actions{display:flex;gap:14px;margin-top:10px;}
 .metric-action{
-  background:var(--marigold);color:var(--ink-text);border:none;border-radius:8px;
-  padding:5px 10px;font-size:11px;font-weight:800;white-space:nowrap;
+  background:transparent;border:none;color:#fff;font-weight:800;font-size:12.5px;
+  padding:0;text-decoration:underline;white-space:nowrap;
 }
-.metric-action-outline{background:transparent;border:1.5px solid var(--line);color:var(--ink-text);}
 
 /* utility icon tiles row (Home dashboard, replaces old Quick Actions buttons) */
 .util-tiles-row{display:flex;gap:10px;margin-bottom:14px;}
@@ -345,17 +341,18 @@ body.market-mode *{animation:none !important;transition:none !important;box-shad
 body.market-mode main{color:#eee;}
 
 /* surfaces (cards, sheets, tiles, panels) — these use literal #fff rather
-   than var(--paper), so they still need explicit overrides here. */
+   than var(--paper), so they still need explicit overrides here. Note:
+   .metric-card is deliberately excluded — it's a full colored gradient
+   set inline per card and stays identical in both themes. */
 body.market-mode .card,body.market-mode .stat-box,body.market-mode .list-row,body.market-mode .good-tile,
 body.market-mode .receipt-card,body.market-mode .sheet,body.market-mode .auth-card,
 body.market-mode .user-tile,body.market-mode .pinpad button,body.market-mode .contact-btns a,
 body.market-mode .contact-btns button,body.market-mode .qty-stepper button,
-body.market-mode .metric-card,body.market-mode .util-tile{
+body.market-mode .util-tile{
   background:#0a0a0a;border-color:#2a2a2a;
 }
 body.market-mode .stat-box.accent{background:var(--ink);border-color:var(--ink);}
 body.market-mode .util-icon-circle{background:#1a1a1a;}
-body.market-mode .metric-action-outline{border-color:#3a3a3a;color:#fff;}
 body.market-mode .topbar,body.market-mode .bottomnav{background:#000;border-color:#2a2a2a;}
 body.market-mode .receipt-card::after{
   background:
@@ -3435,17 +3432,16 @@ function handoverNoteBanner(){
 }
 
 // One consolidated, horizontally-scrollable row of today's key money
-// Visual identity for each metric card — icon + accent color, so the five
-// (or three, for non-master) stats are distinguishable at a glance. Colors
-// are picked to work as a light tint (icon chip) + solid top bar in both
-// the light theme and Dark/Market Mode, so no per-theme variant is needed.
+// Visual identity for each metric card — a full colored gradient
+// background (Kuda-style), set inline per card so it renders identically
+// in both the light theme and Dark/Market Mode with no extra CSS needed.
 const CARD_META = {
-  billwallet: { icon:'👛', color:'#7C5CFC', tint:'rgba(124,92,252,0.16)' },
-  sales:      { icon:'🧾', color:'#2F80ED', tint:'rgba(47,128,237,0.16)' },
-  profit:     { icon:'📈', color:'#2E7D32', tint:'rgba(46,125,50,0.16)' },
-  cashin:     { icon:'💵', color:'#0F9488', tint:'rgba(15,148,136,0.16)' },
-  expenses:   { icon:'💸', color:'#E1553F', tint:'rgba(225,85,63,0.16)' },
-  credit:     { icon:'🤝', color:'#D98E1E', tint:'rgba(217,142,30,0.16)' },
+  billwallet: { from:'#3562E8', to:'#7C9CF5' },
+  sales:      { from:'#17A470', to:'#4FD8A0' },
+  profit:     { from:'#7A4CE0', to:'#A78BFA' },
+  cashin:     { from:'#0F9488', to:'#4FD1C5' },
+  expenses:   { from:'#E1553F', to:'#FF9472' },
+  credit:     { from:'#D98E1E', to:'#F6C35C' },
 };
 
 // One consolidated, horizontally-scrollable row of today's key money
@@ -3486,7 +3482,7 @@ function dailyDigestBlock(){
       value: fmtMoney(walletVal),
       footer: `<div class="metric-actions">
         ${walletEmpty ? `<button class="metric-action" data-wallet-fund>Fund Wallet</button>` : ''}
-        <button class="metric-action metric-action-outline" data-wallet-history>History</button>
+        <button class="metric-action" data-wallet-history>History</button>
       </div>`
     } : null,
     { id:'sales', label: t('dash_sales_today'), value: fmtMoney(todayTotal) },
@@ -3507,15 +3503,14 @@ function dailyDigestBlock(){
 }
 function metricCardHTML(c){
   const hidden = isCardHidden(c.id);
-  const meta = CARD_META[c.id] || { icon:'📊', color:'var(--line)', tint:'var(--paper-dim)' };
+  const meta = CARD_META[c.id] || { from:'#5A6472', to:'#8A93A3' };
   return `
-    <div class="metric-card" style="--accent:${meta.color};--accent-tint:${meta.tint};">
+    <div class="metric-card" style="background:linear-gradient(135deg, ${meta.from}, ${meta.to});">
       <div class="metric-top">
-        <div class="metric-icon">${meta.icon}</div>
+        <div class="val">${hidden ? '••••••' : c.value}</div>
         <button class="eye-btn" data-eye-toggle="${c.id}" aria-label="${hidden?'Show':'Hide'} ${escAttr(c.label)}">${hidden?ICON_EYE:ICON_EYE_OFF}</button>
       </div>
       <div class="lbl">${c.label}</div>
-      <div class="val">${hidden ? '••••••' : c.value}</div>
       ${c.footer||''}
     </div>`;
 }

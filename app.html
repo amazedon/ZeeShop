@@ -9154,11 +9154,23 @@ function screenBillPricing(){
 
 function bindBillPricingEvents(){
   if(billPriceOverrides===null) bpLoadPriceOverrides().then(refreshMain);
-  if(!billCache.dataPlans) bpLoadDataPlans();
-  if(!billCache.cablePlans) bpLoadCablePlans();
-  if(!billCache.resultCheckerPrices) bpLoadResultCheckerPrices();
-  if(!billCache.ispSmilePlans) bpLoadIspPlans('smile');
-  if(!billCache.ispSpectranetPlans) bpLoadIspPlans('spectranet');
+  // These 5 loads used to fire all at once — a burst of simultaneous
+  // Bigisub calls every time this screen opened, which is a plausible way
+  // to trip their rate limit (and re-trip it again on every reload while
+  // already throttled). Staggered instead, one at a time with a short
+  // pause between each — slower to fully populate, but far gentler on
+  // whatever request budget Bigisub allows.
+  (async () => {
+    if(!billCache.dataPlans) await bpLoadDataPlans();
+    await new Promise(r=>setTimeout(r, 400));
+    if(!billCache.cablePlans) await bpLoadCablePlans();
+    await new Promise(r=>setTimeout(r, 400));
+    if(!billCache.resultCheckerPrices) await bpLoadResultCheckerPrices();
+    await new Promise(r=>setTimeout(r, 400));
+    if(!billCache.ispSmilePlans) await bpLoadIspPlans('smile');
+    await new Promise(r=>setTimeout(r, 400));
+    if(!billCache.ispSpectranetPlans) await bpLoadIspPlans('spectranet');
+  })();
 
   document.querySelectorAll('[data-flatfee-input]').forEach(inp=>{
     inp.addEventListener('input', e=>{ billFlatFeeDrafts[inp.dataset.flatfeeInput] = e.target.value; });

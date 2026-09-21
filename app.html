@@ -211,8 +211,8 @@ main{flex:1;padding:14px 14px 90px;max-width:640px;margin:0 auto;width:100%;}
   scroll-snap-align:start;color:#fff;box-shadow:0 4px 14px rgba(0,0,0,0.16);
 }
 .metric-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;}
-.metric-card .lbl{font-size:12.5px;color:rgba(255,255,255,0.88);font-weight:600;margin-top:8px;}
-.metric-card .val{font-size:22px;font-weight:900;color:#fff;margin-top:2px;white-space:nowrap;}
+.metric-card .lbl{font-size:12.5px;color:rgba(255,255,255,0.88);font-weight:600;}
+.metric-card .val{font-size:22px;font-weight:900;color:#fff;margin-top:10px;white-space:nowrap;}
 .eye-btn{background:none;border:none;padding:2px;display:flex;align-items:center;color:#fff;flex-shrink:0;opacity:0.9;}
 .metric-actions{display:flex;gap:14px;margin-top:10px;}
 .metric-action{
@@ -3478,7 +3478,7 @@ function dailyDigestBlock(){
 
   const cards = [
     showWallet ? {
-      id:'billwallet', label:'Bill Wallet Balance',
+      id:'billwallet', label:'Wallet Balance',
       value: fmtMoney(walletVal),
       footer: `<div class="metric-actions">
         ${walletEmpty ? `<button class="metric-action" data-wallet-fund>Fund Wallet</button>` : ''}
@@ -3507,10 +3507,10 @@ function metricCardHTML(c){
   return `
     <div class="metric-card" style="background:linear-gradient(135deg, ${meta.from}, ${meta.to});">
       <div class="metric-top">
-        <div class="val">${hidden ? '••••••' : c.value}</div>
+        <div class="lbl">${c.label}</div>
         <button class="eye-btn" data-eye-toggle="${c.id}" aria-label="${hidden?'Show':'Hide'} ${escAttr(c.label)}">${hidden?ICON_EYE:ICON_EYE_OFF}</button>
       </div>
-      <div class="lbl">${c.label}</div>
+      <div class="val">${hidden ? '••••••' : c.value}</div>
       ${c.footer||''}
     </div>`;
 }

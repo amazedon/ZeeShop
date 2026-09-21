@@ -194,6 +194,42 @@ main{flex:1;padding:14px 14px 90px;max-width:640px;margin:0 auto;width:100%;}
 .stat-box.accent .lbl{color:rgba(255,255,255,0.6);}
 .stat-box.accent .val{color:var(--marigold);}
 
+/* consolidated horizontally-scrollable metric cards row (Home dashboard) */
+.metric-scroll{
+  display:flex;gap:10px;overflow-x:auto;padding:2px 2px 6px;margin-bottom:4px;
+  scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;
+}
+.metric-scroll::-webkit-scrollbar{height:4px;}
+.metric-card{
+  background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;
+  min-width:152px;flex:0 0 auto;scroll-snap-align:start;
+}
+.metric-card.accent{background:var(--ink);}
+.metric-top{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.metric-card .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-dim);font-weight:700;}
+.metric-card.accent .lbl{color:rgba(255,255,255,0.6);}
+.metric-card .val{font-size:20px;font-weight:900;color:var(--ink-text);margin-top:6px;white-space:nowrap;}
+.metric-card.accent .val{color:var(--marigold);}
+.eye-btn{background:none;border:none;padding:2px;display:flex;align-items:center;color:var(--text-dim);flex-shrink:0;}
+.metric-card.accent .eye-btn{color:rgba(255,255,255,0.65);}
+.metric-action{
+  margin-top:8px;background:var(--marigold);color:var(--ink-text);border:none;border-radius:8px;
+  padding:5px 10px;font-size:11px;font-weight:800;
+}
+
+/* utility icon tiles row (Home dashboard, replaces old Quick Actions buttons) */
+.util-tiles-row{display:flex;gap:10px;margin-bottom:14px;}
+.util-tile{
+  flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;background:#fff;
+  border:1px solid var(--line);border-radius:12px;padding:14px 6px;cursor:pointer;
+}
+.util-tile:active{background:var(--paper-dim);}
+.util-icon-circle{
+  width:44px;height:44px;border-radius:50%;background:var(--paper-dim);
+  display:flex;align-items:center;justify-content:center;font-size:20px;
+}
+.util-label{font-size:11.5px;font-weight:700;color:var(--ink-text);text-align:center;}
+
 .section-head{display:flex;align-items:center;justify-content:space-between;margin:18px 0 10px;}
 .section-head h3{font-size:15px;}
 .pill{padding:3px 9px;border-radius:20px;font-size:10.5px;font-weight:800;letter-spacing:.02em;}
@@ -1376,6 +1412,16 @@ function logAudit(action,details){
 let route = "dashboard";
 let cart = []; // {goodId, variantId (optional), qty, note}
 let toastTimer=null;
+
+// Per-card "mask this balance" state for the Home dashboard's metric row.
+// Intentionally in-memory only (not saved via save()/localStorage): it
+// should survive navigating away and back during this session, but must
+// reset automatically on logout — an in-memory object does exactly that
+// without any extra cleanup, since it simply stops being read once a new
+// session starts, and we also explicitly clear it on logout for safety.
+let hiddenBalanceCards = {};
+function isCardHidden(id){ return !!hiddenBalanceCards[id]; }
+function toggleCardHidden(id){ hiddenBalanceCards[id] = !hiddenBalanceCards[id]; refreshMain(); }
 
 function toast(msg){
   clearTimeout(toastTimer);
@@ -3289,25 +3335,9 @@ function saveNewLocation(isWarehouse){
    ============================================================ */
 function screenDashboard(){
   const u = currentUser();
-  const shopSales = state.sales.filter(s=>s.shopId===state.currentShopId && s.date===todayISO() && s.status!=='voided');
-  const todayTotal = shopSales.reduce((a,s)=>a+s.subtotal,0);
-  const todayCash = shopSales.filter(s=>s.status!=='credit').reduce((a,s)=>a+s.paidAmount,0);
   const alerts = alertCounts();
   const goods = state.goods.filter(g=>g.shopId===state.currentShopId);
   const outStock = goods.filter(g=>totalStock(g)<=0);
-
-  let profitBlock = '';
-  if(isMaster()){
-    const cogs = shopSales.reduce((a,s)=> a + s.items.reduce((b,it)=>{
-      const g = state.goods.find(x=>x.id===it.goodId);
-      return b + (g?g.costPrice:0)*netQty(it);
-    },0), 0);
-    profitBlock = `
-      <div class="stat-box accent">
-        <div class="lbl">${t('dash_profit_today')}</div>
-        <div class="val">${fmtMoney(todayTotal-cogs)}</div>
-      </div>`;
-  }
 
   return `
     <h2 class="screen-title">${greeting()}, ${u.firstName} 👋</h2>
@@ -3315,11 +3345,7 @@ function screenDashboard(){
     ${handoverNoteBanner()}
     <p class="subtle" style="margin-bottom:14px;">${currentShop()?.name} · ${fmtDate(todayISO())}</p>
 
-    <div class="stat-grid">
-      <div class="stat-box"><div class="lbl">${t('dash_sales_today')}</div><div class="val">${fmtMoney(todayTotal)}</div></div>
-      ${profitBlock || `<div class="stat-box"><div class="lbl">${t('dash_cash_in')}</div><div class="val">${fmtMoney(todayCash)}</div></div>`}
-    </div>
-    ${isMaster() ? dailyDigestBlock() : ''}
+    ${dailyDigestBlock()}
 
     ${(alerts.expiring>0 || alerts.dueSoon>0 || alerts.overdue>0 || alerts.lowStock>0 || outStock.length>0) ? `
       <div class="section-head"><h3>${t('dash_needs_attention')}</h3></div>
@@ -3340,14 +3366,34 @@ function screenDashboard(){
       </div>`:''}
     ` : `<div class="empty"><div class="ic">${ICON_CHECK_CIRCLE}</div><b>${t('dash_all_clear')}</b>${t('dash_no_alerts')}</div>`}
 
-    <div class="section-head"><h3>${t('dash_quick_actions')}</h3></div>
-    <div style="display:flex;gap:10px;">
-      ${!isViewer() && canDo('canSell')?`<button class="btn btn-dark" style="flex:1;" data-goto="sale">${ICON_RECEIPT} ${t('dash_new_sale')}</button>`:''}
-      ${isMaster()?`<button class="btn btn-outline" style="flex:1;" data-goto="closeday">${ICON_LOCK} ${t('dash_close_day')}</button>`:''}
-      ${isStaff() && canDo('canRecordCash')?`<button class="btn btn-outline" style="flex:1;" data-goto="closeday">${ICON_LOCK} ${t('dash_close_shift')}</button>`:''}
-    </div>
+    ${utilityTilesBlock()}
 
     ${isMaster() ? staffActivityFeed() : ''}
+  `;
+}
+
+// Quick-access icon tiles for the three most common bill-payment purchases,
+// plus a "More" tile into the full Bill Payments hub (Cable, Betting,
+// Result Checker, ISP, etc.). Replaces the old Quick Actions button pair —
+// New Sale now lives only on its dedicated bottom-nav tab, and Close Day
+// has moved into the More hub so it doesn't clutter daily workflows.
+function utilityTilesBlock(){
+  if(isViewer() || !canDo('canBillPayments')) return '';
+  const tiles = [
+    {id:'airtime', label:'Airtime', icon:'📱'},
+    {id:'data', label:'Data', icon:'📶'},
+    {id:'electricity', label:'Electricity', icon:'💡'},
+    {id:'more', label:'More', icon:'⋯'},
+  ];
+  return `
+    <div class="section-head"><h3>Bill Payments</h3></div>
+    <div class="util-tiles-row">
+      ${tiles.map(tl=>`
+        <div class="util-tile" data-util-tile="${tl.id}">
+          <div class="util-icon-circle">${tl.icon}</div>
+          <div class="util-label">${tl.label}</div>
+        </div>`).join('')}
+    </div>
   `;
 }
 
@@ -3378,23 +3424,69 @@ function handoverNoteBanner(){
     </div>`;
 }
 
-// A slightly richer end-of-day-so-far snapshot for the owner, entirely
-// computed on-device from today's local data — no server job, no push,
-// no email, nothing sent anywhere. It's just today's numbers laid out.
+// One consolidated, horizontally-scrollable row of today's key money
+// numbers, entirely computed on-device from today's local data — no
+// server job, no push, no email, nothing sent anywhere. Order: Bill
+// Wallet Balance, Sales Today, Today's Profit (or Cash In for non-master),
+// Expenses Today, Credit Given Today. Each card carries its own
+// independent eye toggle (see isCardHidden/toggleCardHidden).
 function dailyDigestBlock(){
-  const shopExpensesToday = state.expenses.filter(e=>e.shopId===state.currentShopId && e.date===todayISO());
-  const expensesToday = shopExpensesToday.reduce((a,e)=>a+e.amount,0);
   const shopSalesToday = state.sales.filter(s=>s.shopId===state.currentShopId && s.date===todayISO() && s.status!=='voided');
-  const creditGivenToday = shopSalesToday.filter(s=>s.status==='credit'||s.status==='partial').reduce((a,s)=>a+s.balance,0);
+  const todayTotal = shopSalesToday.reduce((a,s)=>a+s.subtotal,0);
+  const todayCash = shopSalesToday.filter(s=>s.status!=='credit').reduce((a,s)=>a+s.paidAmount,0);
   const txCount = shopSalesToday.length;
+
+  let profitToday = 0;
+  if(isMaster()){
+    const cogs = shopSalesToday.reduce((a,s)=> a + s.items.reduce((b,it)=>{
+      const g = state.goods.find(x=>x.id===it.goodId);
+      return b + (g?g.costPrice:0)*netQty(it);
+    },0), 0);
+    profitToday = todayTotal - cogs;
+  }
+
+  const showWallet = !isViewer() && canDo('canBillPayments');
+  // Bill Wallet Balance is shown universally (to anyone with bill-payments
+  // access) rather than being hidden when unfunded — an unconfigured or
+  // zero-balance wallet just renders as ₦0 with a "Fund Wallet" prompt so
+  // the feature stays discoverable instead of disappearing.
+  const walletKnown = billWalletBalance !== null;
+  const walletVal = walletKnown ? billWalletBalance : 0;
+  const walletEmpty = !walletKnown || walletVal<=0;
+
+  const cards = [
+    showWallet ? {
+      id:'billwallet', label:'Bill Wallet Balance',
+      value: fmtMoney(walletVal),
+      footer: walletEmpty ? `<button class="metric-action" data-wallet-fund>Fund Wallet</button>` : ''
+    } : null,
+    { id:'sales', label: t('dash_sales_today'), value: fmtMoney(todayTotal) },
+    isMaster()
+      ? { id:'profit', label: t('dash_profit_today'), value: fmtMoney(profitToday), accent:true }
+      : { id:'cashin', label: t('dash_cash_in'), value: fmtMoney(todayCash) },
+    isMaster() ? { id:'expenses', label:'Expenses Today', value: fmtMoney(state.expenses.filter(e=>e.shopId===state.currentShopId && e.date===todayISO()).reduce((a,e)=>a+e.amount,0)) } : null,
+    isMaster() ? { id:'credit', label:'Credit Given Today', value: fmtMoney(shopSalesToday.filter(s=>s.status==='credit'||s.status==='partial').reduce((a,s)=>a+s.balance,0)) } : null,
+  ].filter(Boolean);
+
   return `
     <div class="section-head"><h3>Today's Snapshot</h3></div>
-    <div class="stat-grid">
-      <div class="stat-box"><div class="lbl">Expenses Today</div><div class="val">${fmtMoney(expensesToday)}</div></div>
-      <div class="stat-box"><div class="lbl">Credit Given Today</div><div class="val">${fmtMoney(creditGivenToday)}</div></div>
+    <div class="metric-scroll">
+      ${cards.map(metricCardHTML).join('')}
     </div>
     <p class="subtle" style="margin:-6px 0 4px;">${txCount} sale(s) today</p>
   `;
+}
+function metricCardHTML(c){
+  const hidden = isCardHidden(c.id);
+  return `
+    <div class="metric-card ${c.accent?'accent':''}">
+      <div class="metric-top">
+        <div class="lbl">${c.label}</div>
+        <button class="eye-btn" data-eye-toggle="${c.id}" aria-label="${hidden?'Show':'Hide'} ${escAttr(c.label)}">${hidden?ICON_EYE:ICON_EYE_OFF}</button>
+      </div>
+      <div class="val">${hidden ? '••••••' : c.value}</div>
+      ${c.footer||''}
+    </div>`;
 }
 
 // Recent staff activity — the owner's window into what's happening across
@@ -3439,6 +3531,29 @@ function bindDashboardEvents(){
     save();
     render();
   }));
+
+  // Lazy-load the Bill Wallet Balance metric card the first time Home is
+  // shown, same call the Bill Payments hub uses — keeps the card accurate
+  // without hitting the network on every dashboard re-render.
+  if(!isViewer() && canDo('canBillPayments') && billWalletBalance===null && !billLoading) bpLoadWallet();
+
+  document.querySelectorAll('[data-eye-toggle]').forEach(b=>{
+    b.addEventListener('click', (e)=>{ e.stopPropagation(); toggleCardHidden(b.dataset.eyeToggle); });
+  });
+  const fundBtn = document.querySelector('[data-wallet-fund]');
+  if(fundBtn) fundBtn.addEventListener('click', (e)=>{
+    e.stopPropagation();
+    route = 'billpayments'; billScreen = 'topup'; render();
+  });
+  document.querySelectorAll('[data-util-tile]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const id = el.dataset.utilTile;
+      route = 'billpayments';
+      billScreen = (id==='more') ? 'hub' : id;
+      billResetForm();
+      render();
+    });
+  });
 }
 function greeting(){ const h=new Date().getHours(); return h<12?t('greeting_morning'):h<17?t('greeting_afternoon'):t('greeting_evening'); }
 function subHeader(title){
@@ -5066,11 +5181,11 @@ function bindMoreEvents(){
     }
   });
   const lo = document.getElementById('do-logout');
-  if(lo) lo.addEventListener('click', ()=>{ state.sessionUserId=null; forceFullLogin=false; route='dashboard'; render(); });
+  if(lo) lo.addEventListener('click', ()=>{ hiddenBalanceCards={}; state.sessionUserId=null; forceFullLogin=false; route='dashboard'; render(); });
   const flo = document.getElementById('do-full-logout');
   if(flo) flo.addEventListener('click', ()=>{
     if(confirm('Sign out of this business on this device?')){
-      state.sessionUserId=null; forceFullLogin=true; authMode='login'; pendingSignupData=null; authError=''; route='dashboard'; render();
+      hiddenBalanceCards={}; state.sessionUserId=null; forceFullLogin=true; authMode='login'; pendingSignupData=null; authError=''; route='dashboard'; render();
     }
   });
 }

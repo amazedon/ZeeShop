@@ -244,34 +244,28 @@ Deno.serve(async (req: Request) => {
         },
       }, 200);
     }
-    if (action === "data_plans") {
-      const data = await bigisub("GET", EP.DATA_PLANS);
-      return json({ plans: normalizeList(data, "plans") }, 200);
-    }
-    if (action === "cable_plans") {
-      const data = await bigisub("GET", EP.CABLE_PLANS);
-      return json({ plans: normalizeList(data, "plans") }, 200);
-    }
-    if (action === "electricity_providers") {
-      const data = await bigisub("GET", EP.ELECTRICITY_PROVIDERS);
-      return json({ providers: normalizeList(data, "providers") }, 200);
-    }
-    if (action === "result_checker_prices") {
-      const data = await bigisub("GET", EP.RESULT_CHECKER_PRICES);
-      return json({ prices: normalizeList(data, "prices") }, 200);
-    }
-    if (action === "betting_billers") {
-      const data = await bigisub("GET", EP.BETTING_BILLERS);
-      return json({ billers: normalizeList(data, "billers") }, 200);
-    }
-    if (action === "isp_smile_plans") {
-      const data = await bigisub("GET", EP.ISP_SMILE_PLANS);
-      return json({ plans: normalizeList(data, "plans") }, 200);
-    }
-    if (action === "isp_spectranet_plans") {
-      const data = await bigisub("GET", EP.ISP_SPECTRANET_PLANS);
-      return json({ plans: normalizeList(data, "plans") }, 200);
-    }
+    // Shared by every simple list-fetch action below — if Bigisub itself
+    // rejects the request (rate-limit throttling being the one we've
+    // actually hit), this surfaces THAT real message with a proper 502,
+    // instead of the request falling through uncaught to the top-level
+    // catch-all's generic 500. The message is unchanged either way (the
+    // client already reads and displays it correctly regardless of status
+    // code) — this is about correct HTTP semantics, not new behavior.
+    const fetchListAction = async (path: string, key: string, responseKey: string) => {
+      try {
+        const data = await bigisub("GET", path);
+        return json({ [responseKey]: normalizeList(data, key) }, 200);
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : "Could not reach Bigisub." }, 502);
+      }
+    };
+    if (action === "data_plans") return await fetchListAction(EP.DATA_PLANS, "plans", "plans");
+    if (action === "cable_plans") return await fetchListAction(EP.CABLE_PLANS, "plans", "plans");
+    if (action === "electricity_providers") return await fetchListAction(EP.ELECTRICITY_PROVIDERS, "providers", "providers");
+    if (action === "result_checker_prices") return await fetchListAction(EP.RESULT_CHECKER_PRICES, "prices", "prices");
+    if (action === "betting_billers") return await fetchListAction(EP.BETTING_BILLERS, "billers", "billers");
+    if (action === "isp_smile_plans") return await fetchListAction(EP.ISP_SMILE_PLANS, "plans", "plans");
+    if (action === "isp_spectranet_plans") return await fetchListAction(EP.ISP_SPECTRANET_PLANS, "plans", "plans");
 
     // ---------- verify-before-charge steps ----------
     if (action === "cable_verify") {

@@ -194,28 +194,35 @@ main{flex:1;padding:14px 14px 90px;max-width:640px;margin:0 auto;width:100%;}
 .stat-box.accent .lbl{color:rgba(255,255,255,0.6);}
 .stat-box.accent .val{color:var(--marigold);}
 
-/* consolidated horizontally-scrollable metric cards row (Home dashboard) */
+/* consolidated horizontally-scrollable metric cards row (Home dashboard).
+   Each card gets its own accent color (top bar + icon chip) via inline
+   style, set from CARD_META in JS — this keeps the color itself mode-
+   agnostic (works the same in light/dark) while the card surface, border
+   and text keep using the theme variables so Dark Mode / Market Mode
+   recolors them correctly instead of leaving stale white surfaces. */
 .metric-scroll{
   display:flex;gap:10px;overflow-x:auto;padding:2px 2px 6px;margin-bottom:4px;
   scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;
 }
 .metric-scroll::-webkit-scrollbar{height:4px;}
 .metric-card{
-  background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;
-  min-width:152px;flex:0 0 auto;scroll-snap-align:start;
+  background:#fff;border:1px solid var(--line);border-top:3px solid var(--accent,var(--line));
+  border-radius:12px;padding:12px 14px 14px;min-width:158px;flex:0 0 auto;scroll-snap-align:start;
 }
-.metric-card.accent{background:var(--ink);}
 .metric-top{display:flex;align-items:center;justify-content:space-between;gap:8px;}
-.metric-card .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-dim);font-weight:700;}
-.metric-card.accent .lbl{color:rgba(255,255,255,0.6);}
-.metric-card .val{font-size:20px;font-weight:900;color:var(--ink-text);margin-top:6px;white-space:nowrap;}
-.metric-card.accent .val{color:var(--marigold);}
-.eye-btn{background:none;border:none;padding:2px;display:flex;align-items:center;color:var(--text-dim);flex-shrink:0;}
-.metric-card.accent .eye-btn{color:rgba(255,255,255,0.65);}
-.metric-action{
-  margin-top:8px;background:var(--marigold);color:var(--ink-text);border:none;border-radius:8px;
-  padding:5px 10px;font-size:11px;font-weight:800;
+.metric-icon{
+  width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;
+  font-size:15px;flex-shrink:0;background:var(--accent-tint,var(--paper-dim));
 }
+.metric-card .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-dim);font-weight:700;margin-top:9px;}
+.metric-card .val{font-size:20px;font-weight:900;color:var(--ink-text);margin-top:4px;white-space:nowrap;}
+.eye-btn{background:none;border:none;padding:2px;display:flex;align-items:center;color:var(--text-dim);flex-shrink:0;}
+.metric-actions{display:flex;gap:6px;margin-top:9px;}
+.metric-action{
+  background:var(--marigold);color:var(--ink-text);border:none;border-radius:8px;
+  padding:5px 10px;font-size:11px;font-weight:800;white-space:nowrap;
+}
+.metric-action-outline{background:transparent;border:1.5px solid var(--line);color:var(--ink-text);}
 
 /* utility icon tiles row (Home dashboard, replaces old Quick Actions buttons) */
 .util-tiles-row{display:flex;gap:10px;margin-bottom:14px;}
@@ -342,10 +349,13 @@ body.market-mode main{color:#eee;}
 body.market-mode .card,body.market-mode .stat-box,body.market-mode .list-row,body.market-mode .good-tile,
 body.market-mode .receipt-card,body.market-mode .sheet,body.market-mode .auth-card,
 body.market-mode .user-tile,body.market-mode .pinpad button,body.market-mode .contact-btns a,
-body.market-mode .contact-btns button,body.market-mode .qty-stepper button{
+body.market-mode .contact-btns button,body.market-mode .qty-stepper button,
+body.market-mode .metric-card,body.market-mode .util-tile{
   background:#0a0a0a;border-color:#2a2a2a;
 }
 body.market-mode .stat-box.accent{background:var(--ink);border-color:var(--ink);}
+body.market-mode .util-icon-circle{background:#1a1a1a;}
+body.market-mode .metric-action-outline{border-color:#3a3a3a;color:#fff;}
 body.market-mode .topbar,body.market-mode .bottomnav{background:#000;border-color:#2a2a2a;}
 body.market-mode .receipt-card::after{
   background:
@@ -3425,6 +3435,20 @@ function handoverNoteBanner(){
 }
 
 // One consolidated, horizontally-scrollable row of today's key money
+// Visual identity for each metric card — icon + accent color, so the five
+// (or three, for non-master) stats are distinguishable at a glance. Colors
+// are picked to work as a light tint (icon chip) + solid top bar in both
+// the light theme and Dark/Market Mode, so no per-theme variant is needed.
+const CARD_META = {
+  billwallet: { icon:'👛', color:'#7C5CFC', tint:'rgba(124,92,252,0.16)' },
+  sales:      { icon:'🧾', color:'#2F80ED', tint:'rgba(47,128,237,0.16)' },
+  profit:     { icon:'📈', color:'#2E7D32', tint:'rgba(46,125,50,0.16)' },
+  cashin:     { icon:'💵', color:'#0F9488', tint:'rgba(15,148,136,0.16)' },
+  expenses:   { icon:'💸', color:'#E1553F', tint:'rgba(225,85,63,0.16)' },
+  credit:     { icon:'🤝', color:'#D98E1E', tint:'rgba(217,142,30,0.16)' },
+};
+
+// One consolidated, horizontally-scrollable row of today's key money
 // numbers, entirely computed on-device from today's local data — no
 // server job, no push, no email, nothing sent anywhere. Order: Bill
 // Wallet Balance, Sales Today, Today's Profit (or Cash In for non-master),
@@ -3449,7 +3473,9 @@ function dailyDigestBlock(){
   // Bill Wallet Balance is shown universally (to anyone with bill-payments
   // access) rather than being hidden when unfunded — an unconfigured or
   // zero-balance wallet just renders as ₦0 with a "Fund Wallet" prompt so
-  // the feature stays discoverable instead of disappearing.
+  // the feature stays discoverable instead of disappearing. "History" is
+  // always shown regardless of balance; "Fund Wallet" only joins it when
+  // the wallet is empty/unconfigured.
   const walletKnown = billWalletBalance !== null;
   const walletVal = walletKnown ? billWalletBalance : 0;
   const walletEmpty = !walletKnown || walletVal<=0;
@@ -3458,11 +3484,14 @@ function dailyDigestBlock(){
     showWallet ? {
       id:'billwallet', label:'Bill Wallet Balance',
       value: fmtMoney(walletVal),
-      footer: walletEmpty ? `<button class="metric-action" data-wallet-fund>Fund Wallet</button>` : ''
+      footer: `<div class="metric-actions">
+        ${walletEmpty ? `<button class="metric-action" data-wallet-fund>Fund Wallet</button>` : ''}
+        <button class="metric-action metric-action-outline" data-wallet-history>History</button>
+      </div>`
     } : null,
     { id:'sales', label: t('dash_sales_today'), value: fmtMoney(todayTotal) },
     isMaster()
-      ? { id:'profit', label: t('dash_profit_today'), value: fmtMoney(profitToday), accent:true }
+      ? { id:'profit', label: t('dash_profit_today'), value: fmtMoney(profitToday) }
       : { id:'cashin', label: t('dash_cash_in'), value: fmtMoney(todayCash) },
     isMaster() ? { id:'expenses', label:'Expenses Today', value: fmtMoney(state.expenses.filter(e=>e.shopId===state.currentShopId && e.date===todayISO()).reduce((a,e)=>a+e.amount,0)) } : null,
     isMaster() ? { id:'credit', label:'Credit Given Today', value: fmtMoney(shopSalesToday.filter(s=>s.status==='credit'||s.status==='partial').reduce((a,s)=>a+s.balance,0)) } : null,
@@ -3478,12 +3507,14 @@ function dailyDigestBlock(){
 }
 function metricCardHTML(c){
   const hidden = isCardHidden(c.id);
+  const meta = CARD_META[c.id] || { icon:'📊', color:'var(--line)', tint:'var(--paper-dim)' };
   return `
-    <div class="metric-card ${c.accent?'accent':''}">
+    <div class="metric-card" style="--accent:${meta.color};--accent-tint:${meta.tint};">
       <div class="metric-top">
-        <div class="lbl">${c.label}</div>
+        <div class="metric-icon">${meta.icon}</div>
         <button class="eye-btn" data-eye-toggle="${c.id}" aria-label="${hidden?'Show':'Hide'} ${escAttr(c.label)}">${hidden?ICON_EYE:ICON_EYE_OFF}</button>
       </div>
+      <div class="lbl">${c.label}</div>
       <div class="val">${hidden ? '••••••' : c.value}</div>
       ${c.footer||''}
     </div>`;
@@ -3544,6 +3575,11 @@ function bindDashboardEvents(){
   if(fundBtn) fundBtn.addEventListener('click', (e)=>{
     e.stopPropagation();
     route = 'billpayments'; billScreen = 'topup'; render();
+  });
+  const historyBtn = document.querySelector('[data-wallet-history]');
+  if(historyBtn) historyBtn.addEventListener('click', (e)=>{
+    e.stopPropagation();
+    route = 'billpayments'; billScreen = 'history'; billHistory = []; render();
   });
   document.querySelectorAll('[data-util-tile]').forEach(el=>{
     el.addEventListener('click', ()=>{

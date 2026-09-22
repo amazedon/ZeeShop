@@ -12,40 +12,48 @@
     --green:#2E7D32; --green-bg:#E7F3E8; --red:#C0392B; --red-bg:#FBEAE8;
   }
   *{box-sizing:border-box;}
+  html{-webkit-text-size-adjust:100%;}
   body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--paper);color:var(--text);}
-  .topbar{background:var(--ink);color:#fff;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;}
-  .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:18px;}
-  .brand-mark{width:32px;height:32px;border-radius:9px;background:var(--ink) url('/icon-192.png') center/cover no-repeat;color:transparent;display:flex;align-items:center;justify-content:center;font-weight:900;}
-  #logout-btn{background:rgba(255,255,255,0.12);border:none;color:#fff;padding:8px 14px;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;}
-  main{max-width:900px;margin:0 auto;padding:24px 20px 60px;}
-  .center-screen{min-height:80vh;display:flex;align-items:center;justify-content:center;padding:24px;}
-  .card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:24px;box-shadow:0 2px 10px rgba(18,33,59,0.06);margin-bottom:20px;}
-  h1{font-size:20px;margin:0 0 4px;color:var(--ink);}
-  h2{font-size:16px;margin:0 0 16px;color:var(--ink);}
-  .subtle{color:var(--text-dim);font-size:13px;margin-bottom:20px;}
-  label{display:block;font-size:12px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;}
+  .topbar{background:var(--ink);color:#fff;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:10px;position:sticky;top:0;z-index:20;}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:800;font-size:16px;min-width:0;}
+  .brand span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .brand-mark{width:30px;height:30px;flex-shrink:0;border-radius:9px;background:var(--ink) url('/icon-192.png') center/cover no-repeat;color:transparent;display:flex;align-items:center;justify-content:center;font-weight:900;}
+  #logout-btn{background:rgba(255,255,255,0.12);border:none;color:#fff;padding:9px 14px;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;flex-shrink:0;}
+  main{max-width:900px;margin:0 auto;padding:16px 14px 60px;}
+  .center-screen{min-height:80vh;display:flex;align-items:center;justify-content:center;padding:20px 16px;}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 16px;box-shadow:0 2px 10px rgba(18,33,59,0.06);margin-bottom:16px;}
+  h1{font-size:19px;margin:0 0 4px;color:var(--ink);}
+  h2{font-size:15px;margin:0 0 14px;color:var(--ink);}
+  .subtle{color:var(--text-dim);font-size:12.5px;margin-bottom:18px;line-height:1.45;}
+  label{display:block;font-size:11.5px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;}
   .field{margin-bottom:16px;}
-  input{width:100%;padding:12px 13px;border:1.5px solid var(--line);border-radius:10px;font-size:15px;font-family:inherit;background:#fff;color:var(--text);outline:none;}
-  input:focus{border-color:var(--marigold-dark);}
+  input,textarea,select{width:100%;padding:12px 13px;border:1.5px solid var(--line);border-radius:10px;font-size:15px;font-family:inherit;background:#fff;color:var(--text);outline:none;}
+  input:focus,textarea:focus,select:focus{border-color:var(--marigold-dark);}
   .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:13px 18px;border-radius:10px;border:none;font-weight:800;font-size:14.5px;cursor:pointer;width:100%;}
   .btn-primary{background:var(--marigold);color:var(--ink);}
   .btn-primary:hover{background:var(--marigold-dark);}
   .err{background:var(--red-bg);color:var(--red);padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:14px;font-weight:600;}
-  .auth-card{width:100%;max-width:380px;background:#fff;border-radius:18px;padding:32px 26px;box-shadow:0 10px 40px rgba(18,33,59,0.15);}
+  .ok{background:var(--green-bg);color:var(--green);padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:14px;font-weight:600;}
+  .auth-card{width:100%;max-width:380px;background:#fff;border-radius:18px;padding:28px 22px;box-shadow:0 10px 40px rgba(18,33,59,0.15);}
   .hidden{display:none !important;}
   .pass-wrap{position:relative;}
   .pass-wrap input{padding-right:44px;}
   .eye-toggle{position:absolute;right:4px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:8px;color:var(--text-dim);}
   .eye-toggle svg{width:18px;height:18px;display:block;}
 
-  .stats-row{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px;}
-  .stat-card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px;text-align:center;}
-  .stat-card .num{font-size:26px;font-weight:900;color:var(--ink);}
-  .stat-card .label{font-size:12px;color:var(--text-dim);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-top:4px;}
+  .stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;}
+  .stat-card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px 10px;text-align:center;min-width:0;}
+  .stat-card .num{font-size:20px;font-weight:900;color:var(--ink);overflow-wrap:break-word;}
+  .stat-card .label{font-size:10.5px;color:var(--text-dim);font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-top:4px;line-height:1.3;}
+  @media(max-width:560px){ .stats-row{grid-template-columns:1fr 1fr;} .stat-card{padding:12px 8px;} .stat-card .num{font-size:18px;} }
 
+  /* Tables render normally on wide screens; below 700px every table
+     becomes a stacked list of "cards" — one per row, each cell labeled
+     by its column name (from data-label, set when each row is built in
+     JS) — instead of forcing horizontal scrolling on a phone. */
   table{width:100%;border-collapse:collapse;font-size:13.5px;}
   th{text-align:left;padding:10px 12px;background:var(--paper-dim);color:var(--text-dim);font-size:11px;text-transform:uppercase;letter-spacing:.04em;font-weight:800;}
-  td{padding:10px 12px;border-top:1px solid var(--line);}
+  td{padding:10px 12px;border-top:1px solid var(--line);vertical-align:top;}
   .plan-badge{display:inline-block;padding:3px 10px;border-radius:999px;font-size:11.5px;font-weight:800;}
   .plan-free{background:var(--paper-dim);color:var(--text-dim);}
   .plan-pro{background:var(--green-bg);color:var(--green);}
@@ -55,27 +63,51 @@
   .table-wrap{overflow-x:auto;}
   .empty-note{color:var(--text-dim);font-size:13.5px;padding:20px 0;text-align:center;}
   .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;}
-  .toolbar input[type="search"]{flex:1;min-width:180px;padding:10px 12px;border:1.5px solid var(--line);border-radius:9px;font-size:13.5px;font-family:inherit;}
+  .toolbar input[type="search"]{flex:1;min-width:180px;padding:11px 12px;border:1.5px solid var(--line);border-radius:9px;font-size:14px;font-family:inherit;}
   .btn-sm{width:auto;padding:8px 14px;font-size:12.5px;}
-  .btn-outline-sm{width:auto;padding:6px 10px;font-size:12px;border-radius:8px;border:1.5px solid var(--line);background:#fff;color:var(--text);font-weight:700;cursor:pointer;}
-  .btn-danger-sm{width:auto;padding:6px 10px;font-size:12px;border-radius:8px;border:none;background:var(--red);color:#fff;font-weight:700;cursor:pointer;}
+  .btn-outline-sm{width:auto;padding:8px 12px;font-size:12.5px;border-radius:8px;border:1.5px solid var(--line);background:#fff;color:var(--text);font-weight:700;cursor:pointer;}
+  .btn-danger-sm{width:auto;padding:8px 12px;font-size:12.5px;border-radius:8px;border:none;background:var(--red);color:#fff;font-weight:700;cursor:pointer;}
   .detail-row td{background:var(--paper-dim);padding:14px 16px;}
   .detail-row .staff-line{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--line);font-size:12.5px;}
   .detail-row .staff-line:last-child{border-bottom:none;}
   .row-expand{cursor:pointer;color:var(--marigold-dark);font-weight:700;font-size:12px;background:none;border:none;padding:4px 0;}
   .unauthorized{max-width:420px;text-align:center;}
-  @media(max-width:640px){.stats-row{grid-template-columns:1fr 1fr;}}
 
-  .section-nav{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:22px;}
-  .section-nav a{color:var(--ink);background:#fff;border:1px solid var(--line);padding:7px 13px;border-radius:999px;font-size:12.5px;font-weight:700;text-decoration:none;}
+  @media(max-width:700px){
+    .table-wrap{overflow-x:visible;}
+    table.stack, table.stack thead{display:none;} /* header row is replaced by each cell's own data-label */
+    table.stack, table.stack tbody, table.stack tr, table.stack td{display:block;width:100%;}
+    table.stack tr{border:1px solid var(--line);border-radius:12px;margin-bottom:10px;padding:4px 12px;background:#fff;}
+    table.stack tr.detail-row{border:none;padding:0;margin-bottom:10px;background:none;}
+    table.stack td{border-top:1px solid var(--line);padding:9px 0;}
+    table.stack td:first-child{border-top:none;}
+    table.stack td[data-label]::before{content:attr(data-label);display:block;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--text-dim);margin-bottom:4px;}
+    table.stack td:empty{display:none;}
+  }
+
+  .section-nav{
+    display:flex;gap:6px;flex-wrap:nowrap;overflow-x:auto;margin:0 -14px 18px;padding:10px 14px;
+    position:sticky;top:53px;z-index:15;background:var(--paper);border-bottom:1px solid var(--line);
+    -webkit-overflow-scrolling:touch;
+  }
+  .section-nav a{color:var(--ink);background:#fff;border:1px solid var(--line);padding:7px 13px;border-radius:999px;font-size:12.5px;font-weight:700;text-decoration:none;white-space:nowrap;flex-shrink:0;}
   .section-nav a:hover{border-color:var(--marigold-dark);}
-  .section-heading{font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--text-dim);margin:28px 0 10px;}
+  .section-heading{font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--text-dim);margin:28px 0 10px;scroll-margin-top:100px;}
   .section-heading:first-of-type{margin-top:0;}
   .bp-badge{display:inline-block;padding:3px 10px;border-radius:999px;font-size:11.5px;font-weight:800;}
   .bp-success{background:var(--green-bg);color:var(--green);}
   .bp-failed{background:var(--red-bg);color:var(--red);}
   .bp-pending{background:#FDF1DC;color:var(--marigold-dark);}
   .warn-note{background:#FDF1DC;color:var(--marigold-dark);padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:14px;font-weight:600;}
+  .t1{font-weight:800;font-size:13.5px;color:var(--ink);}
+
+  /* Platform Overview — the very first thing shown, four numbers that
+     matter most across the whole platform at a glance. */
+  .overview-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:8px;}
+  .overview-card{background:var(--ink);color:#fff;border-radius:14px;padding:14px 10px;text-align:center;min-width:0;}
+  .overview-card .num{font-size:18px;font-weight:900;overflow-wrap:break-word;}
+  .overview-card .label{font-size:10px;color:rgba(255,255,255,0.65);font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-top:4px;line-height:1.3;}
+  @media(max-width:560px){ .overview-row{grid-template-columns:1fr 1fr;} }
 </style>
 </head>
 <body>
@@ -101,15 +133,26 @@
 
 <div id="dashboard-screen" class="hidden">
   <div class="topbar">
-    <div class="brand"><div class="brand-mark">Z</div>ZeeShop Super Admin</div>
+    <div class="brand"><div class="brand-mark">Z</div><span>ZeeShop Super Admin</span></div>
     <button id="logout-btn">Log Out</button>
   </div>
   <main>
     <div class="section-nav">
+      <a href="#overview-section">Overview</a>
       <a href="#businesses-section">Businesses</a>
       <a href="#bill-payments-section">Bill Payments</a>
       <a href="#content-section">Platform Content</a>
       <a href="#notify-section">Notifications</a>
+    </div>
+
+    <div id="overview-section">
+      <div class="section-heading">Platform Overview</div>
+      <div class="overview-row">
+        <div class="overview-card"><div class="num" id="ov-businesses">0</div><div class="label">Businesses</div></div>
+        <div class="overview-card"><div class="num" id="ov-bigisub-balance">—</div><div class="label">Bigisub Wallet</div></div>
+        <div class="overview-card"><div class="num" id="ov-profit">—</div><div class="label">Total Profit</div></div>
+        <div class="overview-card"><div class="num" id="ov-markup">—</div><div class="label">Platform Markup</div></div>
+      </div>
     </div>
 
     <div id="businesses-section">
@@ -130,7 +173,7 @@
           <button class="btn-outline-sm" id="export-csv-btn">⬇ Export CSV</button>
         </div>
         <div class="table-wrap">
-          <table id="biz-table">
+          <table id="biz-table" class="stack">
             <thead>
               <tr><th>Business</th><th>Owner</th><th>Country</th><th>Plan</th><th>Staff</th><th>Signed Up</th><th>Actions</th></tr>
             </thead>
@@ -151,11 +194,24 @@
         <div id="bp-bigisub-balance-box"><p class="subtle">Loading…</p></div>
       </div>
 
+      <div class="card">
+        <h2>Platform Pricing</h2>
+        <p class="subtle">Your own guaranteed cut — applied to Bigisub's real cost <b>before</b> any business's own markup runs. This is what actually earns the platform money on every sale, even from businesses that leave their own markup at 0%. It's invisible to businesses; they only ever see their own cost-plus-markup math.</p>
+        <div id="pp-status"></div>
+        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+          <div class="field" style="margin-bottom:0;flex:1;min-width:120px;">
+            <label>Platform Markup %</label>
+            <input id="pp-markup-input" type="number" min="0" step="0.1" placeholder="e.g. 2">
+          </div>
+          <button class="btn btn-primary" id="pp-save-btn" style="width:auto;padding:12px 20px;">Save</button>
+        </div>
+      </div>
+
       <div class="stats-row" style="grid-template-columns:repeat(4,1fr);">
         <div class="stat-card"><div class="num" id="bp-stat-wallets">0</div><div class="label">Business Wallets Funded</div></div>
         <div class="stat-card"><div class="num" id="bp-stat-liability">—</div><div class="label">Total Wallet Liability</div></div>
         <div class="stat-card"><div class="num" id="bp-stat-transactions">0</div><div class="label">Transactions</div></div>
-        <div class="stat-card"><div class="num" id="bp-stat-profit">—</div><div class="label">Profit (markups)</div></div>
+        <div class="stat-card"><div class="num" id="bp-stat-profit">—</div><div class="label">Total Profit</div></div>
       </div>
 
       <div class="card">
@@ -168,7 +224,7 @@
         <h2>Business Wallets & Markups</h2>
         <p class="subtle">Every business that has funded a Bill Wallet or set up a dedicated top-up account.</p>
         <div class="table-wrap">
-          <table>
+          <table class="stack">
             <thead><tr><th>Business</th><th>Wallet Balance</th><th>Markup</th><th>Dedicated Account</th></tr></thead>
             <tbody id="bp-wallets-tbody"></tbody>
           </table>
@@ -180,7 +236,7 @@
         <h2>Recent Transactions</h2>
         <p class="subtle">Latest 30 across the whole platform. Pending or failed ones can be manually re-checked with Bigisub.</p>
         <div class="table-wrap">
-          <table>
+          <table class="stack">
             <thead><tr><th>Business</th><th>Service</th><th>Recipient</th><th>Amount</th><th>Status</th><th>When</th><th></th></tr></thead>
             <tbody id="bp-recent-tbody"></tbody>
           </table>
@@ -322,6 +378,7 @@
     loadSiteContent();
     loadBillPaymentsOverview();
     loadBigisubServicePrices();
+    loadPlatformPricing();
   }
 
   const SITE_SECTIONS = [
@@ -395,14 +452,17 @@
       // Bigisub platform wallet — the one number that matters most here.
       if(r.bigisub_error){
         balBox.innerHTML = `<div class="warn-note">Could not fetch Bigisub's balance: ${escapeHtml(r.bigisub_error)}</div>`;
+        document.getElementById('ov-bigisub-balance').textContent = '—';
       }else{
         balBox.innerHTML = `<div style="font-size:32px;font-weight:900;color:var(--ink);">${fmtNaira(r.bigisub_wallet_balance)}</div>`;
+        document.getElementById('ov-bigisub-balance').textContent = fmtNaira(r.bigisub_wallet_balance);
       }
 
       document.getElementById('bp-stat-wallets').textContent = r.businesses_with_wallet || 0;
       document.getElementById('bp-stat-liability').textContent = fmtNaira(r.total_bill_wallet_balance);
       document.getElementById('bp-stat-transactions').textContent = r.total_transactions || 0;
       document.getElementById('bp-stat-profit').textContent = fmtNaira(r.total_profit);
+      document.getElementById('ov-profit').textContent = fmtNaira(r.total_profit);
 
       // By service
       const svcBox = document.getElementById('bp-by-service-box');
@@ -432,10 +492,10 @@
         walletsEmpty.classList.add('hidden');
         walletsTbody.innerHTML = walletBusinesses.map(b => `
           <tr>
-            <td>${escapeHtml(b.name || '—')}</td>
-            <td>${fmtNaira(b.bill_wallet_balance)}</td>
-            <td>${b.bill_markup_percent ?? 0}%</td>
-            <td>${b.psa_account_number ? `${escapeHtml(b.psa_account_number)} <span class="subtle">(${escapeHtml(b.psa_bank_name||'')})</span>` : '<span class="subtle">Not set up</span>'}</td>
+            <td data-label="Business">${escapeHtml(b.name || '—')}</td>
+            <td data-label="Wallet Balance">${fmtNaira(b.bill_wallet_balance)}</td>
+            <td data-label="Markup">${b.bill_markup_percent ?? 0}%</td>
+            <td data-label="Dedicated Account">${b.psa_account_number ? `${escapeHtml(b.psa_account_number)} <span class="subtle">(${escapeHtml(b.psa_bank_name||'')})</span>` : '<span class="subtle">Not set up</span>'}</td>
           </tr>
         `).join('');
       }
@@ -451,12 +511,12 @@
         recentEmpty.classList.add('hidden');
         recentTbody.innerHTML = recent.map(t => `
           <tr>
-            <td>${escapeHtml(t.business_name)}</td>
-            <td>${escapeHtml(t.service_label || '—')}</td>
-            <td>${escapeHtml(t.recipient || '—')}</td>
-            <td>${fmtNaira(t.sale_price)}</td>
-            <td><span class="bp-badge bp-${t.status==='success'?'success':t.status==='failed'?'failed':'pending'}">${escapeHtml(t.status)}</span></td>
-            <td>${new Date(t.created_at).toLocaleString()}</td>
+            <td data-label="Business">${escapeHtml(t.business_name)}</td>
+            <td data-label="Service">${escapeHtml(t.service_label || '—')}</td>
+            <td data-label="Recipient">${escapeHtml(t.recipient || '—')}</td>
+            <td data-label="Amount">${fmtNaira(t.sale_price)}</td>
+            <td data-label="Status"><span class="bp-badge bp-${t.status==='success'?'success':t.status==='failed'?'failed':'pending'}">${escapeHtml(t.status)}</span></td>
+            <td data-label="When">${new Date(t.created_at).toLocaleString()}</td>
             <td>${t.status!=='success' ? `<button class="btn-outline-sm" data-bp-retry="${t.id}">Retry</button>` : ''}</td>
           </tr>
         `).join('');
@@ -478,18 +538,46 @@
     }
   }
 
+  // Tries every field name pattern Bigisub-style APIs commonly use for a
+  // plan's human-readable size/duration. If nothing matches, we genuinely
+  // don't know what field holds it — rather than silently showing just an
+  // ID forever, that case is left for the raw-data toggle below to reveal.
+  function planLabel(p){
+    const direct = p.name || p.plan_name || p.plan || p.title || p.exam || p.exam_type || p.package || p.description;
+    if(direct) return direct;
+    const size = p.data || p.size || p.volume || p.data_plan || p.plan_size || p.bundle;
+    const validity = p.validity || p.duration || p.days || p.period;
+    if(size && validity) return `${size} — ${validity}`;
+    if(size) return String(size);
+    return null; // unresolved — table falls back to "#id" and flags it for the raw-data toggle
+  }
+
   function renderPriceTable(title, list, priceKey){
     if(list && list.error) return `<p class="subtle" style="margin-top:10px;"><b>${escapeHtml(title)}:</b> could not load — ${escapeHtml(list.error)}</p>`;
     if(!Array.isArray(list) || list.length===0) return `<p class="subtle" style="margin-top:10px;"><b>${escapeHtml(title)}:</b> no plans returned.</p>`;
+    const hasNetwork = list.some(p => p.network_name || p.network);
+    let unresolvedCount = 0;
+    const rows = list.map(p=>{
+      const label = planLabel(p);
+      if(!label) unresolvedCount++;
+      const network = p.network_name || p.network || '';
+      return `<tr>
+        ${hasNetwork ? `<td data-label="Network">${escapeHtml(network||'—')}</td>` : ''}
+        <td data-label="Plan">${escapeHtml(label || ('Plan #'+(p.id??'?')))}</td>
+        <td data-label="Cost">${fmtNaira(p[priceKey]||p.amount||p.price)}</td>
+      </tr>`;
+    }).join('');
+    const rawId = 'raw-' + title.replace(/[^a-z0-9]/gi,'-').toLowerCase();
     return `
       <div style="margin-top:14px;">
         <div class="t1" style="margin-bottom:6px;">${escapeHtml(title)}</div>
-        <div class="table-wrap"><table>
-          <thead><tr><th>Plan</th><th>Cost</th></tr></thead>
-          <tbody>
-            ${list.map(p=>`<tr><td>${escapeHtml(p.name||p.plan_name||p.exam||p.exam_type||('#'+p.id))}</td><td>${fmtNaira(p[priceKey]||p.amount||p.price)}</td></tr>`).join('')}
-          </tbody>
+        ${unresolvedCount>0 ? `<p class="subtle" style="color:var(--marigold-dark);">${unresolvedCount} of ${list.length} plan${unresolvedCount>1?'s':''} had no recognizable size/name field — showing "Plan #id" for those. Tap "Show raw data" below to see the actual fields Bigisub sent, so this can be fixed precisely.</p>` : ''}
+        <div class="table-wrap"><table class="stack">
+          <thead><tr>${hasNetwork?'<th>Network</th>':''}<th>Plan</th><th>Cost</th></tr></thead>
+          <tbody>${rows}</tbody>
         </table></div>
+        <button class="btn-outline-sm" style="margin-top:8px;" onclick="const el=document.getElementById('${rawId}'); el.classList.toggle('hidden');">Show raw data</button>
+        <pre id="${rawId}" class="hidden" style="margin-top:8px;background:var(--paper-dim);border-radius:8px;padding:10px;font-size:10.5px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">${escapeHtml(JSON.stringify(list.slice(0,3), null, 2))}</pre>
       </div>
     `;
   }
@@ -510,6 +598,34 @@
       box.innerHTML = `<div class="err">Could not load Bigisub prices: ${escapeHtml(e.message)}</div>`;
     }
   }
+
+  async function loadPlatformPricing(){
+    const statusBox = document.getElementById('pp-status');
+    const input = document.getElementById('pp-markup-input');
+    try{
+      const r = await callAdminApi('get_platform_pricing', {});
+      input.value = r.platform_markup_percent;
+      document.getElementById('ov-markup').textContent = r.platform_markup_percent + '%';
+      statusBox.innerHTML = '';
+    }catch(e){
+      statusBox.innerHTML = `<div class="err">Could not load platform pricing: ${escapeHtml(e.message)}</div>`;
+      document.getElementById('ov-markup').textContent = '—';
+    }
+  }
+  document.getElementById('pp-save-btn').addEventListener('click', async ()=>{
+    const input = document.getElementById('pp-markup-input');
+    const statusBox = document.getElementById('pp-status');
+    const pct = Number(input.value);
+    if(Number.isNaN(pct) || pct < 0){ showError(statusBox, 'Enter a valid markup percent (0 or more).'); return; }
+    statusBox.innerHTML = '<div class="subtle">Saving…</div>';
+    try{
+      await callAdminApi('set_platform_markup', { platform_markup_percent: pct });
+      statusBox.innerHTML = `<div class="ok">Saved ✅ — now applied to every new purchase across the platform.</div>`;
+      document.getElementById('ov-markup').textContent = pct + '%';
+    }catch(e){
+      showError(statusBox, 'Could not save: ' + e.message);
+    }
+  });
 
   async function loadBusinesses(){
     const statusBox = document.getElementById('biz-status');
@@ -533,6 +649,7 @@
     document.getElementById('stat-free').textContent = freeCount;
     document.getElementById('stat-pro').textContent = proCount;
     document.getElementById('stat-boss').textContent = bossCount;
+    document.getElementById('ov-businesses').textContent = total;
 
     renderBizTable(allBusinesses);
   }
@@ -569,16 +686,16 @@
         : `<span class="subtle">No owner record synced yet</span>`;
       const row = document.createElement('tr');
       row.innerHTML = `
-        <td>
+        <td data-label="Business">
           ${escapeHtml(b.name || '—')}
           <div><button class="row-expand" data-expand-btn="${b.id}">${expandedBizId===b.id?'Hide staff ▲':'View staff ▼'}</button></div>
         </td>
-        <td>${ownerCell}</td>
-        <td>${escapeHtml(b.country || '—')}</td>
-        <td>${planBadge}</td>
-        <td>${staffCountsById[b.id] || 0}</td>
-        <td>${signedUp}</td>
-        <td>
+        <td data-label="Owner">${ownerCell}</td>
+        <td data-label="Country">${escapeHtml(b.country || '—')}</td>
+        <td data-label="Plan">${planBadge}</td>
+        <td data-label="Staff">${staffCountsById[b.id] || 0}</td>
+        <td data-label="Signed Up">${signedUp}</td>
+        <td data-label="Actions">
           <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
             <select data-plan-select="${b.id}" style="padding:6px 8px;border:1.5px solid var(--line);border-radius:8px;font-size:12.5px;">
               <option value="free" ${plan==='free'?'selected':''}>Free</option>
@@ -598,7 +715,7 @@
       if(expandedBizId === b.id){
         const detailRow = document.createElement('tr');
         detailRow.className = 'detail-row';
-        detailRow.innerHTML = `<td colspan="6" id="detail-${b.id}"><div class="subtle">Loading staff…</div></td>`;
+        detailRow.innerHTML = `<td colspan="7" id="detail-${b.id}"><div class="subtle">Loading staff…</div></td>`;
         tbody.appendChild(detailRow);
         renderBizDetail(b.id);
       }

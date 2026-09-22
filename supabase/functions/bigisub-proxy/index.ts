@@ -45,6 +45,12 @@
 // clearest fit for each UI dropdown — see comments at each action.
 //
 // Setup required once in your Supabase project — see SETUP.md.
+//
+// Also requires the platform_settings table (see the header comment in
+// super-admin/index.ts for the exact SQL) — this is where YOUR platform-
+// wide markup lives, applied on top of Bigisub's cost before a business's
+// own markup ever runs. Missing/empty table just means 0% platform
+// markup, so this degrades safely if it hasn't been created yet.
 
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
@@ -728,7 +734,9 @@ Deno.serve(async (req: Request) => {
           return json({ error: "Incorrect Bill Payments PIN." }, 403);
         }
       }
-      return await handlePurchase(admin, action, params, businessId, biz, markupPercent, caller.id);
+      const { data: platformSettings } = await admin.from("platform_settings").select("platform_markup_percent").eq("id", 1).maybeSingle();
+      const platformMarkupPercent = Number(platformSettings?.platform_markup_percent || 0);
+      return await handlePurchase(admin, action, params, businessId, biz, markupPercent, platformMarkupPercent, caller.id);
     }
 
     return json({ error: "Unknown action." }, 400);
@@ -763,6 +771,20 @@ async function lookupPlanAmount(path: string, preferredKey: string, matchValue: 
 // catalog-based ones. Called twice per purchase: once for the pre-check
 // (against the estimated cost) and once for the real charge (against
 // Bigisub's actual reported cost) — see handlePurchase.
+//
+// platformMarkupPercent is YOUR (the platform's) own guaranteed cut,
+// applied to Bigisub's raw cost BEFORE any of the business's own
+// markup/flat-fee/override math runs — this is what actually earns the
+// platform money on every single sale, independent of whatever markup
+// (including 0%) a business has set for itself. It's set once, platform-
+// wide, from the super-admin dashboard (see platform_settings / the
+// get_platform_pricing and set_platform_markup actions in
+// super-admin/index.ts) — not per-business, and not visible to businesses
+// at all; they only ever see their own cost-plus-markup math, same as
+// before. A business's exact-price override is still honored as an exact
+// price (that's the point of setting one), but never below what would
+// leave the platform with less than its configured cut — see the floor
+// applied in that branch below.
 async function computeSalePrice(
   admin: ReturnType<typeof createClient>,
   businessId: string,
@@ -772,19 +794,27 @@ async function computeSalePrice(
   quantity: number,
   costPrice: number,
   markupPercent: number,
+  platformMarkupPercent: number,
 ): Promise<number> {
+  const platformCost = costPrice * (1 + (platformMarkupPercent || 0) / 100);
   const flatFeeColumn: Record<string, number | undefined> = {
     airtime: biz.bill_flat_fee_airtime, electricity: biz.bill_flat_fee_electricity, betting: biz.bill_flat_fee_betting,
   };
   if (pricingService in flatFeeColumn) {
-    return Math.round((costPrice + Number(flatFeeColumn[pricingService] || 0)) * 100) / 100;
+    return Math.round((platformCost + Number(flatFeeColumn[pricingService] || 0)) * 100) / 100;
   }
   if (planKey) {
     const { data: override } = await admin.from("bill_price_overrides")
       .select("sell_price").eq("business_id", businessId).eq("service", pricingService).eq("plan_key", planKey).maybeSingle();
-    if (override) return Math.round(Number(override.sell_price) * quantity * 100) / 100;
+    if (override) {
+      // A business sets this as an absolute price with no idea what the
+      // platform markup is — so it's floored at platformCost rather than
+      // trusted outright, otherwise a business could (even accidentally)
+      // set an override that costs the platform money on every sale.
+      return Math.max(Math.round(Number(override.sell_price) * quantity * 100) / 100, Math.round(platformCost * quantity * 100) / 100);
+    }
   }
-  return Math.round(costPrice * (1 + markupPercent / 100) * 100) / 100; // no override set for this plan yet — fall back to the global markup
+  return Math.round(platformCost * (1 + markupPercent / 100) * 100) / 100; // no override set for this plan yet — fall back to the global markup
 }
 
 async function handlePurchase(
@@ -794,6 +824,7 @@ async function handlePurchase(
   businessId: string,
   biz: { bill_wallet_balance: number | null; bill_flat_fee_airtime?: number; bill_flat_fee_electricity?: number; bill_flat_fee_betting?: number },
   markupPercent: number,
+  platformMarkupPercent: number,
   userId: string,
 ) {
   let serviceLabel = "";
@@ -870,7 +901,7 @@ async function handlePurchase(
   }
 
   const preCheckBalance = Number(biz.bill_wallet_balance || 0);
-  const estimatedSale = await computeSalePrice(admin, businessId, biz, pricingService, planKey, quantity, estimatedCost, markupPercent);
+  const estimatedSale = await computeSalePrice(admin, businessId, biz, pricingService, planKey, quantity, estimatedCost, markupPercent, platformMarkupPercent);
   if (preCheckBalance < estimatedSale) return json({ error: "Insufficient Bill Wallet balance. Please top up." }, 400);
 
   // ---- Idempotency: reserve a row BEFORE calling Bigisub, keyed on the
@@ -927,7 +958,7 @@ async function handlePurchase(
   // if Bigisub's real charge isn't exactly what was estimated; for
   // override-priced plans it's identical to estimatedSale either way,
   // since a fixed sell price doesn't depend on the underlying cost at all.
-  const salePrice = await computeSalePrice(admin, businessId, biz, pricingService, planKey, quantity, costPrice, markupPercent);
+  const salePrice = await computeSalePrice(admin, businessId, biz, pricingService, planKey, quantity, costPrice, markupPercent, platformMarkupPercent);
   const bigisubTranxId = extractTranxId(bigisubResponse);
   const status = extractStatus(bigisubResponse);
 

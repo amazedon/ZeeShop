@@ -27,6 +27,27 @@
 //   alter table businesses add column if not exists is_active boolean default true;
 // The panel works fine without it — the suspend/reactivate button just
 // won't appear until the column exists.
+//
+// PLATFORM PRICING — this is what actually earns the platform money from
+// VTU/bill payments, independent of whatever markup (including 0%) any
+// individual business sets for itself. Previously the only markup in the
+// whole system was each business's own bill_markup_percent, which meant
+// the platform's "profit" in bill_payments_overview was entirely at the
+// mercy of businesses bothering to set a non-zero markup. This adds one
+// platform-wide percentage, applied to Bigisub's raw cost BEFORE a
+// business's own markup/flat-fee/override math runs (see computeSalePrice
+// in bigisub-proxy/index.ts) — so the platform earns its own guaranteed
+// cut on every sale regardless. One-time setup:
+//   create table platform_settings (
+//     id int primary key default 1,
+//     platform_markup_percent numeric not null default 0,
+//     updated_at timestamptz default now(),
+//     constraint platform_settings_singleton check (id = 1)
+//   );
+//   insert into platform_settings (id, platform_markup_percent) values (1, 0);
+// Missing/empty table just means 0% platform markup — nothing breaks if
+// you haven't run this yet, it just means you aren't earning anything
+// extra on top of what businesses charge themselves yet.
 
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
@@ -109,6 +130,32 @@ Deno.serve(async (req: Request) => {
         admin.from("shops").select("id, name").eq("business_id", businessId),
       ]);
       return json({ staff: staff || [], shops: shops || [] }, 200);
+    }
+
+    // PLATFORM PRICING — read/write the one platform-wide markup percentage
+    // (see the file header for the table this needs and why it exists).
+    // No isMaster/business check here since this whole function is already
+    // gated to super admins only, at the top.
+    if (action === "get_platform_pricing") {
+      const { data, error } = await admin.from("platform_settings").select("platform_markup_percent").eq("id", 1).maybeSingle();
+      if (error) return json({ error: "Could not load platform pricing — has the platform_settings table been created? (see file header) " + error.message }, 500);
+      return json({ platform_markup_percent: Number(data?.platform_markup_percent || 0) }, 200);
+    }
+    if (action === "set_platform_markup") {
+      const pct = Number(params.platform_markup_percent);
+      if (Number.isNaN(pct) || pct < 0) return json({ error: "Invalid markup percent." }, 400);
+      const { error } = await admin.from("platform_settings")
+        .upsert({ id: 1, platform_markup_percent: pct, updated_at: new Date().toISOString() }, { onConflict: "id" });
+      if (error) return json({ error: "Could not save — has the platform_settings table been created? (see file header) " + error.message }, 500);
+
+      await admin.from("audit_log_platform").insert({
+        actor_auth_user_id: callerData.user.id,
+        action: "set_platform_markup",
+        target_business_id: null,
+        detail: `Set platform-wide markup to ${pct}%.`,
+      }).then((r) => { if (r.error) console.log("audit_log_platform insert skipped:", r.error.message); });
+
+      return json({ ok: true, platform_markup_percent: pct }, 200);
     }
 
     if (action === "grant_plan") {
@@ -380,8 +427,15 @@ Deno.serve(async (req: Request) => {
         if (Array.isArray(candidate)) return candidate;
         if (candidate && typeof candidate === "object") {
           const flattened: any[] = [];
-          for (const v of Object.values(candidate)) {
-            if (Array.isArray(v)) flattened.push(...v);
+          for (const [groupKey, v] of Object.entries(candidate)) {
+            if (Array.isArray(v)) {
+              // Preserve which group (commonly a network name, e.g. "MTN")
+              // each item came from, in case it isn't already a field on
+              // the item itself — the client uses this for a Network
+              // column and doesn't overwrite an existing field of the
+              // same name.
+              flattened.push(...v.map((item: any) => (item && typeof item === "object" && !("network_name" in item)) ? { ...item, network_name: groupKey } : item));
+            }
           }
           if (flattened.length > 0) return flattened;
         }

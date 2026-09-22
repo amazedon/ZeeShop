@@ -1331,6 +1331,12 @@ if(!state.lodgingBookings) state.lodgingBookings = [];
 if(!state.dismissedHandoverIds) state.dismissedHandoverIds = [];
 if(!state.stockAdjustments) state.stockAdjustments = [];
 if(!state.billTransactions) state.billTransactions = [];
+// Local-only map of clientRef -> {name, userId} for Bill Payments/VTU
+// purchases made from this device — see billTxMadeByName(). The remote
+// wallet backend doesn't track which staff member initiated a purchase,
+// so this is how the receipt can show "Processed by" for anything bought
+// after this was added; older transactions just won't have a match.
+if(!state.billTxAttribution) state.billTxAttribution = {};
 migratePhoneNumbers();
 function load(){
   const raw = localStorage.getItem(DB_KEY);
@@ -1352,7 +1358,7 @@ function load(){
     employmentRecords:[], salaryPayments:[], recordOnlyStaff:[], rooms:[], lodgingBookings:[],
     joinCode:null, marketMode:false, pinAttempts:{},
     dismissedHandoverIds:[], /* local-only — per-device "got it" acks, never synced */
-    stockAdjustments:[], billTransactions:[] };
+    stockAdjustments:[], billTransactions:[], billTxAttribution:{} };
 }
 function save(){ localStorage.setItem(DB_KEY, JSON.stringify(state)); }
 function business(){ return state.business; }
@@ -6651,6 +6657,12 @@ function screenSettings(){
       <div class="field"><label>Address</label><input id="set-address" value="${currentShop().address||''}"></div>
       <div class="field"><label>Receipt Footer</label><input id="set-footer" value="${currentShop().receiptFooter||''}"></div>
       <div class="field"><label>Receipt Terms <span class="subtle">(sale conditions, shown on every receipt)</span></label><textarea id="set-terms" rows="2">${currentShop().receiptTerms!=null?currentShop().receiptTerms:'Goods sold in good condition. No refund after payment.'}</textarea></div>
+      <div class="field"><label>Business Type <span class="subtle">(shows on your receipts)</span></label>${bizTypeSelectHTML('set-biztype', b.businessType||'')}</div>
+      <div class="field"><label>Business Registration Number <span class="subtle">(your CAC number or other official registration/tax ID — shows on your receipts)</span></label><input id="set-regnumber" value="${escAttr(b.registrationNumber||'')}" placeholder="e.g. RC1234567"></div>
+      <div class="row2">
+        <div class="field"><label>Tax Name</label><input id="set-taxname" value="${escAttr(b.taxName||'VAT')}"></div>
+        <div class="field"><label>Tax % <span class="subtle">(applied automatically at checkout)</span></label><input id="set-taxpct" type="number" min="0" step="0.1" value="${b.taxPercent||0}"></div>
+      </div>
       <button class="btn btn-outline" id="save-shop-settings">Save</button>
     </div>
     <div class="card">
@@ -6664,43 +6676,23 @@ function screenSettings(){
       <input type="file" id="logo-upload-input" accept="image/*">
       <p class="subtle" style="margin-top:6px;">Square images work best. It's shrunk down automatically before saving.</p>
     </div>
-    <div class="card">
-      <div class="t1" style="margin-bottom:10px;">Business Type <span class="subtle" style="font-weight:400;">(shows on your receipts)</span></div>
-      ${bizTypeSelectHTML('set-biztype', b.businessType||'')}
-      <div style="height:10px;"></div>
-      <button class="btn btn-outline btn-sm" id="save-biztype">Save</button>
-    </div>
-    <div class="card">
-      <div class="t1" style="margin-bottom:6px;">Business Registration Number <span class="subtle" style="font-weight:400;">(shows on your receipts)</span></div>
-      <p class="t2" style="margin-bottom:10px;">Your CAC number or other official registration/tax ID — lets customers verify your business is real through official records, not just this app.</p>
-      <input id="set-regnumber" value="${escAttr(b.registrationNumber||'')}" placeholder="e.g. RC1234567">
-      <div style="height:10px;"></div>
-      <button class="btn btn-outline btn-sm" id="save-regnumber">Save</button>
-    </div>
-    <div class="card">
-      <div class="t1" style="margin-bottom:10px;">Tax <span class="subtle" style="font-weight:400;">(applied automatically at checkout)</span></div>
-      <div class="row2">
-        <div class="field"><label>Tax Name</label><input id="set-taxname" value="${escAttr(b.taxName||'VAT')}"></div>
-        <div class="field"><label>Tax %</label><input id="set-taxpct" type="number" min="0" step="0.1" value="${b.taxPercent||0}"></div>
-      </div>
-      <button class="btn btn-outline btn-sm" id="save-tax">Save</button>
-    </div>
     `:''}
 
     <div class="section-head"><h3>Security</h3></div>
     ${isMaster()?`
     <div class="card">
       <div class="t1" style="margin-bottom:6px;">Bill Payments PIN</div>
-      <p class="subtle" style="margin:0 0 10px;">${billPinSet ? 'Required before every bill payment purchase — stops anyone picking up an unlocked device from spending your Bill Wallet.' : 'Not set yet — anyone with access to a logged-in device can currently make bill payment purchases. Set a PIN to require it before every purchase.'}</p>
+      <p class="subtle" style="margin:0 0 10px;">${billPinSet ? "Your Bill Payments PIN is turned on. It's asked for before every airtime, data, electricity, or other bill payment purchase, so nobody who picks up an unlocked device can spend money from your Bill Wallet without it." : "You haven't set a Bill Payments PIN yet, so anyone using this device while it's unlocked can currently make bill payment purchases with no PIN needed. Set a 4-digit PIN below to require it before every purchase."}</p>
       ${!billPinSet ? `
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         <input id="bp-pin-input" type="password" inputmode="numeric" maxlength="4" placeholder="4-digit PIN" style="max-width:120px;" value="${escAttr(billPinDraft)}">
         <button class="btn btn-outline btn-sm" id="bp-pin-save">Set PIN</button>
       </div>
       ` : !billPinOtpSent ? `
-      <button class="btn btn-outline btn-sm" id="bp-pin-send-otp" ${billPinOtpSending?'disabled':''}>${billPinOtpSending?'Sending…':'Send Code to My Email'}</button>
+      <p class="subtle" style="margin:0 0 10px;">Forgot your PIN, or just want to change it? Tap below and we'll email you a verification code — enter that code to confirm it's you, then choose a new PIN.</p>
+      <button class="btn btn-outline btn-sm" id="bp-pin-send-otp" ${billPinOtpSending?'disabled':''}>${billPinOtpSending?'Sending…':'Reset Payment PIN'}</button>
       ` : `
-      <p class="subtle" style="margin:0 0 10px;">Code sent to <b>${escapeHtml(billPinOtpMaskedEmail)}</b> — expires in 5 minutes.</p>
+      <p class="subtle" style="margin:0 0 10px;">We've emailed a 6-digit verification code to <b>${escapeHtml(billPinOtpMaskedEmail)}</b> — it expires in 5 minutes. Enter that code below along with the new 4-digit PIN you want to use.</p>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         <input id="bp-pin-otp" inputmode="numeric" maxlength="6" placeholder="6-digit code" style="max-width:120px;" value="${escAttr(billPinOtpDraft)}">
         <input id="bp-pin-input" type="password" inputmode="numeric" maxlength="4" placeholder="New PIN" style="max-width:110px;" value="${escAttr(billPinDraft)}">
@@ -6793,26 +6785,6 @@ function bindSettingsEvents(){
     if(business().pushEnabled){ await disablePushNotifications(); }
     else{ await enablePushNotifications(); render(); }
   });
-  const saveBT = document.getElementById('save-biztype');
-  if(saveBT) saveBT.addEventListener('click', ()=>{
-    business().businessType = readBizTypeValue('set-biztype');
-    enqueueSync('businesses','update', { id: business().id, business_type: business().businessType });
-    toast('Business type saved ✅'); render();
-  });
-  const saveRegNum = document.getElementById('save-regnumber');
-  if(saveRegNum) saveRegNum.addEventListener('click', ()=>{
-    business().registrationNumber = document.getElementById('set-regnumber').value.trim();
-    enqueueSync('businesses','update', { id: business().id, registration_number: business().registrationNumber });
-    logAudit('registration_number_updated', 'Updated business registration number');
-    toast('Registration number saved ✅'); render();
-  });
-  const saveTax = document.getElementById('save-tax');
-  if(saveTax) saveTax.addEventListener('click', ()=>{
-    business().taxName = document.getElementById('set-taxname').value.trim() || 'VAT';
-    business().taxPercent = Number(document.getElementById('set-taxpct').value||0);
-    enqueueSync('businesses','update', { id: business().id, tax_name: business().taxName, tax_percent: business().taxPercent });
-    toast('Tax settings saved ✅'); render();
-  });
   const saveShop = document.getElementById('save-shop-settings');
   if(saveShop) saveShop.addEventListener('click', ()=>{
     const s = currentShop();
@@ -6821,7 +6793,18 @@ function bindSettingsEvents(){
     s.receiptFooter = document.getElementById('set-footer').value.trim();
     s.receiptTerms = document.getElementById('set-terms').value.trim();
     enqueueSync('shops','update', { id: s.id, name: s.name, address: s.address, receipt_footer: s.receiptFooter, receipt_terms: s.receiptTerms });
-    toast('Shop settings saved ✅'); render();
+
+    business().businessType = readBizTypeValue('set-biztype');
+    business().registrationNumber = document.getElementById('set-regnumber').value.trim();
+    business().taxName = document.getElementById('set-taxname').value.trim() || 'VAT';
+    business().taxPercent = Number(document.getElementById('set-taxpct').value||0);
+    enqueueSync('businesses','update', {
+      id: business().id, business_type: business().businessType, registration_number: business().registrationNumber,
+      tax_name: business().taxName, tax_percent: business().taxPercent
+    });
+    logAudit('shop_settings_updated', 'Updated shop & business details');
+
+    toast('Saved ✅'); render();
   });
   const exp = document.getElementById('export-data');
   if(exp) exp.addEventListener('click', exportCSV);
@@ -8340,6 +8323,28 @@ function billGetClientRef(){
   if(!billForm._clientRef) billForm._clientRef = uid('bp');
   return billForm._clientRef;
 }
+// Records which locally-logged-in user made a Bill Payments/VTU purchase,
+// keyed by the client_ref sent with that purchase. The remote history
+// (list_transactions) is expected to echo that same reference back per
+// transaction — see billTxMadeByName() — so the receipt can later show
+// "Processed by <name>" for anything bought from this device.
+function billRecordTxAttribution(clientRef){
+  const u = currentUser();
+  if(!u) return;
+  state.billTxAttribution[clientRef] = { name: (u.firstName+' '+u.lastName).trim(), userId: u.id };
+  save();
+}
+// Resolves who made a given transaction, for the receipt: prefers a name
+// the backend itself returns (if it ever does), otherwise falls back to
+// this device's local attribution map matched by reference/client_ref.
+// Transactions made before this feature existed (or from another device)
+// simply won't have a match, and the receipt just omits the line.
+function billTxMadeByName(tx){
+  if(tx.initiated_by_name) return tx.initiated_by_name;
+  const ref = tx.client_ref || tx.client_reference || tx.tx_ref || tx.reference || tx.id;
+  const rec = ref && state.billTxAttribution[ref];
+  return rec ? rec.name : null;
+}
 
 // Returns '' if no PIN is required (proceed normally), the entered PIN if
 // one was provided, or null if a PIN is required but the person cancelled/
@@ -8704,6 +8709,8 @@ function bindBillTopupEvents(){
           try{
             const r = await callBigisub('fund_wallet_verify', { transaction_id: response.transaction_id, expected_amount: amount, expected_currency: billCurrency });
             billWalletBalance = r.wallet_balance;
+            billRecordTxAttribution(txRef);
+            billRecordTxAttribution(response.transaction_id);
             logAudit('bill_wallet_topup', `Funded bill wallet with ${fmtMoney(amount)} (card)`);
             toast('Wallet funded ✅'); billScreen='hub'; refreshMain();
           }catch(e){ toast('Payment received, but confirming it failed: '+e.message+'. Contact support if the balance doesn\'t update shortly.'); }
@@ -8723,6 +8730,7 @@ function bindBillTopupEvents(){
     try{
       const r = await callBigisub('generate_bank_transfer_topup', { amount });
       billBankTopup = r; billBankAmountDraft = '';
+      if(r && r.tx_ref) billRecordTxAttribution(r.tx_ref);
       refreshMain();
       bpStartBankPolling();
     }catch(e){ toast(e.message); genBtn.disabled=false; genBtn.textContent='Get Transfer Account'; }
@@ -8818,6 +8826,7 @@ function bindBillAirtimeEvents(){
     try{
       const r = await callBigisub('airtime_purchase', { network: Number(billForm.network), phone_number: billForm.phone.trim(), amount, client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
+      billRecordTxAttribution(billGetClientRef());
       logAudit('bill_airtime', `Sold ₦${amount} ${BIGISUB_NETWORKS.find(n=>n.id==billForm.network).name} airtime to ${billForm.phone}`);
       toast('Airtime sent ✅'); billScreen='hub'; refreshMain();
     }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='Buy Airtime'; }
@@ -8877,6 +8886,7 @@ function bindBillDataEvents(){
     try{
       const r = await callBigisub('data_purchase', { network: Number(billForm.network), phone_number: billForm.phone.trim(), plan: chosen.id, ported_number: !!billForm.ported, client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
+      billRecordTxAttribution(billGetClientRef());
       logAudit('bill_data', `Sold ${chosen.name||chosen.plan_name} data to ${billForm.phone}`);
       toast('Data sent ✅'); billScreen='hub'; refreshMain();
     }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='Buy Data'; }
@@ -8954,6 +8964,7 @@ function bindBillCableEvents(){
     try{
       const r = await callBigisub('cable_purchase', { cable_type: billForm.cableType, card_no: billForm.cardNo.trim(), phone_number: billForm.phone.trim(), amount: Number(chosen.amount||chosen.price||0), plan_id: chosen.id, customer_name: billForm.cableCustomerName, client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
+      billRecordTxAttribution(billGetClientRef());
       logAudit('bill_cable', `Paid ${chosen.name||chosen.plan_name} for card ${billForm.cardNo} (${billForm.cableCustomerName})`);
       toast('Subscription paid ✅'); billScreen='hub'; refreshMain();
     }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='Pay Subscription'; }
@@ -9032,6 +9043,7 @@ function bindBillElectricityEvents(){
       const r = await callBigisub('electricity_pay', { company: billForm.company, meter_no: billForm.meterNo.trim(), meter_type: billForm.meterType, phone_number: billForm.phone.trim(), amount, customer_name: billForm.elecCustomerName, client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
       const token = r.token || (r.bigisub_response && r.bigisub_response.token);
+      billRecordTxAttribution(billGetClientRef());
       logAudit('bill_electricity', `Sold ₦${amount} token for meter ${billForm.meterNo} (${billForm.elecCustomerName})`);
       toast(token ? `Token: ${token}` : 'Token purchased ✅');
       billScreen='hub'; refreshMain();
@@ -9093,6 +9105,7 @@ function bindBillBettingEvents(){
     try{
       const r = await callBigisub('betting_fund', { biller_code: billForm.billerCode, customer_id: billForm.customerId.trim(), customer_name: validation.customer_name, amount, validation_reference: validation.validation_reference, client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
+      billRecordTxAttribution(billGetClientRef());
       logAudit('bill_betting', `Funded ${billForm.customerId} (${validation.customer_name}) with ₦${amount}`);
       toast('Wallet funded ✅'); billScreen='hub'; refreshMain();
     }catch(e){ toast(e.message + ' — if this was a timeout on the validation reference, please try again.'); btn.disabled=false; btn.textContent='Fund Wallet'; }
@@ -9148,6 +9161,7 @@ function bindBillResultCheckerEvents(){
       const r = await callBigisub('result_checker_purchase', { exam: chosen.exam||chosen.exam_type||chosen.name, quantity: qtyNum, client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
       const pins = r.pins || (r.bigisub_response && r.bigisub_response.pins);
+      billRecordTxAttribution(billGetClientRef());
       logAudit('bill_result_checker', `Bought ${qtyNum} × ${chosen.name||chosen.exam} PIN(s)`);
       toast(pins ? 'PIN(s) generated — see receipt in history' : 'PIN(s) purchased ✅');
       billScreen='hub'; refreshMain();
@@ -9246,6 +9260,7 @@ function bindBillIspEvents(){
         ? await callBigisub('isp_smile_topup', { plan: chosen.id, phone_number: billForm.phone.trim(), email: billForm.email.trim(), account_id: billForm.accountId.trim(), client_ref: billGetClientRef(), bill_pin: pin })
         : await callBigisub('isp_spectranet_topup', { plan: chosen.id, phone_number: billForm.phone.trim(), spectranet_number: billForm.spectranetNumber.trim(), quantity: Math.max(1,Number(billForm.qty||1)), client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
+      billRecordTxAttribution(billGetClientRef());
       logAudit('bill_isp', `Bought ${chosen.name||chosen.plan_name} (${isSmile?'Smile':'Spectranet'})`);
       toast('Plan purchased ✅'); billScreen='hub'; refreshMain();
     }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='Buy Plan'; }
@@ -9383,39 +9398,153 @@ function screenBillHistory(){
       <div class="list-row">
         <div class="info">
           <div class="t1">${escapeHtml(tx.service_label || tx.service)} — ${escapeHtml(tx.recipient||'')}</div>
-          <div class="t2 subtle">${new Date(tx.created_at).toLocaleString()} · ${fmtMoney(tx.sale_price)}</div>
+          <div class="t2 subtle">${tx.created_at?fmtDateTimeFull(tx.created_at):''} · ${fmtMoney(tx.sale_price)}</div>
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;">
           <span class="pill ${tx.status==='success'?'pill-green':tx.status==='failed'?'pill-red':'pill-amber'}">${tx.status}</span>
           <div style="display:flex;gap:6px;">
             ${tx.status==='pending' ? `<button class="btn btn-outline btn-sm" data-bp-requery="${tx.id}">Check</button>` : ''}
-            <button class="btn btn-outline btn-sm" data-bp-share="${tx.id}" aria-label="Share this transaction" title="Share">${ICON_EXPORT}</button>
+            <button class="btn btn-outline btn-sm" data-bp-receipt="${tx.id}" aria-label="View and share receipt" title="Receipt">${ICON_EXPORT}</button>
           </div>
         </div>
       </div>
     `).join(''))}
   `;
 }
-// Plain-text summary of a single Bill Payments transaction — deliberately
-// text, not a generated image: these are simple list entries (deposits,
-// top-ups, failed attempts, purchases) rather than formal sale receipts,
-// so a readable message the recipient can paste anywhere covers every
-// status and service type without needing a distinct visual per type.
-function billTxShareText(tx){
-  const statusLabel = tx.status==='success' ? 'Successful' : tx.status==='failed' ? 'Failed' : (tx.status ? tx.status[0].toUpperCase()+tx.status.slice(1) : 'Pending');
-  const lines = [
-    `${business()?.name || 'ZeeShop'} — Bill Payment`,
-    `${tx.service_label || tx.service || 'Transaction'}`,
-    `Status: ${statusLabel}`,
-  ];
-  if(tx.recipient) lines.push(`Recipient: ${tx.recipient}`);
-  lines.push(`Amount: ${fmtMoney(tx.sale_price)}`);
-  if(tx.created_at) lines.push(`Date: ${new Date(tx.created_at).toLocaleString()}`);
+// Full date + time (day, month, year, hour and minute) — used on both the
+// history list rows and the generated receipt, so a transaction's exact
+// timing is always visible, not just its date.
+function fmtDateTimeFull(iso){
+  const d = new Date(iso);
+  if(isNaN(d.getTime())) return String(iso||'');
+  return d.toLocaleString(undefined, { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' });
+}
+// Draws a real receipt for a single Bill Payments / VTU transaction — same
+// branded, security-tinted canvas approach as the sales receipt (shop name
+// + logo, dashed dividers, watermark), covering every service and status:
+// deposits/top-ups, airtime, data, electricity, cable, betting, result
+// checker PINs, ISP, and failed/pending attempts alike, since there's
+// always a real amount, date/time, and reference worth a formal receipt.
+function layoutAndDrawBillReceipt(tx, shop, biz, ctx, logoImg){
+  const W = 380, PAD = 22;
+  let y = 30;
+  const T = (text, x, align, font, color) => {
+    if(!ctx) return;
+    ctx.textAlign = align;
+    if(font) ctx.font = font;
+    if(color) ctx.fillStyle = color;
+    ctx.fillText(text, x, y);
+  };
+  const L = (x1,y1,x2,y2) => { if(ctx) drawDashedLine(ctx,x1,y1,x2,y2); };
+
+  if(logoImg){
+    const logoSize = 50;
+    if(ctx) ctx.drawImage(logoImg, PAD, y-20, logoSize, logoSize);
+  }
+  const bizName = (shop && shop.name) || (biz && biz.name) || 'ZeeShop';
+  T(bizName, W/2, 'center', '800 17px Arial,Helvetica,sans-serif', '#12213B'); y += 18;
+  T('BILL PAYMENT RECEIPT', W/2, 'center', '700 10.5px Arial,Helvetica,sans-serif', '#F2A93B'); y += 15;
+  if(shop && shop.address){ T(shop.address, W/2, 'center', '400 11px Arial,Helvetica,sans-serif', '#6B7280'); y += 14; }
+  if(biz && biz.registrationNumber){ T('Reg. No: '+biz.registrationNumber, W/2, 'center', '400 10px Arial,Helvetica,sans-serif', '#9AA0AB'); y += 13; }
+  y += 8;
+  L(PAD, y, W-PAD, y); y += 22;
+
+  const statusLabel = tx.status==='success' ? 'SUCCESSFUL' : tx.status==='failed' ? 'FAILED' : (tx.status ? String(tx.status).toUpperCase() : 'PENDING');
+  const statusColor = tx.status==='success' ? '#2E7D32' : tx.status==='failed' ? '#C0392B' : '#D98E1E';
+  T(canvasSafeText(tx.service_label || tx.service || 'Bill Payment'), PAD, 'left', '800 15px Arial,Helvetica,sans-serif', '#12213B');
+  T(statusLabel, W-PAD, 'right', '800 12px Arial,Helvetica,sans-serif', statusColor);
+  y += 24;
+
+  if(tx.recipient){
+    T('Recipient', PAD, 'left', '400 11px Arial,Helvetica,sans-serif', '#6B7280');
+    T(canvasSafeText(String(tx.recipient)), W-PAD, 'right', '700 12px Arial,Helvetica,sans-serif', '#242B38');
+    y += 18;
+  }
+  T('Date & Time', PAD, 'left', '400 11px Arial,Helvetica,sans-serif', '#6B7280');
+  T(tx.created_at ? fmtDateTimeFull(tx.created_at) : '—', W-PAD, 'right', '700 12px Arial,Helvetica,sans-serif', '#242B38');
+  y += 18;
+
   const ref = tx.reference || tx.id;
-  if(ref) lines.push(`Ref: ${ref}`);
-  return lines.join('\n');
+  if(ref){
+    T('Reference', PAD, 'left', '400 11px Arial,Helvetica,sans-serif', '#6B7280');
+    T(canvasSafeText(String(ref)), W-PAD, 'right', '400 10.5px Arial,Helvetica,sans-serif', '#9AA0AB');
+    y += 16;
+  }
+  const madeBy = billTxMadeByName(tx);
+  if(madeBy){
+    T('Processed by', PAD, 'left', '400 11px Arial,Helvetica,sans-serif', '#6B7280');
+    T(canvasSafeText(madeBy), W-PAD, 'right', '700 12px Arial,Helvetica,sans-serif', '#242B38');
+    y += 18;
+  }
+  y += 8;
+  L(PAD, y, W-PAD, y); y += 24;
+
+  T('AMOUNT', PAD, 'left', '800 15px Arial,Helvetica,sans-serif', '#12213B');
+  T(fmtMoneyCanvas(tx.sale_price), W-PAD, 'right', '800 18px Arial,Helvetica,sans-serif', '#12213B');
+  y += 28;
+  L(PAD, y, W-PAD, y); y += 20;
+
+  T((shop && shop.receiptFooter) || 'Thank you for your business!', W/2, 'center', '400 11.5px Arial,Helvetica,sans-serif', '#6B7280');
+  y += 16;
+  T('Powered by ZeeShop', W/2, 'center', '700 9.5px Arial,Helvetica,sans-serif', '#B0B5BD');
+  y += 14;
+  y += 8; // bottom padding
+  return y;
+}
+async function drawBillReceiptToCanvas(canvas, tx){
+  const shop = currentShop();
+  const biz = business();
+  const logoImg = await getLogoImage();
+  const W = 380, scale = 2;
+  const h = layoutAndDrawBillReceipt(tx, shop, biz, null, logoImg); // measure pass
+  canvas.width = W*scale; canvas.height = h*scale;
+  canvas.style.width = W+'px'; canvas.style.height = h+'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(scale,scale);
+  ctx.fillStyle = '#FFF7EA'; ctx.fillRect(0,0,W,h);
+  drawSecurityTint(ctx, W, h, ((shop&&shop.name)||(biz&&biz.name)||'ZEESHOP').toUpperCase());
+  layoutAndDrawBillReceipt(tx, shop, biz, ctx, logoImg); // real draw pass
+}
+function openBillTxReceiptModal(txId){
+  const tx = billHistory.find(x=>x.id===txId);
+  if(!tx){ toast('Could not find that transaction.'); return; }
+  openSheet(`
+    <div class="sheet-head"><h3>Receipt</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
+    <div style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;justify-content:center;margin-bottom:14px;">
+      <canvas id="bill-receipt-canvas" style="max-width:100%;height:auto;display:block;"></canvas>
+    </div>
+    <div style="display:flex;gap:10px;margin-bottom:6px;">
+      <button class="btn btn-primary" id="share-bill-receipt-img" style="flex:1;">${ICON_EXPORT} Share Receipt</button>
+      <button class="btn btn-outline" id="download-bill-receipt-img" style="flex:1;">⬇️ Download</button>
+    </div>
+    <p class="subtle">Share opens your phone's share sheet with the actual receipt image attached — pick WhatsApp, Email, or any app there.</p>
+  `);
+  const canvas = document.getElementById('bill-receipt-canvas');
+  drawBillReceiptToCanvas(canvas, tx);
+  document.getElementById('share-bill-receipt-img').addEventListener('click', ()=>{
+    canvas.toBlob(async blob=>{
+      if(!blob){ toast('Could not generate the receipt image.'); return; }
+      const file = new File([blob], `bill-receipt-${String(tx.id||'').slice(-6)}.png`, {type:'image/png'});
+      if(navigator.canShare && navigator.canShare({files:[file]})){
+        try{ await navigator.share({files:[file], title:(business()?.name||'ZeeShop')+' — Receipt'}); logAudit('bill_tx_shared', `Shared receipt for ${tx.service_label||tx.service||'bill'} transaction (${tx.status})`); }
+        catch(e){ /* user cancelled the share sheet — not an error */ }
+      } else {
+        toast("This browser can't share images directly — tap Download, then attach the file manually.");
+      }
+    }, 'image/png');
+  });
+  document.getElementById('download-bill-receipt-img').addEventListener('click', ()=>{
+    canvas.toBlob(blob=>{
+      if(!blob) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href=url; a.download=`bill-receipt-${String(tx.id||'').slice(-6)}.png`; a.click();
+      URL.revokeObjectURL(url);
+      logAudit('bill_tx_shared', `Downloaded receipt for ${tx.service_label||tx.service||'bill'} transaction (${tx.status})`);
+    }, 'image/png');
+  });
 }
 function bindBillHistoryEvents(){
+
   if(billHistory.length===0 && !billHistoryLoading) bpLoadHistory();
   document.querySelectorAll('[data-bp-requery]').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
@@ -9430,19 +9559,8 @@ function bindBillHistoryEvents(){
       }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='Check'; }
     });
   });
-  document.querySelectorAll('[data-bp-share]').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      const tx = billHistory.find(x=>x.id===btn.dataset.bpShare);
-      if(!tx) return;
-      const shareText = billTxShareText(tx);
-      if(navigator.share){
-        try{ await navigator.share({title: (business()?.name||'ZeeShop')+' — Transaction', text: shareText}); logAudit('bill_tx_shared', `Shared ${tx.service_label||tx.service||'bill'} transaction (${tx.status})`); }
-        catch(err){ /* user cancelled — not an error */ }
-      } else {
-        try{ await navigator.clipboard.writeText(shareText); toast('Sharing not supported here — copied to clipboard instead ✅'); }
-        catch(err){ toast("Couldn't share or copy on this browser."); }
-      }
-    });
+  document.querySelectorAll('[data-bp-receipt]').forEach(btn=>{
+    btn.addEventListener('click', ()=> openBillTxReceiptModal(btn.dataset.bpReceipt));
   });
 }
 

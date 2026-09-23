@@ -1569,7 +1569,13 @@ function updateSyncDot(){
   const st = window.__zeeshopSyncStatus;
   if(!navigator.onLine){ dot.dataset.state = 'offline'; dot.title = 'Offline — will sync when back online'; return; }
   if(!st){ dot.dataset.state = ''; dot.title = 'Sync status unavailable'; return; }
-  if(st.lastError && st.pendingCount > 0){ dot.dataset.state = 'error'; dot.title = st.lastError; return; }
+  // A permanently-failed write is removed from the queue the same as a
+  // successful one (see flushSyncQueue), so pendingCount alone can't tell
+  // the two apart — lastError is what actually distinguishes "empty
+  // because everything's caught up" from "empty because something was
+  // silently dropped." Checking lastError on its own (not only alongside
+  // pendingCount>0) is what makes a dropped write show up here at all.
+  if(st.lastError){ dot.dataset.state = 'error'; dot.title = st.lastError; return; }
   if(st.pendingCount > 0){ dot.dataset.state = 'pending'; dot.title = `${st.pendingCount} change(s) waiting to sync`; return; }
   dot.dataset.state = ''; dot.title = 'All changes synced';
 }
@@ -8303,6 +8309,7 @@ let billForm = {
 
 let billHistory = [];
 let billHistoryLoading = false;
+let billHistoryError = null; // set on a failed load — stops the auto-retry loop until the person taps Retry
 
 function billResetForm(){
   billForm = {
@@ -9217,17 +9224,30 @@ function bindBillIspEvents(){
 }
 
 /* ---------------- HISTORY / REQUERY ---------------- */
+// Loads once per screen visit — does NOT auto-retry on failure (see
+// bindBillHistoryEvents). It used to: every failed load reset
+// billHistoryLoading back to false and re-rendered, which re-triggered
+// this exact same auto-load condition again, immediately — an invisible
+// infinite retry loop that LOOKED like "stuck on Loading forever" since
+// each failed attempt flickered back to the loading state too fast to
+// ever see the real error. Now a failure is remembered (billHistoryError)
+// and shown plainly instead, with a manual Retry button.
 async function bpLoadHistory(){
-  billHistoryLoading = true; refreshMain();
+  billHistoryLoading = true; billHistoryError = null; refreshMain();
   try{ billHistory = (await callBigisub('list_transactions', {})).transactions || []; }
-  catch(e){ toast(e.message); }
+  catch(e){ billHistoryError = e.message || 'Something went wrong.'; }
   billHistoryLoading = false; refreshMain();
 }
 /* ---------------- MANAGE PRICES (owner only) ---------------- */
 function screenBillHistory(){
   return `
     ${bpHeader('Transaction History')}
-    ${billHistoryLoading ? `<p class="subtle">Loading…</p>` : (billHistory.length===0 ? `<p class="subtle">No bill payments yet.</p>` : billHistory.map(tx=>`
+    ${billHistoryLoading ? `<p class="subtle">Loading…</p>` : billHistoryError ? `
+      <div class="card">
+        <p class="subtle" style="color:var(--red);margin-bottom:10px;">Couldn't load your transaction history: ${escapeHtml(billHistoryError)}</p>
+        <button class="btn btn-outline btn-sm" id="bp-history-retry">Retry</button>
+      </div>
+    ` : (billHistory.length===0 ? `<p class="subtle">No bill payments yet.</p>` : billHistory.map(tx=>`
       <div class="list-row">
         <div class="info">
           <div class="t1">${escapeHtml(tx.service_label || tx.service)} — ${escapeHtml(tx.recipient||'')}</div>
@@ -9378,7 +9398,9 @@ function openBillTxReceiptModal(txId){
 }
 function bindBillHistoryEvents(){
 
-  if(billHistory.length===0 && !billHistoryLoading) bpLoadHistory();
+  if(billHistory.length===0 && !billHistoryLoading && !billHistoryError) bpLoadHistory();
+  const historyRetry = document.getElementById('bp-history-retry');
+  if(historyRetry) historyRetry.addEventListener('click', ()=> bpLoadHistory());
   document.querySelectorAll('[data-bp-requery]').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
       const id = btn.dataset.bpRequery;

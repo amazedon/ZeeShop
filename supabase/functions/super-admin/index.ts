@@ -30,21 +30,46 @@
 //
 // PLATFORM PRICING — this is what actually earns the platform money from
 // VTU/bill payments, independent of whatever markup (including 0%) any
-// individual business sets for itself. Previously the only markup in the
-// whole system was each business's own bill_markup_percent, which meant
-// the platform's "profit" in bill_payments_overview was entirely at the
-// mercy of businesses bothering to set a non-zero markup. This adds one
-// platform-wide percentage, applied to Bigisub's raw cost BEFORE a
-// business's own markup/flat-fee/override math runs (see computeSalePrice
-// in bigisub-proxy/index.ts) — so the platform earns its own guaranteed
-// cut on every sale regardless. One-time setup:
+// individual business sets for itself. There is no business-side markup
+// at all in this app (removed) — this is the ONLY margin the platform
+// earns, applied to Bigisub's raw cost before the charge is made (see
+// computeSalePrice in bigisub-proxy/index.ts).
+//
+// It's per-service rather than one blanket percentage, because a flat %
+// doesn't make sense everywhere — funding a ₦50,000 betting wallet at 2%
+// would add ₦1,000 to what should be a fixed small fee. So: a percentage
+// for the services with genuinely variable cost (data, airtime, cable,
+// result checker, ISP), and a flat ₦ fee for the two pass-through
+// services where the exact amount matters (betting funding, electricity
+// tokens) — plus one "default" percentage as a fallback for any
+// percentage-based service left blank. One-time setup:
 //   create table platform_settings (
 //     id int primary key default 1,
-//     platform_markup_percent numeric not null default 0,
+//     default_markup_percent numeric not null default 0,
+//     data_markup_percent numeric not null default 0,
+//     airtime_markup_percent numeric not null default 0,
+//     cable_markup_percent numeric not null default 0,
+//     result_checker_markup_percent numeric not null default 0,
+//     isp_markup_percent numeric not null default 0,
+//     betting_flat_fee numeric not null default 0,
+//     electricity_flat_fee numeric not null default 0,
 //     updated_at timestamptz default now(),
 //     constraint platform_settings_singleton check (id = 1)
 //   );
-//   insert into platform_settings (id, platform_markup_percent) values (1, 0);
+//   insert into platform_settings (id) values (1);
+// If you already created the OLD single-column version of this table
+// (platform_markup_percent only), just add the new columns instead:
+//   alter table platform_settings
+//     add column if not exists default_markup_percent numeric not null default 0,
+//     add column if not exists data_markup_percent numeric not null default 0,
+//     add column if not exists airtime_markup_percent numeric not null default 0,
+//     add column if not exists cable_markup_percent numeric not null default 0,
+//     add column if not exists result_checker_markup_percent numeric not null default 0,
+//     add column if not exists isp_markup_percent numeric not null default 0,
+//     add column if not exists betting_flat_fee numeric not null default 0,
+//     add column if not exists electricity_flat_fee numeric not null default 0;
+//   update platform_settings set default_markup_percent = platform_markup_percent where id = 1;
+//   alter table platform_settings drop column if exists platform_markup_percent;
 // Missing/empty table just means 0% platform markup — nothing breaks if
 // you haven't run this yet, it just means you aren't earning anything
 // extra on top of what businesses charge themselves yet.
@@ -132,30 +157,41 @@ Deno.serve(async (req: Request) => {
       return json({ staff: staff || [], shops: shops || [] }, 200);
     }
 
-    // PLATFORM PRICING — read/write the one platform-wide markup percentage
-    // (see the file header for the table this needs and why it exists).
-    // No isMaster/business check here since this whole function is already
-    // gated to super admins only, at the top.
+    // PLATFORM PRICING — read/write the per-service pricing rules (see the
+    // file header for the table this needs and why it's per-service, not
+    // one blanket percentage). No isMaster/business check here since this
+    // whole function is already gated to super admins only, at the top.
+    const PRICING_FIELDS = [
+      "default_markup_percent", "data_markup_percent", "airtime_markup_percent",
+      "cable_markup_percent", "result_checker_markup_percent", "isp_markup_percent",
+      "betting_flat_fee", "electricity_flat_fee",
+    ];
     if (action === "get_platform_pricing") {
-      const { data, error } = await admin.from("platform_settings").select("platform_markup_percent").eq("id", 1).maybeSingle();
-      if (error) return json({ error: "Could not load platform pricing — has the platform_settings table been created? (see file header) " + error.message }, 500);
-      return json({ platform_markup_percent: Number(data?.platform_markup_percent || 0) }, 200);
+      const { data, error } = await admin.from("platform_settings").select(PRICING_FIELDS.join(",")).eq("id", 1).maybeSingle();
+      if (error) return json({ error: "Could not load platform pricing — has the platform_settings table been created with the new per-service columns? (see file header) " + error.message }, 500);
+      const out: Record<string, number> = {};
+      for (const f of PRICING_FIELDS) out[f] = Number((data as Record<string, unknown> | null)?.[f] || 0);
+      return json(out, 200);
     }
-    if (action === "set_platform_markup") {
-      const pct = Number(params.platform_markup_percent);
-      if (Number.isNaN(pct) || pct < 0) return json({ error: "Invalid markup percent." }, 400);
+    if (action === "set_platform_pricing") {
+      const update: Record<string, number> = {};
+      for (const f of PRICING_FIELDS) {
+        const val = Number(params[f]);
+        if (Number.isNaN(val) || val < 0) return json({ error: `Invalid value for ${f}.` }, 400);
+        update[f] = val;
+      }
       const { error } = await admin.from("platform_settings")
-        .upsert({ id: 1, platform_markup_percent: pct, updated_at: new Date().toISOString() }, { onConflict: "id" });
-      if (error) return json({ error: "Could not save — has the platform_settings table been created? (see file header) " + error.message }, 500);
+        .upsert({ id: 1, ...update, updated_at: new Date().toISOString() }, { onConflict: "id" });
+      if (error) return json({ error: "Could not save — has the platform_settings table been created with the new per-service columns? (see file header) " + error.message }, 500);
 
       await admin.from("audit_log_platform").insert({
         actor_auth_user_id: callerData.user.id,
-        action: "set_platform_markup",
+        action: "set_platform_pricing",
         target_business_id: null,
-        detail: `Set platform-wide markup to ${pct}%.`,
+        detail: `Set platform pricing: ${PRICING_FIELDS.map((f) => `${f}=${update[f]}`).join(", ")}.`,
       }).then((r) => { if (r.error) console.log("audit_log_platform insert skipped:", r.error.message); });
 
-      return json({ ok: true, platform_markup_percent: pct }, 200);
+      return json({ ok: true, ...update }, 200);
     }
 
     if (action === "grant_plan") {

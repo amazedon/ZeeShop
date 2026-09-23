@@ -115,6 +115,11 @@ async function flushSyncQueue(){
   }
 
   syncInProgress = true;
+  // Tracked separately from the loop so a permanent drop's error message
+  // survives to the end of this function — the queue itself is empty by
+  // then (the dropped item was removed from it, same as a real success),
+  // so nothing else here would know anything had gone wrong otherwise.
+  const droppedThisPass = [];
   try{
     let queue = loadSyncQueue();
     while(queue.length > 0){
@@ -131,7 +136,7 @@ async function flushSyncQueue(){
         moveToDeadLetter(item, 'rejected by server — see console for the table/op');
         queue.shift();
         saveSyncQueue(queue);
-        noteSyncStatus(`Dropped a ${item.table} ${item.op} that the server permanently rejected.`);
+        droppedThisPass.push(item);
         continue;
       }
       // 'retry' — auth expired, offline mid-flush, or a transient server error.
@@ -140,7 +145,22 @@ async function flushSyncQueue(){
       noteSyncStatus(`Push paused on a ${item.table} ${item.op} — will retry.`);
       break; // stop here — keep order, retry this item (and the rest) next time
     }
-    if(queue.length === 0) noteSyncStatus(null);
+    if(droppedThisPass.length > 0){
+      // This is the case that used to vanish without a trace: the queue is
+      // empty (so the sync dot would otherwise read "all good"), but a real
+      // change never actually reached the server and is now gone for good.
+      // Surfaced two ways: a persistent status (so the dot can show red even
+      // with zero pending items — see updateSyncDot in app.html) AND an
+      // immediate toast, since a dot nobody's looking at isn't a real signal.
+      const summary = droppedThisPass.map(i=>`${i.table} ${i.op}`).join(', ');
+      const msg = `${droppedThisPass.length} change${droppedThisPass.length>1?'s':''} couldn't be saved to the server and ${droppedThisPass.length>1?'were':'was'} dropped: ${summary}.`;
+      noteSyncStatus(msg);
+      if(typeof window.toast === 'function'){
+        window.toast(`⚠️ A change didn't save to the server (${droppedThisPass[0].table}) — please try again or contact support.`);
+      }
+    } else if(queue.length === 0){
+      noteSyncStatus(null);
+    }
   } finally {
     syncInProgress = false;
   }

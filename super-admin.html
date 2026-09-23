@@ -90,10 +90,18 @@
     position:sticky;top:53px;z-index:15;background:var(--paper);border-bottom:1px solid var(--line);
     -webkit-overflow-scrolling:touch;
   }
-  .section-nav a{color:var(--ink);background:#fff;border:1px solid var(--line);padding:7px 13px;border-radius:999px;font-size:12.5px;font-weight:700;text-decoration:none;white-space:nowrap;flex-shrink:0;}
-  .section-nav a:hover{border-color:var(--marigold-dark);}
-  .section-heading{font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--text-dim);margin:28px 0 10px;scroll-margin-top:100px;}
-  .section-heading:first-of-type{margin-top:0;}
+  .tab-btn{
+    color:var(--text-dim);background:#fff;border:1px solid var(--line);padding:8px 15px;border-radius:999px;
+    font-size:12.5px;font-weight:700;white-space:nowrap;flex-shrink:0;cursor:pointer;font-family:inherit;
+    transition:background .12s,color .12s,border-color .12s;
+  }
+  .tab-btn:hover{border-color:var(--marigold-dark);}
+  .tab-btn.active{background:var(--ink);color:#fff;border-color:var(--ink);}
+  .tab-panel{display:none;}
+  .tab-panel.active{display:block;animation:tabIn .15s ease;}
+  @keyframes tabIn{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:translateY(0);}}
+  .section-heading{font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--text-dim);margin:0 0 10px;}
+  .tab-panel > .section-heading:not(:first-child){margin-top:28px;}
   .bp-badge{display:inline-block;padding:3px 10px;border-radius:999px;font-size:11.5px;font-weight:800;}
   .bp-success{background:var(--green-bg);color:var(--green);}
   .bp-failed{background:var(--red-bg);color:var(--red);}
@@ -108,6 +116,22 @@
   .overview-card .num{font-size:18px;font-weight:900;overflow-wrap:break-word;}
   .overview-card .label{font-size:10px;color:rgba(255,255,255,0.65);font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-top:4px;line-height:1.3;}
   @media(max-width:560px){ .overview-row{grid-template-columns:1fr 1fr;} }
+  .overview-card.tap{cursor:pointer;}
+
+  /* Platform Pricing — per-service rules, laid out as a clean stacked
+     list of service rows rather than a grid, since each row's control
+     differs (percentage vs flat fee) and needs room for its own label. */
+  .price-rule-row{display:flex;align-items:center;gap:12px;padding:13px 0;border-top:1px solid var(--line);}
+  .price-rule-row:first-child{border-top:none;}
+  .price-rule-row .pr-info{flex:1;min-width:0;}
+  .price-rule-row .pr-name{font-weight:800;font-size:13.5px;color:var(--ink);}
+  .price-rule-row .pr-hint{font-size:11.5px;color:var(--text-dim);margin-top:2px;line-height:1.4;}
+  .price-rule-row .pr-control{display:flex;align-items:center;gap:5px;flex-shrink:0;}
+  .price-rule-row .pr-control input{width:78px;padding:9px 10px;text-align:right;font-size:14px;}
+  .price-rule-row .pr-unit{font-size:13px;color:var(--text-dim);font-weight:700;}
+  .pricing-type-tag{display:inline-block;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;padding:2px 7px;border-radius:5px;margin-left:7px;vertical-align:middle;}
+  .pricing-type-pct{background:var(--green-bg);color:var(--green);}
+  .pricing-type-flat{background:#FDF1DC;color:var(--marigold-dark);}
 </style>
 </head>
 <body>
@@ -137,25 +161,26 @@
     <button id="logout-btn">Log Out</button>
   </div>
   <main>
-    <div class="section-nav">
-      <a href="#overview-section">Overview</a>
-      <a href="#businesses-section">Businesses</a>
-      <a href="#bill-payments-section">Bill Payments</a>
-      <a href="#content-section">Platform Content</a>
-      <a href="#notify-section">Notifications</a>
+    <div class="section-nav" id="tab-nav">
+      <button class="tab-btn active" data-tab="overview">Overview</button>
+      <button class="tab-btn" data-tab="businesses">Businesses</button>
+      <button class="tab-btn" data-tab="bill-payments">Bill Payments</button>
+      <button class="tab-btn" data-tab="pricing">Platform Pricing</button>
+      <button class="tab-btn" data-tab="content">Content</button>
+      <button class="tab-btn" data-tab="notify">Notifications</button>
     </div>
 
-    <div id="overview-section">
+    <div id="overview-section" class="tab-panel active">
       <div class="section-heading">Platform Overview</div>
       <div class="overview-row">
         <div class="overview-card"><div class="num" id="ov-businesses">0</div><div class="label">Businesses</div></div>
         <div class="overview-card"><div class="num" id="ov-bigisub-balance">—</div><div class="label">Bigisub Wallet</div></div>
         <div class="overview-card"><div class="num" id="ov-profit">—</div><div class="label">Total Profit</div></div>
-        <div class="overview-card"><div class="num" id="ov-markup">—</div><div class="label">Platform Markup</div></div>
+        <div class="overview-card tap" id="ov-pricing-card"><div class="num" id="ov-markup">—</div><div class="label">Pricing Rules →</div></div>
       </div>
     </div>
 
-    <div id="businesses-section">
+    <div id="businesses-section" class="tab-panel">
       <div class="section-heading">Businesses & Subscriptions</div>
       <div class="stats-row">
         <div class="stat-card"><div class="num" id="stat-total">0</div><div class="label">Total Businesses</div></div>
@@ -185,26 +210,13 @@
       </div>
     </div>
 
-    <div id="bill-payments-section">
+    <div id="bill-payments-section" class="tab-panel">
       <div class="section-heading">💳 Bill Payments</div>
 
       <div class="card">
         <h2>Bigisub Platform Wallet</h2>
         <p class="subtle">The ONE shared Bigisub balance that funds every business's airtime/data/bill purchases. If this runs dry, purchases fail for everyone — regardless of any individual business's own Bill Wallet balance. Keep an eye on this.</p>
         <div id="bp-bigisub-balance-box"><p class="subtle">Loading…</p></div>
-      </div>
-
-      <div class="card">
-        <h2>Platform Pricing</h2>
-        <p class="subtle">Your own guaranteed cut — applied to Bigisub's real cost <b>before</b> any business's own markup runs. This is what actually earns the platform money on every sale, even from businesses that leave their own markup at 0%. It's invisible to businesses; they only ever see their own cost-plus-markup math.</p>
-        <div id="pp-status"></div>
-        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
-          <div class="field" style="margin-bottom:0;flex:1;min-width:120px;">
-            <label>Platform Markup %</label>
-            <input id="pp-markup-input" type="number" min="0" step="0.1" placeholder="e.g. 2">
-          </div>
-          <button class="btn btn-primary" id="pp-save-btn" style="width:auto;padding:12px 20px;">Save</button>
-        </div>
       </div>
 
       <div class="stats-row" style="grid-template-columns:repeat(4,1fr);">
@@ -221,11 +233,11 @@
       </div>
 
       <div class="card">
-        <h2>Business Wallets & Markups</h2>
+        <h2>Business Wallets</h2>
         <p class="subtle">Every business that has funded a Bill Wallet or set up a dedicated top-up account.</p>
         <div class="table-wrap">
           <table class="stack">
-            <thead><tr><th>Business</th><th>Wallet Balance</th><th>Markup</th><th>Dedicated Account</th></tr></thead>
+            <thead><tr><th>Business</th><th>Wallet Balance</th><th>Dedicated Account</th></tr></thead>
             <tbody id="bp-wallets-tbody"></tbody>
           </table>
         </div>
@@ -246,13 +258,89 @@
 
       <div class="card">
         <h2>Bigisub Service Prices</h2>
-        <p class="subtle">Live from Bigisub right now — the actual cost each business's markup/flat-fee/set-price sits on top of. Read-only; pricing decisions belong to each business individually.</p>
+        <p class="subtle">Live from Bigisub right now — the actual cost your Platform Pricing rules sit on top of. Read-only reference data.</p>
         <button class="btn-outline-sm" id="bp-prices-refresh" style="margin-bottom:10px;">↻ Refresh</button>
         <div id="bp-prices-box"><p class="subtle">Loading…</p></div>
       </div>
     </div>
 
-    <div id="content-section">
+    <div id="pricing-section" class="tab-panel">
+      <div class="section-heading">Platform Pricing</div>
+      <div class="card">
+        <h2>Your margin, per service</h2>
+        <p class="subtle">
+          Applied to Bigisub's real cost on every purchase, platform-wide — invisible to businesses; they're simply
+          charged the final amount. There is no reseller/markup pricing on the business side at all, so this is the
+          <b>only</b> margin the platform earns. A single blanket percentage doesn't work for every service — funding
+          a ₦50,000 betting wallet at 2% would add ₦1,000, which isn't how a betting funding fee should work — so
+          each service below has its own rule, in whichever unit actually fits it: a <b>percentage</b> for services
+          with variable cost (data, airtime, cable, etc.), or a <b>flat ₦ fee</b> for pass-through services where the
+          exact amount matters (betting funding, electricity tokens).
+        </p>
+        <div id="pp-status"></div>
+
+        <div class="price-rule-row">
+          <div class="pr-info">
+            <div class="pr-name">Data Bundles<span class="pricing-type-tag pricing-type-pct">%</span></div>
+            <div class="pr-hint">Applied to Bigisub's cost for every data bundle purchase.</div>
+          </div>
+          <div class="pr-control"><input id="pp-data" type="number" min="0" step="0.1" placeholder="0"><span class="pr-unit">%</span></div>
+        </div>
+        <div class="price-rule-row">
+          <div class="pr-info">
+            <div class="pr-name">Airtime<span class="pricing-type-tag pricing-type-pct">%</span></div>
+            <div class="pr-hint">Applied to the airtime amount purchased.</div>
+          </div>
+          <div class="pr-control"><input id="pp-airtime" type="number" min="0" step="0.1" placeholder="0"><span class="pr-unit">%</span></div>
+        </div>
+        <div class="price-rule-row">
+          <div class="pr-info">
+            <div class="pr-name">Cable TV<span class="pricing-type-tag pricing-type-pct">%</span></div>
+            <div class="pr-hint">Applied to the cable subscription plan cost.</div>
+          </div>
+          <div class="pr-control"><input id="pp-cable" type="number" min="0" step="0.1" placeholder="0"><span class="pr-unit">%</span></div>
+        </div>
+        <div class="price-rule-row">
+          <div class="pr-info">
+            <div class="pr-name">Result Checker<span class="pricing-type-tag pricing-type-pct">%</span></div>
+            <div class="pr-hint">Applied per PIN, before quantity is multiplied in.</div>
+          </div>
+          <div class="pr-control"><input id="pp-result-checker" type="number" min="0" step="0.1" placeholder="0"><span class="pr-unit">%</span></div>
+        </div>
+        <div class="price-rule-row">
+          <div class="pr-info">
+            <div class="pr-name">Internet (ISP)<span class="pricing-type-tag pricing-type-pct">%</span></div>
+            <div class="pr-hint">Smile and Spectranet plans, same rule for both.</div>
+          </div>
+          <div class="pr-control"><input id="pp-isp" type="number" min="0" step="0.1" placeholder="0"><span class="pr-unit">%</span></div>
+        </div>
+        <div class="price-rule-row">
+          <div class="pr-info">
+            <div class="pr-name">Betting Funding<span class="pricing-type-tag pricing-type-flat">₦ flat</span></div>
+            <div class="pr-hint">A fixed fee added on top, regardless of amount funded — a percentage would overcharge on large fundings.</div>
+          </div>
+          <div class="pr-control"><span class="pr-unit">₦</span><input id="pp-betting" type="number" min="0" step="1" placeholder="0"></div>
+        </div>
+        <div class="price-rule-row">
+          <div class="pr-info">
+            <div class="pr-name">Electricity<span class="pricing-type-tag pricing-type-flat">₦ flat</span></div>
+            <div class="pr-hint">A "convenience fee" added on top of the token amount — the standard way DISCO vending apps charge, not a percentage.</div>
+          </div>
+          <div class="pr-control"><span class="pr-unit">₦</span><input id="pp-electricity" type="number" min="0" step="1" placeholder="0"></div>
+        </div>
+        <div class="price-rule-row">
+          <div class="pr-info">
+            <div class="pr-name">Default (fallback)<span class="pricing-type-tag pricing-type-pct">%</span></div>
+            <div class="pr-hint">Used only for a percentage-based service above with nothing entered — a safety net, not meant to be your main lever.</div>
+          </div>
+          <div class="pr-control"><input id="pp-default" type="number" min="0" step="0.1" placeholder="0"><span class="pr-unit">%</span></div>
+        </div>
+
+        <button class="btn btn-primary" id="pp-save-btn" style="margin-top:16px;">Save Pricing</button>
+      </div>
+    </div>
+
+    <div id="content-section" class="tab-panel">
       <div class="section-heading">Platform Content</div>
       <div class="card">
         <h2>🌐 Landing Page Content</h2>
@@ -264,7 +352,7 @@
       </div>
     </div>
 
-    <div id="notify-section">
+    <div id="notify-section" class="tab-panel">
       <div class="section-heading">Notifications</div>
       <div class="card">
         <h2>📣 Send Notification</h2>
@@ -381,6 +469,27 @@
     loadPlatformPricing();
   }
 
+  // ---------- Tab navigation ----------
+  // Only one section is ever visible at a time — data for every tab is
+  // still loaded up front (above) so switching tabs is instant with no
+  // spinner, but the DOM for the other five sections stays hidden until
+  // picked, instead of the old single long scrolling page.
+  function showTab(tabId){
+    document.querySelectorAll('.tab-panel').forEach(p=>{
+      p.classList.toggle('active', p.id === tabId+'-section');
+    });
+    document.querySelectorAll('.tab-btn').forEach(b=>{
+      b.classList.toggle('active', b.dataset.tab === tabId);
+    });
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }
+  document.querySelectorAll('.tab-btn').forEach(btn=>{
+    btn.addEventListener('click', ()=> showTab(btn.dataset.tab));
+  });
+  // The Overview card doubles as a shortcut into Platform Pricing, since
+  // that number (the default markup) lives there now.
+  document.getElementById('ov-pricing-card').addEventListener('click', ()=> showTab('pricing'));
+
   const SITE_SECTIONS = [
     { key: 'about_us', label: 'About Us', bodyRows: 4 },
     { key: 'contact_us', label: 'Contact Us', bodyRows: 3, extraFields: ['email', 'phone', 'address'] },
@@ -480,7 +589,7 @@
         `;
       }
 
-      // Business wallets & markups — only businesses that have actually
+      // Business wallets — only businesses that have actually
       // funded a wallet or set up a dedicated account, not every business.
       const walletBusinesses = (r.businesses || []).filter(b => Number(b.bill_wallet_balance||0) > 0 || b.psa_account_number);
       const walletsTbody = document.getElementById('bp-wallets-tbody');
@@ -494,7 +603,6 @@
           <tr>
             <td data-label="Business">${escapeHtml(b.name || '—')}</td>
             <td data-label="Wallet Balance">${fmtNaira(b.bill_wallet_balance)}</td>
-            <td data-label="Markup">${b.bill_markup_percent ?? 0}%</td>
             <td data-label="Dedicated Account">${b.psa_account_number ? `${escapeHtml(b.psa_account_number)} <span class="subtle">(${escapeHtml(b.psa_bank_name||'')})</span>` : '<span class="subtle">Not set up</span>'}</td>
           </tr>
         `).join('');
@@ -599,13 +707,27 @@
     }
   }
 
+  // Percentage-based services map to a "*_markup_percent" field; the two
+  // flat-fee services map to a "*_flat_fee" field. Kept as one list so
+  // load/save/validate all walk the same source of truth instead of
+  // duplicating field names three times.
+  const PRICING_FIELDS = [
+    { input: 'pp-data', key: 'data_markup_percent', kind: 'pct' },
+    { input: 'pp-airtime', key: 'airtime_markup_percent', kind: 'pct' },
+    { input: 'pp-cable', key: 'cable_markup_percent', kind: 'pct' },
+    { input: 'pp-result-checker', key: 'result_checker_markup_percent', kind: 'pct' },
+    { input: 'pp-isp', key: 'isp_markup_percent', kind: 'pct' },
+    { input: 'pp-betting', key: 'betting_flat_fee', kind: 'flat' },
+    { input: 'pp-electricity', key: 'electricity_flat_fee', kind: 'flat' },
+    { input: 'pp-default', key: 'default_markup_percent', kind: 'pct' },
+  ];
+
   async function loadPlatformPricing(){
     const statusBox = document.getElementById('pp-status');
-    const input = document.getElementById('pp-markup-input');
     try{
       const r = await callAdminApi('get_platform_pricing', {});
-      input.value = r.platform_markup_percent;
-      document.getElementById('ov-markup').textContent = r.platform_markup_percent + '%';
+      PRICING_FIELDS.forEach(f=>{ document.getElementById(f.input).value = r[f.key] ?? 0; });
+      document.getElementById('ov-markup').textContent = (r.default_markup_percent ?? 0) + '%';
       statusBox.innerHTML = '';
     }catch(e){
       statusBox.innerHTML = `<div class="err">Could not load platform pricing: ${escapeHtml(e.message)}</div>`;
@@ -613,15 +735,21 @@
     }
   }
   document.getElementById('pp-save-btn').addEventListener('click', async ()=>{
-    const input = document.getElementById('pp-markup-input');
     const statusBox = document.getElementById('pp-status');
-    const pct = Number(input.value);
-    if(Number.isNaN(pct) || pct < 0){ showError(statusBox, 'Enter a valid markup percent (0 or more).'); return; }
+    const payload = {};
+    for(const f of PRICING_FIELDS){
+      const val = Number(document.getElementById(f.input).value || 0);
+      if(Number.isNaN(val) || val < 0){
+        showError(statusBox, `Enter a valid ${f.kind==='pct'?'percent':'₦ amount'} for every field (0 or more).`);
+        return;
+      }
+      payload[f.key] = val;
+    }
     statusBox.innerHTML = '<div class="subtle">Saving…</div>';
     try{
-      await callAdminApi('set_platform_markup', { platform_markup_percent: pct });
+      await callAdminApi('set_platform_pricing', payload);
       statusBox.innerHTML = `<div class="ok">Saved ✅ — now applied to every new purchase across the platform.</div>`;
-      document.getElementById('ov-markup').textContent = pct + '%';
+      document.getElementById('ov-markup').textContent = payload.default_markup_percent + '%';
     }catch(e){
       showError(statusBox, 'Could not save: ' + e.message);
     }

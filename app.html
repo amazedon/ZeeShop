@@ -5222,7 +5222,14 @@ function bindMoreEvents(){
   const flo = document.getElementById('do-full-logout');
   if(flo) flo.addEventListener('click', ()=>{
     if(confirm('Sign out of this business on this device?')){
-      hiddenBalanceCards={}; state.sessionUserId=null; forceFullLogin=true; authMode='login'; pendingSignupData=null; authError=''; route='dashboard'; render();
+      hiddenBalanceCards={}; state.sessionUserId=null; forceFullLogin=true; authMode='login'; pendingSignupData=null; authError=''; route='dashboard';
+      // A "full" logout has to actually end the Supabase Auth session too —
+      // otherwise the device still holds a valid, silently-refreshing
+      // session behind the scenes even though the app itself looks logged
+      // out, which is exactly how a stale "Welcome back" can resurface
+      // later. Best-effort: local state is already cleared above either way.
+      if(window.sb) window.sb.auth.signOut().catch(()=>{});
+      render();
     }
   });
 }
@@ -10097,6 +10104,25 @@ function closeSheet(){
    INIT — seed a little demo data on very first run for master, for UX
    ============================================================ */
 render();
+
+// Mobile browsers (Chrome Custom Tabs especially) very often restore a
+// backgrounded tab from the back-forward cache (bfcache) instead of doing
+// a real reload — meaning none of the JS above re-runs, and whatever was
+// on screen (and any in-flight timer, like a toast's auto-dismiss) is
+// frozen exactly as it was and can reappear looking "stuck." That's how a
+// leftover "Welcome back, X!" toast can end up hovering over the login
+// screen on reopen even though nobody is actually logged in — it's a
+// real toast from a previous session that never got cleaned up, not a
+// fresh (and wrong) greeting. On a genuine bfcache restore, clear any
+// stray toast and force a full re-render from current state so the
+// screen always reflects reality rather than a frozen snapshot.
+window.addEventListener('pageshow', (event)=>{
+  if(!event.persisted) return;
+  const staleToast = document.getElementById('toast');
+  if(staleToast) staleToast.remove();
+  render();
+});
+
 </script>
 <script src="sync-engine.js"></script>
 </body>

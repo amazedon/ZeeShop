@@ -8241,8 +8241,9 @@ function openCheckInModal(roomId){
    never from this file — because the Bigisub partner token and
    transaction PIN are shared platform-wide secrets that must never reach
    the browser. This file collects what the shop wants to buy, shows a
-   cost breakdown (Bigisub cost + your markup = what leaves your Bill
-   Wallet), and posts that to the edge function, which does the actual
+   cost breakdown (what leaves your Bill Wallet is simply Bigisub's own
+   cost — no markup layer on this side), and posts that to the edge
+   function, which does the actual
    Bigisub call, debits bill_wallet_balance, and logs the transaction.
 
    Cable TV, Electricity, Betting, and ISP-Smile are VERIFY-THEN-CHARGE
@@ -8268,8 +8269,6 @@ const BIGISUB_NETWORKS = [ {id:1,name:'MTN'}, {id:2,name:'GLO'}, {id:3,name:'9MO
 let billScreen = 'hub'; // hub | airtime | data | cable | electricity | betting | resultchecker | isp | history | topup
 let billLoading = false;
 let billWalletBalance = null;
-let billMarkupPercent = null;
-let billMarkupDraft = null;
 let billPinSet = false;
 let billPinStatusLoaded = false; // Settings loads this independently of ever having opened Bill Payments
 let billPinDraft = ''; // in-progress PIN entry in the settings field, cleared after save
@@ -8277,11 +8276,7 @@ let billPinOtpSent = false; // whether a reset code has been requested this sess
 let billPinOtpSending = false;
 let billPinOtpDraft = ''; // entered 6-digit code
 let billPinOtpMaskedEmail = '';
-let billFlatFees = { airtime: 0, electricity: 0, betting: 0 };
 let billEstimatedFeePercent = 2.0; // Flutterwave's estimated cut on Bank Transfer / My Account top-ups — shown before funding, not charged by us
-let billFlatFeeDrafts = {}; // in-progress edits in the pricing screen, keyed by service
-let billPriceOverrides = null; // fetched once from list_price_overrides, refreshed when the pricing screen loads
-let billPriceDrafts = {}; // in-progress sell-price edits in the pricing screen, keyed by `${service}:${planKey}`
 let billCurrency = 'NGN';
 
 // Reference data from Bigisub, cached per app session only — prices and
@@ -8378,36 +8373,19 @@ async function callBigisub(action, params){
   return result;
 }
 
-function billMarkupMultiplier(){ return 1 + (Number(billMarkupPercent||0)/100); }
-function billCustomerPrice(costPrice){ return Math.round(costPrice * billMarkupMultiplier() * 100)/100; }
-
-// Mirrors computeSalePrice() server-side, for showing an accurate preview
-// before the purchase confirms — the SERVER always recomputes this for
-// real at purchase time and is the only authoritative source, this is
-// display-only. FLAT_FEE_SERVICES mirrors the same three services as the
-// server's flatFeeColumn map.
-const FLAT_FEE_SERVICES = ['airtime','electricity','betting'];
-function billFindOverride(service, planKey){
-  if(!billPriceOverrides) return null;
-  return billPriceOverrides.find(o=>o.service===service && String(o.plan_key)===String(planKey)) || null;
-}
-function billPreviewPrice(pricingService, planKey, quantity, costPrice){
-  if(FLAT_FEE_SERVICES.includes(pricingService)){
-    return Math.round((costPrice + Number(billFlatFees[pricingService]||0)) * 100)/100;
-  }
-  const override = planKey!=null ? billFindOverride(pricingService, planKey) : null;
-  if(override) return Math.round(Number(override.sell_price) * (quantity||1) * 100)/100;
-  return billCustomerPrice(costPrice); // no override set for this plan yet — same markup% fallback as the server
-}
-async function bpLoadPriceOverrides(){
-  try{ billPriceOverrides = (await callBigisub('list_price_overrides', {})).overrides || []; }
-  catch(e){ billPriceOverrides = billPriceOverrides || []; }
-}
+// There is no business-side markup, flat fee, or price override anymore —
+// this app charges each business exactly what Bigisub costs (the platform
+// may add its own invisible cut server-side; that's never shown here).
+// billCustomerPrice/billPreviewPrice are kept as pass-throughs, rather
+// than deleted outright and every call site rewired, purely to keep this
+// change small and low-risk — the server (computeSalePrice) is the only
+// place that actually decides the real charge either way.
+function billCustomerPrice(costPrice){ return costPrice; }
+function billPreviewPrice(pricingService, planKey, quantity, costPrice){ return costPrice; }
 
 /* ---------------- HUB ---------------- */
 function screenBillPayments(){
   if(billScreen==='history') return screenBillHistory();
-  if(billScreen==='pricing') return screenBillPricing();
   if(billScreen==='topup') return screenBillTopup();
   if(billScreen==='airtime') return screenBillAirtime();
   if(billScreen==='data') return screenBillData();
@@ -8437,19 +8415,6 @@ function screenBillPayments(){
         <button class="btn btn-sm btn-outline" style="border-color:rgba(255,255,255,0.6);color:#fff;flex:1;" id="bp-history-btn">🕐 History</button>
       </div>
     </div>
-    ${isMaster() ? `
-    <div class="card">
-      <div class="t1" style="margin-bottom:6px;">Your markup</div>
-      <p class="subtle" style="margin:0 0 10px;">Added on top of Bigisub's cost for every bill payment you make. This is your profit margin.</p>
-      <div style="display:flex;gap:8px;align-items:center;">
-        <input id="bp-markup-input" type="number" min="0" step="0.5" style="max-width:100px;" value="${billMarkupDraft===null?(billMarkupPercent||0):billMarkupDraft}">
-        <span>%</span>
-        <button class="btn btn-outline btn-sm" id="bp-markup-save">Save</button>
-      </div>
-    </div>` : ''}
-    ${isMaster() ? `<div class="list-row" data-bp-goto="pricing" style="cursor:pointer;">
-      <div class="thumb">💰</div><div class="info"><div class="t1">Manage Prices</div><div class="subtle" style="font-size:11px;">Set exact prices per plan, and flat fees for airtime/electricity/betting</div></div><div>›</div>
-    </div>` : ''}
     <div class="row2" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
       ${tiles.map(t=>`
         <div class="card" data-bp-tile="${t.id}" style="cursor:pointer;text-align:center;padding:16px 10px;">
@@ -8475,14 +8440,12 @@ async function bpLoadWallet(){
   billLoading = true; refreshMain();
   try{
     const r = await callBigisub('my_wallet_summary', {});
-    billWalletBalance = r.wallet_balance; billMarkupPercent = r.markup_percent; billCurrency = r.currency || 'NGN';
+    billWalletBalance = r.wallet_balance; billCurrency = r.currency || 'NGN';
     billPinSet = !!r.bill_pin_set; billPinStatusLoaded = true;
-    if(r.flat_fees) billFlatFees = r.flat_fees;
     if(r.estimated_fee_percent) billEstimatedFeePercent = r.estimated_fee_percent;
     if(r.psa_account_number){ billPsaAccountNumber = r.psa_account_number; billPsaBankName = r.psa_bank_name; }
   }catch(e){ toast(e.message); }
   billLoading = false; refreshMain();
-  if(billPriceOverrides===null) bpLoadPriceOverrides().then(refreshMain);
   // Catches any bank-transfer top-up left stuck as "pending" — including
   // ones generated before the webhook was configured correctly, where
   // there's no longer any screen showing that specific transfer to
@@ -8539,23 +8502,10 @@ function bindBillPaymentsEvents(){
     });
     const goHist = document.querySelector('[data-bp-goto="history"]');
     if(goHist) goHist.addEventListener('click', ()=>{ billScreen='history'; billHistory=[]; refreshMain(); });
-    const goPricing = document.querySelector('[data-bp-goto="pricing"]');
-    if(goPricing) goPricing.addEventListener('click', ()=>{ billScreen='pricing'; refreshMain(); });
     const topupBtn = document.getElementById('bp-topup-btn');
     if(topupBtn) topupBtn.addEventListener('click', ()=>{ billScreen='topup'; refreshMain(); });
     const historyBtn = document.getElementById('bp-history-btn');
     if(historyBtn) historyBtn.addEventListener('click', ()=>{ billScreen='history'; billHistory=[]; refreshMain(); });
-    const markupSave = document.getElementById('bp-markup-save');
-    if(markupSave) markupSave.addEventListener('click', async ()=>{
-      const val = Number(document.getElementById('bp-markup-input').value||0);
-      if(val<0){ toast('Markup cannot be negative.'); return; }
-      try{
-        await callBigisub('set_markup', { markup_percent: val });
-        billMarkupPercent = val; billMarkupDraft = null;
-        logAudit('bill_markup_updated', `Set bill payments markup to ${val}%`);
-        toast('Markup updated ✅'); refreshMain();
-      }catch(e){ toast(e.message); }
-    });
     return;
   }
   const back = document.getElementById('bp-back');
@@ -8569,7 +8519,6 @@ function bindBillPaymentsEvents(){
   if(billScreen==='resultchecker') bindBillResultCheckerEvents();
   if(billScreen==='isp') bindBillIspEvents();
   if(billScreen==='history') bindBillHistoryEvents();
-  if(billScreen==='pricing') bindBillPricingEvents();
 }
 
 /* ---------------- TOP UP ----------------
@@ -8797,7 +8746,6 @@ function bpStopPsaPolling(){
 function screenBillAirtime(){
   const cost = Number(billForm.amount||0);
   const price = cost>0 ? billPreviewPrice('airtime', null, 1, cost) : 0;
-  const fee = Number(billFlatFees.airtime||0);
   return `
     ${bpHeader('Airtime')}
     <div class="card">
@@ -8806,7 +8754,7 @@ function screenBillAirtime(){
       </div>
       <div class="field"><label>Phone Number</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
       <div class="field"><label>Amount (₦)</label><input id="bp-amount" type="number" min="50" value="${escAttr(billForm.amount)}" placeholder="e.g. 500"></div>
-      ${cost>0 ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> (${fmtMoney(cost)} + ${fmtMoney(fee)} fee) — deducted from your Bill Wallet.</p>` : ''}
+      ${cost>0 ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
       <button class="btn btn-primary" id="bp-airtime-confirm">Buy Airtime</button>
     </div>
   `;
@@ -8846,7 +8794,6 @@ function screenBillData(){
   const chosen = plans.find(p=>String(p.id)===String(billForm.planId));
   const cost = chosen ? Number(chosen.amount||chosen.price||0) : 0;
   const price = chosen ? billPreviewPrice('data', chosen.id, 1, cost) : 0;
-  const override = chosen ? billFindOverride('data', chosen.id) : null;
   return `
     ${bpHeader('Data Bundles')}
     <div class="card">
@@ -8863,7 +8810,7 @@ function screenBillData(){
       <label style="display:flex;align-items:center;gap:8px;margin:8px 0;font-size:13px;">
         <input type="checkbox" id="bp-ported" ${billForm.ported?'checked':''}> This number was ported from another network
       </label>
-      ${chosen ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b>${override?' (your set price)':` (₦${cost} + ${billMarkupPercent||0}% markup)`}.</p>` : ''}
+      ${chosen ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
       <button class="btn btn-primary" id="bp-data-confirm">Buy Data</button>
     </div>
   `;
@@ -8907,7 +8854,6 @@ function screenBillCable(){
   const chosen = plans.find(p=>String(p.id)===String(billForm.planId));
   const cost = chosen ? Number(chosen.amount||chosen.price||0) : 0;
   const price = chosen ? billPreviewPrice('cable', chosen.id, 1, cost) : 0;
-  const override = chosen ? billFindOverride('cable', chosen.id) : null;
   const verified = !!billForm.cableCustomerName;
   return `
     ${bpHeader('Cable TV')}
@@ -8928,7 +8874,7 @@ function screenBillCable(){
         </select>
       </div>
       <div class="field"><label>Phone Number (for receipt)</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
-      ${chosen ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b>${override?' (your set price)':` (₦${cost} + ${billMarkupPercent||0}% markup)`}.</p>` : ''}
+      ${chosen ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
       <button class="btn btn-primary" id="bp-cable-confirm">Pay Subscription</button>
       `}
     </div>
@@ -8983,7 +8929,6 @@ function screenBillElectricity(){
   const providers = billCache.electricityProviders || [];
   const amount = Number(billForm.amount||0);
   const price = amount>0 ? billPreviewPrice('electricity', null, 1, amount) : 0;
-  const fee = Number(billFlatFees.electricity||0);
   const verified = !!billForm.elecCustomerName;
   return `
     ${bpHeader('Electricity')}
@@ -9005,7 +8950,7 @@ function screenBillElectricity(){
       <p class="subtle" style="color:var(--marigold-dark);">✓ Verified: <b>${escapeHtml(billForm.elecCustomerName)}</b> <a href="#" id="bp-elec-reverify" style="margin-left:8px;">change</a></p>
       <div class="field"><label>Phone Number (for receipt)</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
       <div class="field"><label>Amount (₦)</label><input id="bp-amount" type="number" min="500" value="${escAttr(billForm.amount)}" placeholder="e.g. 5000"></div>
-      ${amount>0 ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> (${fmtMoney(amount)} + ${fmtMoney(fee)} fee).</p>` : ''}
+      ${amount>0 ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
       <button class="btn btn-primary" id="bp-elec-confirm">Buy Token</button>
       `}
     </div>
@@ -9063,7 +9008,6 @@ function screenBillBetting(){
   const billers = billCache.bettingBillers || [];
   const amount = Number(billForm.amount||0);
   const price = amount>0 ? billPreviewPrice('betting', null, 1, amount) : 0;
-  const fee = Number(billFlatFees.betting||0);
   return `
     ${bpHeader('Fund Betting Wallet')}
     <div class="card">
@@ -9075,7 +9019,7 @@ function screenBillBetting(){
       </div>
       <div class="field"><label>Customer/Betting ID</label><input id="bp-customer-id" value="${escAttr(billForm.customerId)}" placeholder="e.g. 123456"></div>
       <div class="field"><label>Amount (₦)</label><input id="bp-amount" type="number" min="100" value="${escAttr(billForm.amount)}" placeholder="e.g. 1000"></div>
-      ${amount>0 ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> (${fmtMoney(amount)} + ${fmtMoney(fee)} fee).</p>` : ''}
+      ${amount>0 ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
       <p class="subtle" style="font-size:11px;">We'll confirm the account name right before funding — this platform expires that confirmation quickly, so there's no separate "verify" step here.</p>
       <button class="btn btn-primary" id="bp-betting-confirm">${billForm.bettingValidating?'Validating…':'Fund Wallet'}</button>
     </div>
@@ -9127,7 +9071,6 @@ function screenBillResultChecker(){
   const unit = chosen ? Number(chosen.amount||chosen.price||0) : 0;
   const examKey = chosen ? (chosen.exam||chosen.exam_type||chosen.name) : null;
   const price = chosen ? billPreviewPrice('result_checker', examKey, qty, unit*qty) : 0;
-  const override = chosen ? billFindOverride('result_checker', examKey) : null;
   return `
     ${bpHeader('Result Checker PINs')}
     <div class="card">
@@ -9138,7 +9081,7 @@ function screenBillResultChecker(){
         </select>
       </div>
       <div class="field"><label>Quantity</label><input id="bp-qty" type="number" min="1" value="${qty}"></div>
-      ${chosen ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b>${override?` (your set price × ${qty})`:` (₦${unit} × ${qty} + ${billMarkupPercent||0}% markup)`}.</p>` : ''}
+      ${chosen ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> (₦${unit} × ${qty}) — deducted from your Bill Wallet.</p>` : ''}
       <button class="btn btn-primary" id="bp-rc-confirm">Buy PIN(s)</button>
     </div>
   `;
@@ -9186,7 +9129,6 @@ function screenBillIsp(){
   const unit = chosen ? Number(chosen.amount||chosen.price||0) : 0;
   const pricingService = isSmile ? 'isp_smile' : 'isp_spectranet';
   const price = chosen ? billPreviewPrice(pricingService, chosen.id, ispQty, unit*ispQty) : 0;
-  const override = chosen ? billFindOverride(pricingService, chosen.id) : null;
   const verified = !isSmile || !!billForm.ispCustomerName; // Spectranet has no verify step
   return `
     ${bpHeader('Internet (ISP)')}
@@ -9213,7 +9155,7 @@ function screenBillIsp(){
       </div>
       <div class="field"><label>Phone Number</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
       ${isSmile ? `<div class="field"><label>Email</label><input id="bp-email" type="email" value="${escAttr(billForm.email)}" placeholder="customer@email.com"></div>` : `<div class="field"><label>Quantity</label><input id="bp-qty" type="number" min="1" value="${billForm.qty||1}"></div>`}
-      ${chosen ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b>${override?' (your set price)':` (₦${unit}${ispQty>1?` × ${ispQty}`:''} + ${billMarkupPercent||0}% markup)`}.</p>` : ''}
+      ${chosen ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b>${ispQty>1?` (₦${unit} × ${ispQty})`:''} — deducted from your Bill Wallet.</p>` : ''}
       <button class="btn btn-primary" id="bp-isp-confirm">Buy Plan</button>
       ` : ''}
     </div>
@@ -9275,122 +9217,6 @@ async function bpLoadHistory(){
   billHistoryLoading = false; refreshMain();
 }
 /* ---------------- MANAGE PRICES (owner only) ---------------- */
-function billRenderPricingSection(title, service, plans, loading){
-  if(loading) return `<div class="card"><div class="t1" style="margin-bottom:8px;">${title}</div><p class="subtle">Loading…</p></div>`;
-  if(!plans || plans.length===0) return `<div class="card"><div class="t1" style="margin-bottom:8px;">${title}</div><p class="subtle">No plans found.</p></div>`;
-  return `<div class="card">
-    <div class="t1" style="margin-bottom:8px;">${title}</div>
-    ${plans.map(p=>{
-      const key = String(p.id!=null ? p.id : (p.exam||p.exam_type||p.name));
-      const cost = Number(p.amount||p.price||0);
-      const override = billFindOverride(service, key);
-      const draftKey = service+':'+key;
-      const draftVal = billPriceDrafts[draftKey]!==undefined ? billPriceDrafts[draftKey] : (override ? override.sell_price : '');
-      const label = p.name||p.plan_name||p.exam||p.exam_type||('Plan '+key);
-      return `<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap;">
-        <div style="flex:1;min-width:140px;">
-          <div style="font-size:13px;">${escapeHtml(label)}</div>
-          <div class="subtle" style="font-size:11px;">Cost: ${fmtMoney(cost)}${override?'':` · currently ${billMarkupPercent||0}% markup = ${fmtMoney(billCustomerPrice(cost))}`}</div>
-        </div>
-        <input type="number" min="0" step="1" placeholder="Set price" style="max-width:100px;" data-price-input-service="${service}" data-price-input-key="${escAttr(key)}" value="${escAttr(String(draftVal))}">
-        <button class="btn btn-outline btn-sm" data-price-save-service="${service}" data-price-save-key="${escAttr(key)}" data-price-save-label="${escAttr(label)}">Save</button>
-        ${override?`<button class="btn btn-outline btn-sm" data-price-clear-service="${service}" data-price-clear-key="${escAttr(key)}" style="color:var(--red);border-color:var(--red);">Clear</button>`:''}
-      </div>`;
-    }).join('')}
-  </div>`;
-}
-
-function screenBillPricing(){
-  return `
-    ${bpHeader('Manage Prices')}
-    <div class="card">
-      <div class="t1" style="margin-bottom:6px;">Flat Fees</div>
-      <p class="subtle" style="margin:0 0 10px;">Added on top of Bigisub's cost for Airtime, Electricity, and Betting — a fixed naira amount rather than a percentage, since these have free-typed amounts.</p>
-      ${['airtime','electricity','betting'].map(svc=>{
-        const draftVal = billFlatFeeDrafts[svc]!==undefined ? billFlatFeeDrafts[svc] : billFlatFees[svc];
-        return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-          <div style="flex:1;text-transform:capitalize;">${svc}</div>
-          <input type="number" min="0" step="1" style="max-width:100px;" data-flatfee-input="${svc}" value="${escAttr(String(draftVal))}">
-          <button class="btn btn-outline btn-sm" data-flatfee-save="${svc}">Save</button>
-        </div>`;
-      }).join('')}
-    </div>
-    ${billRenderPricingSection('Data Bundles', 'data', billCache.dataPlans, !billCache.dataPlans)}
-    ${billRenderPricingSection('Cable TV', 'cable', billCache.cablePlans, !billCache.cablePlans)}
-    ${billRenderPricingSection('Result Checker', 'result_checker', billCache.resultCheckerPrices, !billCache.resultCheckerPrices)}
-    ${billRenderPricingSection('Internet — Smile', 'isp_smile', billCache.ispSmilePlans, !billCache.ispSmilePlans)}
-    ${billRenderPricingSection('Internet — Spectranet', 'isp_spectranet', billCache.ispSpectranetPlans, !billCache.ispSpectranetPlans)}
-  `;
-}
-
-function bindBillPricingEvents(){
-  if(billPriceOverrides===null) bpLoadPriceOverrides().then(refreshMain);
-  // These 5 loads used to fire all at once — a burst of simultaneous
-  // Bigisub calls every time this screen opened, which is a plausible way
-  // to trip their rate limit (and re-trip it again on every reload while
-  // already throttled). Staggered instead, one at a time with a short
-  // pause between each — slower to fully populate, but far gentler on
-  // whatever request budget Bigisub allows.
-  (async () => {
-    if(!billCache.dataPlans) await bpLoadDataPlans();
-    await new Promise(r=>setTimeout(r, 400));
-    if(!billCache.cablePlans) await bpLoadCablePlans();
-    await new Promise(r=>setTimeout(r, 400));
-    if(!billCache.resultCheckerPrices) await bpLoadResultCheckerPrices();
-    await new Promise(r=>setTimeout(r, 400));
-    if(!billCache.ispSmilePlans) await bpLoadIspPlans('smile');
-    await new Promise(r=>setTimeout(r, 400));
-    if(!billCache.ispSpectranetPlans) await bpLoadIspPlans('spectranet');
-  })();
-
-  document.querySelectorAll('[data-flatfee-input]').forEach(inp=>{
-    inp.addEventListener('input', e=>{ billFlatFeeDrafts[inp.dataset.flatfeeInput] = e.target.value; });
-  });
-  document.querySelectorAll('[data-flatfee-save]').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      const svc = btn.dataset.flatfeeSave;
-      const fee = Number(billFlatFeeDrafts[svc]!==undefined ? billFlatFeeDrafts[svc] : billFlatFees[svc]);
-      if(Number.isNaN(fee) || fee<0){ toast('Enter a valid fee.'); return; }
-      try{
-        await callBigisub('set_flat_fee', { service: svc, fee });
-        billFlatFees[svc] = fee; delete billFlatFeeDrafts[svc];
-        logAudit('bill_flat_fee_updated', `Set ${svc} flat fee to ${fmtMoney(fee)}`);
-        toast('Fee saved ✅'); refreshMain();
-      }catch(e){ toast(e.message); }
-    });
-  });
-
-  document.querySelectorAll('[data-price-input-service]').forEach(inp=>{
-    inp.addEventListener('input', e=>{ billPriceDrafts[inp.dataset.priceInputService+':'+inp.dataset.priceInputKey] = e.target.value; });
-  });
-  document.querySelectorAll('[data-price-save-service]').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      const service = btn.dataset.priceSaveService, planKey = btn.dataset.priceSaveKey, label = btn.dataset.priceSaveLabel;
-      const draftKey = service+':'+planKey;
-      const sellPrice = Number(billPriceDrafts[draftKey]);
-      if(Number.isNaN(sellPrice) || sellPrice<=0){ toast('Enter a valid price.'); return; }
-      try{
-        await callBigisub('set_price_override', { service, plan_key: planKey, plan_label: label, sell_price: sellPrice });
-        await bpLoadPriceOverrides();
-        delete billPriceDrafts[draftKey];
-        logAudit('bill_price_override_set', `Set ${service} "${label}" price to ${fmtMoney(sellPrice)}`);
-        toast('Price saved ✅'); refreshMain();
-      }catch(e){ toast(e.message); }
-    });
-  });
-  document.querySelectorAll('[data-price-clear-service]').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      const service = btn.dataset.priceClearService, planKey = btn.dataset.priceClearKey;
-      try{
-        await callBigisub('delete_price_override', { service, plan_key: planKey });
-        await bpLoadPriceOverrides();
-        logAudit('bill_price_override_removed', `Removed set price for ${service} plan ${planKey}`);
-        toast('Price cleared'); refreshMain();
-      }catch(e){ toast(e.message); }
-    });
-  });
-}
-
 function screenBillHistory(){
   return `
     ${bpHeader('Transaction History')}
@@ -9715,7 +9541,7 @@ const FAQ_GROUPS = [
     { q:"What's the \"Today's Snapshot\" section on my Home screen?", a:"A horizontally-scrollable row of today's key numbers — Wallet Balance, Sales Today, Today's Profit (or Cash In for staff), Expenses Today, and Credit Given Today — calculated entirely from your own device. Expenses and Credit Given are only shown to the Owner." },
     { q:"What's the Wallet Balance card for?", a:"It's your Bill Payments wallet balance, shown right on Home so you always know if you can make a bill payments sale. If it's empty or not yet funded, it shows ₦0 with a Fund Wallet button so the feature stays easy to find." },
     { q:"How do I hide one of the numbers on my Home screen from view?", a:"Tap the eye icon on that card — each card (Wallet Balance, Sales, Profit, Expenses, Credit) has its own independent toggle, so you can mask just the ones you don't want visible, for example if someone's looking over your shoulder. It stays masked as you move around the app, and resets to visible again the next time you log in." },
-    { q:"What are the Airtime, Data, Electricity and More tiles on Home?", a:"Shortcuts straight into Bill Payments. Airtime, Data, and Electricity jump directly to that purchase screen; More opens the full Bill Payments hub for everything else — Cable TV, Betting, Result Checker PINs, Internet (ISP), Transaction History, and Manage Prices." },
+    { q:"What are the Airtime, Data, Electricity and More tiles on Home?", a:"Shortcuts straight into Bill Payments. Airtime, Data, and Electricity jump directly to that purchase screen; More opens the full Bill Payments hub for everything else — Cable TV, Betting, Result Checker PINs, Internet (ISP), and Transaction History." },
     { q:"Where did the New Sale and Close Day buttons on Home go?", a:"New Sale still has its own tab in the bottom navigation — always one tap away. Close Day moved into More → Close Day (or Close My Shift for staff), keeping the Home screen focused on today's numbers and bill payments." },
     { q:"What's \"Recent Activity\" on my Home screen?", a:"A live feed of what your staff have been doing — sales, restocks, edits — across every device, not just the one you're holding. Only the Owner sees this." },
     { q:"What does the small dot next to the bell icon mean?", a:"It shows your sync status at a glance: green means everything's up to date, amber means changes are waiting to reach the cloud (normal if you've just gone offline), and red means something's stuck and worth checking your connection for." },

@@ -226,28 +226,22 @@ Deno.serve(async (req: Request) => {
     if (!businessId) return json({ error: `Your account (app_users.id = ${caller.id}) has no business_id set — it isn't linked to a business on the server yet. This can happen if this account was created/updated locally and hasn't finished syncing. Try again once the device shows fully synced (check the sync status dot), or check that row's business_id directly in Supabase.` }, 404);
     const { data: biz, error: bizErr } = await admin
       .from("businesses")
-      .select("id, name, currency, country, bill_wallet_balance, bill_markup_percent, bill_payments_pin_hash, bill_flat_fee_airtime, bill_flat_fee_electricity, bill_flat_fee_betting, psa_account_reference, psa_account_number, psa_bank_name, psa_status, psa_last_synced_at")
+      .select("id, name, currency, country, bill_wallet_balance, bill_payments_pin_hash, psa_account_reference, psa_account_number, psa_bank_name, psa_status, psa_last_synced_at")
       .eq("id", businessId)
       .maybeSingle();
     if (bizErr) return json({ error: bizErr.message }, 500);
     if (!biz) return json({ error: `No business found with id = ${businessId} (from your app_users.business_id). That id doesn't match any row in businesses — check for a mismatch (e.g. a locally-generated id that never got the server-assigned one back) directly in Supabase.` }, 404);
 
     const { action, ...params } = await req.json();
-    const markupPercent = Number(biz.bill_markup_percent || 0);
     const currency = biz.currency || "NGN";
 
     // ---------- read-only reference/lookups ----------
     if (action === "my_wallet_summary") {
       return json({
-        wallet_balance: Number(biz.bill_wallet_balance || 0), markup_percent: markupPercent, currency,
+        wallet_balance: Number(biz.bill_wallet_balance || 0), currency,
         psa_account_number: biz.psa_account_number || null, psa_bank_name: biz.psa_bank_name || null, psa_status: biz.psa_status || null,
         bill_pin_set: !!biz.bill_payments_pin_hash,
         estimated_fee_percent: FLW_ESTIMATED_FEE_PERCENT,
-        flat_fees: {
-          airtime: Number(biz.bill_flat_fee_airtime || 0),
-          electricity: Number(biz.bill_flat_fee_electricity || 0),
-          betting: Number(biz.bill_flat_fee_betting || 0),
-        },
       }, 200);
     }
     // Shared by every simple list-fetch action below — if Bigisub itself
@@ -332,15 +326,14 @@ Deno.serve(async (req: Request) => {
       return json({ status: newStatus, raw: data }, 200);
     }
 
-    // ---------- master-only settings ----------
-    if (action === "set_markup") {
-      if (!isMaster) return json({ error: "Only the business owner can change the markup." }, 403);
-      const pct = Number(params.markup_percent);
-      if (Number.isNaN(pct) || pct < 0) return json({ error: "Invalid markup percent." }, 400);
-      const { error } = await admin.from("businesses").update({ bill_markup_percent: pct }).eq("id", businessId);
-      if (error) return json({ error: error.message }, 500);
-      return json({ ok: true, markup_percent: pct }, 200);
-    }
+    // This app doesn't support per-business reseller pricing (markup, flat
+    // fees, or per-plan price overrides) — every business is charged
+    // exactly what Bigisub costs, plus the platform's own invisible cut
+    // (see the per-service PlatformPricing type / computeSalePrice below). The
+    // set_markup / set_flat_fee / list_price_overrides / set_price_override
+    // / delete_price_override actions that used to live here have been
+    // removed along with the "Your markup" and "Manage Prices" screens on
+    // the client — this app is built for end users, not resellers.
 
     // One shared PIN, set by the owner, required before every purchase
     // once set. Never stored as plaintext — only its SHA-256 hash, which
@@ -376,55 +369,6 @@ Deno.serve(async (req: Request) => {
     if (action === "clear_bill_pin") {
       if (!isMaster) return json({ error: "Only the business owner can remove the Bill Payments PIN." }, 403);
       const { error } = await admin.from("businesses").update({ bill_payments_pin_hash: null }).eq("id", businessId);
-      if (error) return json({ error: error.message }, 500);
-      return json({ ok: true }, 200);
-    }
-
-    // Flat fee for the three free-typed-amount services. A percentage
-    // doesn't make sense here — 5% of a ₦100,000 electricity token and 5%
-    // of a ₦100 airtime top-up earn wildly different amounts for the same
-    // effort, so these three earn a fixed naira amount instead, regardless
-    // of the transaction size.
-    if (action === "set_flat_fee") {
-      if (!isMaster) return json({ error: "Only the business owner can change fees." }, 403);
-      const service = String(params.service || "");
-      const column = service === "airtime" ? "bill_flat_fee_airtime" : service === "electricity" ? "bill_flat_fee_electricity" : service === "betting" ? "bill_flat_fee_betting" : null;
-      if (!column) return json({ error: "Unknown service for a flat fee." }, 400);
-      const fee = Number(params.fee);
-      if (Number.isNaN(fee) || fee < 0) return json({ error: "Invalid fee." }, 400);
-      const { error } = await admin.from("businesses").update({ [column]: fee }).eq("id", businessId);
-      if (error) return json({ error: error.message }, 500);
-      return json({ ok: true, fee }, 200);
-    }
-
-    // Exact sell price per plan, for the catalog-based services. Any plan
-    // without an override set here falls back to bill_markup_percent —
-    // see handlePurchase for exactly where that fallback happens.
-    if (action === "list_price_overrides") {
-      const { data: overrides, error } = await admin.from("bill_price_overrides").select("*").eq("business_id", businessId);
-      if (error) return json({ error: error.message }, 500);
-      return json({ overrides: overrides || [] }, 200);
-    }
-    if (action === "set_price_override") {
-      if (!isMaster) return json({ error: "Only the business owner can set prices." }, 403);
-      const service = String(params.service || "");
-      const planKey = String(params.plan_key || "");
-      const sellPrice = Number(params.sell_price);
-      if (!service || !planKey) return json({ error: "Missing service or plan_key." }, 400);
-      if (Number.isNaN(sellPrice) || sellPrice <= 0) return json({ error: "Enter a valid sell price." }, 400);
-      const { error } = await admin.from("bill_price_overrides").upsert({
-        id: crypto.randomUUID(), business_id: businessId, service, plan_key: planKey,
-        plan_label: params.plan_label ? String(params.plan_label) : null, sell_price: sellPrice,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: "business_id,service,plan_key" });
-      if (error) return json({ error: error.message }, 500);
-      return json({ ok: true }, 200);
-    }
-    if (action === "delete_price_override") {
-      if (!isMaster) return json({ error: "Only the business owner can remove a set price." }, 403);
-      const service = String(params.service || "");
-      const planKey = String(params.plan_key || "");
-      const { error } = await admin.from("bill_price_overrides").delete().eq("business_id", businessId).eq("service", service).eq("plan_key", planKey);
       if (error) return json({ error: error.message }, 500);
       return json({ ok: true }, 200);
     }
@@ -734,9 +678,20 @@ Deno.serve(async (req: Request) => {
           return json({ error: "Incorrect Bill Payments PIN." }, 403);
         }
       }
-      const { data: platformSettings } = await admin.from("platform_settings").select("platform_markup_percent").eq("id", 1).maybeSingle();
-      const platformMarkupPercent = Number(platformSettings?.platform_markup_percent || 0);
-      return await handlePurchase(admin, action, params, businessId, biz, markupPercent, platformMarkupPercent, caller.id);
+      const { data: platformSettings } = await admin.from("platform_settings")
+        .select("default_markup_percent, data_markup_percent, airtime_markup_percent, cable_markup_percent, result_checker_markup_percent, isp_markup_percent, betting_flat_fee, electricity_flat_fee")
+        .eq("id", 1).maybeSingle();
+      const pricing: PlatformPricing = {
+        default_markup_percent: Number(platformSettings?.default_markup_percent || 0),
+        data_markup_percent: Number(platformSettings?.data_markup_percent || 0),
+        airtime_markup_percent: Number(platformSettings?.airtime_markup_percent || 0),
+        cable_markup_percent: Number(platformSettings?.cable_markup_percent || 0),
+        result_checker_markup_percent: Number(platformSettings?.result_checker_markup_percent || 0),
+        isp_markup_percent: Number(platformSettings?.isp_markup_percent || 0),
+        betting_flat_fee: Number(platformSettings?.betting_flat_fee || 0),
+        electricity_flat_fee: Number(platformSettings?.electricity_flat_fee || 0),
+      };
+      return await handlePurchase(admin, action, params, businessId, biz, pricing, caller.id);
     }
 
     return json({ error: "Unknown action." }, 400);
@@ -765,56 +720,50 @@ async function lookupPlanAmount(path: string, preferredKey: string, matchValue: 
   }
 }
 
-// Decides the actual sale price using whichever pricing engine applies to
-// this service — flat fee for the three free-typed-amount services, an
-// exact per-plan override (falling back to the percentage markup) for the
-// catalog-based ones. Called twice per purchase: once for the pre-check
-// (against the estimated cost) and once for the real charge (against
-// Bigisub's actual reported cost) — see handlePurchase.
-//
-// platformMarkupPercent is YOUR (the platform's) own guaranteed cut,
-// applied to Bigisub's raw cost BEFORE any of the business's own
-// markup/flat-fee/override math runs — this is what actually earns the
-// platform money on every single sale, independent of whatever markup
-// (including 0%) a business has set for itself. It's set once, platform-
-// wide, from the super-admin dashboard (see platform_settings / the
-// get_platform_pricing and set_platform_markup actions in
-// super-admin/index.ts) — not per-business, and not visible to businesses
-// at all; they only ever see their own cost-plus-markup math, same as
-// before. A business's exact-price override is still honored as an exact
-// price (that's the point of setting one), but never below what would
-// leave the platform with less than its configured cut — see the floor
-// applied in that branch below.
-async function computeSalePrice(
-  admin: ReturnType<typeof createClient>,
-  businessId: string,
-  biz: { bill_flat_fee_airtime?: number; bill_flat_fee_electricity?: number; bill_flat_fee_betting?: number },
-  pricingService: string,
-  planKey: string | null,
-  quantity: number,
-  costPrice: number,
-  markupPercent: number,
-  platformMarkupPercent: number,
-): Promise<number> {
-  const platformCost = costPrice * (1 + (platformMarkupPercent || 0) / 100);
-  const flatFeeColumn: Record<string, number | undefined> = {
-    airtime: biz.bill_flat_fee_airtime, electricity: biz.bill_flat_fee_electricity, betting: biz.bill_flat_fee_betting,
+// Per-service pricing rules, loaded once per request from the
+// platform_settings table (see the header comment for the SQL). This is
+// the only margin the platform earns anywhere in this system — there is
+// no business-side markup, flat fee, or price override at all.
+type PlatformPricing = {
+  default_markup_percent: number;
+  data_markup_percent: number;
+  airtime_markup_percent: number;
+  cable_markup_percent: number;
+  result_checker_markup_percent: number;
+  isp_markup_percent: number;
+  betting_flat_fee: number;
+  electricity_flat_fee: number;
+};
+
+// Decides the actual sale price for a given service. A single blanket
+// percentage doesn't work for every service — funding a ₦50,000 betting
+// wallet at 2% would add ₦1,000, which isn't how a betting funding fee
+// should work — so each service uses whichever unit actually fits it:
+//   - percentage, for services with genuinely variable cost (data,
+//     airtime, cable, result checker, ISP) — falls back to
+//     default_markup_percent if that service's own field is 0/unset.
+//   - flat ₦ fee, for the two pass-through services where the exact
+//     amount matters (betting funding, electricity tokens).
+// Called twice per purchase: once for the pre-check (against the
+// estimated cost) and once for the real charge (against Bigisub's actual
+// reported cost) — see handlePurchase.
+function computeSalePrice(pricingService: string, costPrice: number, pricing: PlatformPricing): number {
+  if (pricingService === "betting") {
+    return Math.round((costPrice + (pricing.betting_flat_fee || 0)) * 100) / 100;
+  }
+  if (pricingService === "electricity") {
+    return Math.round((costPrice + (pricing.electricity_flat_fee || 0)) * 100) / 100;
+  }
+  const pctByService: Record<string, number | undefined> = {
+    data: pricing.data_markup_percent,
+    airtime: pricing.airtime_markup_percent,
+    cable: pricing.cable_markup_percent,
+    result_checker: pricing.result_checker_markup_percent,
+    isp_smile: pricing.isp_markup_percent,
+    isp_spectranet: pricing.isp_markup_percent,
   };
-  if (pricingService in flatFeeColumn) {
-    return Math.round((platformCost + Number(flatFeeColumn[pricingService] || 0)) * 100) / 100;
-  }
-  if (planKey) {
-    const { data: override } = await admin.from("bill_price_overrides")
-      .select("sell_price").eq("business_id", businessId).eq("service", pricingService).eq("plan_key", planKey).maybeSingle();
-    if (override) {
-      // A business sets this as an absolute price with no idea what the
-      // platform markup is — so it's floored at platformCost rather than
-      // trusted outright, otherwise a business could (even accidentally)
-      // set an override that costs the platform money on every sale.
-      return Math.max(Math.round(Number(override.sell_price) * quantity * 100) / 100, Math.round(platformCost * quantity * 100) / 100);
-    }
-  }
-  return Math.round(platformCost * (1 + markupPercent / 100) * 100) / 100; // no override set for this plan yet — fall back to the global markup
+  const pct = pctByService[pricingService] || pricing.default_markup_percent || 0;
+  return Math.round(costPrice * (1 + pct / 100) * 100) / 100;
 }
 
 async function handlePurchase(
@@ -822,9 +771,8 @@ async function handlePurchase(
   action: string,
   params: Record<string, unknown>,
   businessId: string,
-  biz: { bill_wallet_balance: number | null; bill_flat_fee_airtime?: number; bill_flat_fee_electricity?: number; bill_flat_fee_betting?: number },
-  markupPercent: number,
-  platformMarkupPercent: number,
+  biz: { bill_wallet_balance: number | null },
+  pricing: PlatformPricing,
   userId: string,
 ) {
   let serviceLabel = "";
@@ -901,7 +849,7 @@ async function handlePurchase(
   }
 
   const preCheckBalance = Number(biz.bill_wallet_balance || 0);
-  const estimatedSale = await computeSalePrice(admin, businessId, biz, pricingService, planKey, quantity, estimatedCost, markupPercent, platformMarkupPercent);
+  const estimatedSale = computeSalePrice(pricingService, estimatedCost, pricing);
   if (preCheckBalance < estimatedSale) return json({ error: "Insufficient Bill Wallet balance. Please top up." }, 400);
 
   // ---- Idempotency: reserve a row BEFORE calling Bigisub, keyed on the
@@ -958,7 +906,7 @@ async function handlePurchase(
   // if Bigisub's real charge isn't exactly what was estimated; for
   // override-priced plans it's identical to estimatedSale either way,
   // since a fixed sell price doesn't depend on the underlying cost at all.
-  const salePrice = await computeSalePrice(admin, businessId, biz, pricingService, planKey, quantity, costPrice, markupPercent, platformMarkupPercent);
+  const salePrice = computeSalePrice(pricingService, costPrice, pricing);
   const bigisubTranxId = extractTranxId(bigisubResponse);
   const status = extractStatus(bigisubResponse);
 

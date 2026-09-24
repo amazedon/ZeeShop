@@ -1393,31 +1393,52 @@ function canDo(perm){
   if(perm==='canAddGoods' || perm==='canVoidReturn' || perm==='canBillPayments') return !!u[perm];
   return u[perm] !== false;
 }
+// Local retry queue for audit log pushes specifically. logAudit uses its
+// own dedicated service-role edge function rather than the general sync
+// queue (so a compromised client token can't rewrite its own audit trail
+// by going through the generic relay) — but that meant a single network
+// hiccup used to drop the entry forever: fire-and-forget, empty catch
+// block, no retry, no visibility. This queue gives it the same resilience
+// everything else already has, without weakening that security boundary.
+let auditPushQueue = JSON.parse(localStorage.getItem('zeeshop_audit_push_queue')||'[]');
+function saveAuditPushQueue(){ localStorage.setItem('zeeshop_audit_push_queue', JSON.stringify(auditPushQueue)); }
+async function pushAuditEntry(entry){
+  const { data: sessionData } = await window.sb.auth.getSession();
+  const token = sessionData?.session?.access_token;
+  if(!token) throw new Error('No session yet');
+  const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/log-audit-event`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+token },
+    body: JSON.stringify({ id: entry.id, business_id: entry.businessId, user_id: entry.userId, action: entry.action, details: entry.details })
+  });
+  if(!res.ok) throw new Error('log-audit-event returned '+res.status);
+}
+async function flushAuditPushQueue(){
+  if(auditPushQueue.length===0) return;
+  const remaining = [];
+  for(const entry of auditPushQueue){
+    try{ await pushAuditEntry(entry); }
+    catch(e){ remaining.push(entry); }
+  }
+  const recovered = auditPushQueue.length - remaining.length;
+  auditPushQueue = remaining;
+  saveAuditPushQueue();
+  if(recovered > 0 && typeof updateSyncDot === 'function') updateSyncDot();
+}
+
 function logAudit(action,details){
   const entry = {id:uid('log'),businessId:business()?.id,userId:state.sessionUserId,
     action, details, timestamp:new Date().toISOString()};
   state.auditLog.unshift(entry);
-  // Fire-and-forget, same calling convention as before (logAudit is called
+  // Fire-and-forget from the caller's point of view (logAudit is called
   // from hundreds of places without await, and that's staying unchanged),
-  // but sent via a dedicated server-side function using the service role
-  // key instead of the client-authenticated enqueueSync path — the same
-  // hardening already proven necessary for PIN resets, permissions, and
-  // name-change requests, applied here too so an audit trail an Owner is
-  // meant to trust completely doesn't depend on an RLS policy that's
-  // already turned out to be wrong more than once.
+  // but no longer truly fire-and-forget underneath: a failure now queues
+  // the entry for retry (see flushAuditPushQueue) instead of just vanishing.
   if(entry.businessId){
-    (async ()=>{
-      try{
-        const { data: sessionData } = await window.sb.auth.getSession();
-        const token = sessionData?.session?.access_token;
-        if(!token) return;
-        await fetch(`${SITE_CONTENT_URL}/functions/v1/log-audit-event`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer '+token },
-          body: JSON.stringify({ id: entry.id, business_id: entry.businessId, user_id: entry.userId, action: entry.action, details: entry.details })
-        });
-      }catch(e){ /* best-effort — never block the action that triggered this log */ }
-    })();
+    pushAuditEntry(entry).catch(()=>{
+      auditPushQueue.push(entry);
+      saveAuditPushQueue();
+    });
   }
   save();
 }
@@ -3926,6 +3947,7 @@ function bindRouteEvents(){
   if(route==='credit') bindCreditEvents();
   if(route==='closeday') bindCloseDayEvents();
   if(route==='staff') bindStaffEvents();
+  if(route==='audit') bindAuditEvents();
   if(route==='notes') bindNotesEvents();
   if(route==='calculator') bindCalculatorEvents();
   if(route==='history') bindHistoryEvents();
@@ -7181,18 +7203,43 @@ function exportCSV(){
   toast('Export downloaded ✅');
 }
 
+let expandedAuditId = null; // which Audit Log row (if any) is expanded to show full details
 function screenAudit(){
   const logs = state.auditLog.filter(l=>l.businessId===business().id).slice(0,80);
   return `
     ${subHeader("Audit Log")}
     ${logs.map(l=>{
       const u = state.users.find(x=>x.id===l.userId);
-      return `<div class="list-row">
-        <div class="thumb">${l.action==='locked_price_attempt'?ICON_LOCK:ICON_EDIT_NOTE}</div>
-        <div class="info"><div class="t1">${l.details}</div><div class="t2">${u?u.firstName+' '+u.lastName:'System'} · ${new Date(l.timestamp).toLocaleString()}</div></div>
+      const expanded = expandedAuditId === l.id;
+      return `<div class="card" data-audit-toggle="${l.id}" style="cursor:pointer;padding:13px 15px;margin-bottom:8px;">
+        <div style="display:flex;align-items:flex-start;gap:10px;">
+          <div class="thumb" style="flex-shrink:0;">${l.action==='locked_price_attempt'?ICON_LOCK:ICON_EDIT_NOTE}</div>
+          <div style="flex:1;min-width:0;">
+            <div class="t1" style="${expanded?'white-space:normal;overflow:visible;':''}">${escapeHtml(l.details||l.action)}</div>
+            <div class="t2">${u?u.firstName+' '+u.lastName:'System'} · ${timeAgo(l.timestamp)}</div>
+          </div>
+          <div style="flex-shrink:0;color:var(--text-dim);font-size:12px;transform:${expanded?'rotate(180deg)':'none'};transition:transform .15s;">▾</div>
+        </div>
+        ${expanded ? `
+          <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);">
+            <p style="font-size:13.5px;white-space:pre-wrap;line-height:1.45;margin:0 0 10px;">${escapeHtml(l.details||'No further details recorded.')}</p>
+            <div class="subtle">Action type: <code>${escapeHtml(l.action)}</code></div>
+            <div class="subtle">Exact time: ${new Date(l.timestamp).toLocaleString()}</div>
+            <div class="subtle">By: ${u?u.firstName+' '+u.lastName+(u.role?' ('+u.role+')':''):'System'}</div>
+          </div>
+        ` : ''}
       </div>`;
     }).join('') || '<p class="subtle">No activity yet.</p>'}
   `;
+}
+function bindAuditEvents(){
+  document.querySelectorAll('[data-audit-toggle]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const id = el.dataset.auditToggle;
+      expandedAuditId = (expandedAuditId === id) ? null : id;
+      render();
+    });
+  });
 }
 
 /* ============================================================
@@ -9692,6 +9739,7 @@ function screenWarehouse(){
       <button class="btn btn-dark" style="flex:1;" data-goto="goods">＋ Record Stock</button>
       <button class="btn btn-outline" style="flex:1;" id="transfer-stock-btn" ${shops.length===0?'disabled':''}>↗ Move to a Shop</button>
     </div>
+    <a href="#" data-goto="audit" style="display:block;text-align:center;font-size:12.5px;font-weight:700;color:var(--marigold-dark);margin:-6px 0 14px;">View Stock Activity (what came in, what moved out) →</a>
     ${shops.length===0?`<p class="subtle" style="margin:-6px 0 14px;">Add a real shop (not a warehouse) before you can move stock out.</p>`:''}
     ${withStock.length===0?`<div class="empty"><div class="ic">${ICON_INBOX_EMPTY}</div><b>Nothing in stock yet</b>Tap Record Stock to log what's arrived.</div>`:
     withStock.map(g=>`
@@ -10146,6 +10194,13 @@ window.addEventListener('pageshow', (event)=>{
   if(staleToast) staleToast.remove();
   render();
 });
+
+// Retry any audit log entries that failed to push last time — on
+// reconnect, periodically, and once now in case some are left over from
+// a previous session that ended before they could go out.
+window.addEventListener('online', flushAuditPushQueue);
+setInterval(flushAuditPushQueue, 30000);
+flushAuditPushQueue();
 
 </script>
 <script src="sync-engine.js"></script>

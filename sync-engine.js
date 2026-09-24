@@ -262,7 +262,7 @@ async function pullSync(){
     // own device until they fully logged out and back in.
     if(bizId){
       try{
-        const res = await fetch(`${SYNC_SUPABASE_URL}/rest/v1/businesses?id=eq.${bizId}&select=*`, { headers });
+        const res = await fetch(`${SYNC_SUPABASE_URL}/rest/v1/businesses?id=eq.${bizId}&select=*`, { headers, cache: 'no-store' });
         if(res.ok){
           const rows = await res.json();
           if(rows[0]){
@@ -324,10 +324,19 @@ async function pullSync(){
     // business's rows onto this device. Tables without a business_id column
     // (batches/variants/sale items) are joined onto already-scoped parents
     // below, so they don't need their own filter.
+    //
+    // cache: 'no-store' on every GET below is deliberate, not decoration —
+    // without it, the browser's own HTTP cache can legitimately serve a
+    // stale response for one of these identical URLs on a plain refresh,
+    // which looks EXACTLY like a lost edit (a fresh full sign-in — which
+    // clears the cache along with everything else — shows the real,
+    // correct, already-saved server data every time). That mismatch (works
+    // after a full logout/clear, not on a plain refresh) is the signature
+    // of a caching bug, not a sync bug — the save itself was already fine.
     async function fetchTable(table, scoped){
       try{
         const filter = (scoped && bizId) ? `&business_id=eq.${bizId}` : '';
-        const res = await fetch(`${SYNC_SUPABASE_URL}/rest/v1/${table}?select=*${filter}`, { headers });
+        const res = await fetch(`${SYNC_SUPABASE_URL}/rest/v1/${table}?select=*${filter}`, { headers, cache: 'no-store' });
         if(!res.ok) return [];
         return await res.json();
       }catch(e){ return []; }
@@ -388,7 +397,7 @@ async function pullSync(){
     async function fetchByShop(table){
       if(myShopIds.length===0) return [];
       try{
-        const res = await fetch(`${SYNC_SUPABASE_URL}/rest/v1/${table}?select=*&shop_id=in.(${myShopIds.join(',')})`, { headers });
+        const res = await fetch(`${SYNC_SUPABASE_URL}/rest/v1/${table}?select=*&shop_id=in.(${myShopIds.join(',')})`, { headers, cache: 'no-store' });
         if(!res.ok) return [];
         return await res.json();
       }catch(e){ return []; }

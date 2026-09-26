@@ -3512,8 +3512,10 @@ function dailyDigestBlock(){
   const cards = [
     showWallet ? {
       id:'billwallet', label:'Wallet Balance',
-      value: fmtMoney(walletVal),
-      footer: `<div class="metric-actions">
+      value: billWalletError ? '—' : fmtMoney(walletVal),
+      footer: billWalletError
+        ? `<div class="metric-actions"><button class="metric-action" data-wallet-retry>Couldn't load — Retry</button></div>`
+        : `<div class="metric-actions">
         ${walletEmpty ? `<button class="metric-action" data-wallet-fund>Fund Wallet</button>` : ''}
         <button class="metric-action" data-wallet-history>History</button>
       </div>`
@@ -3594,7 +3596,7 @@ function bindDashboardEvents(){
   // Lazy-load the Bill Wallet Balance metric card the first time Home is
   // shown, same call the Bill Payments hub uses — keeps the card accurate
   // without hitting the network on every dashboard re-render.
-  if(!isViewer() && canDo('canBillPayments') && billWalletBalance===null && !billLoading) bpLoadWallet();
+  if(!isViewer() && canDo('canBillPayments') && billWalletBalance===null && !billLoading && !billWalletError) bpLoadWallet();
 
   document.querySelectorAll('[data-eye-toggle]').forEach(b=>{
     b.addEventListener('click', (e)=>{ e.stopPropagation(); toggleCardHidden(b.dataset.eyeToggle); });
@@ -3608,6 +3610,11 @@ function bindDashboardEvents(){
   if(historyBtn) historyBtn.addEventListener('click', (e)=>{
     e.stopPropagation();
     route = 'billpayments'; billScreen = 'history'; billHistory = []; render();
+  });
+  const walletRetryBtn = document.querySelector('[data-wallet-retry]');
+  if(walletRetryBtn) walletRetryBtn.addEventListener('click', (e)=>{
+    e.stopPropagation();
+    bpLoadWallet();
   });
   document.querySelectorAll('[data-util-tile]').forEach(el=>{
     el.addEventListener('click', ()=>{
@@ -8330,6 +8337,7 @@ const BIGISUB_NETWORKS = [ {id:1,name:'MTN'}, {id:2,name:'GLO'}, {id:3,name:'9MO
 let billScreen = 'hub'; // hub | airtime | data | cable | electricity | betting | resultchecker | isp | history | topup
 let billLoading = false;
 let billWalletBalance = null;
+let billWalletError = null; // set on a failed wallet load — stops the auto-retry loop until dismissed/retried (see bpLoadWallet)
 let billPinSet = false;
 let billPinStatusLoaded = false; // Settings loads this independently of ever having opened Bill Payments
 let billPinDraft = ''; // in-progress PIN entry in the settings field, cleared after save
@@ -8470,12 +8478,17 @@ function screenBillPayments(){
     <div class="card" style="background:var(--marigold);color:#fff;">
       <div class="subtle" style="color:rgba(255,255,255,0.85);">Bill Wallet Balance</div>
       <div style="font-size:26px;font-weight:700;margin:4px 0 10px;">
-        ${billLoading ? 'Loading…' : (billWalletBalance===null ? '—' : fmtMoney(billWalletBalance))}
+        ${billLoading ? 'Loading…' : billWalletError ? '—' : (billWalletBalance===null ? '—' : fmtMoney(billWalletBalance))}
       </div>
+      ${billWalletError ? `
+      <p style="font-size:12.5px;color:rgba(255,255,255,0.9);margin:0 0 10px;">Couldn't load: ${escapeHtml(billWalletError)}</p>
+      <button class="btn btn-sm" style="background:#fff;color:var(--marigold-dark);width:100%;" id="bp-wallet-retry-btn">Retry</button>
+      ` : `
       <div style="display:flex;gap:8px;">
         <button class="btn btn-sm" style="background:#fff;color:var(--marigold-dark);flex:1;" id="bp-topup-btn">＋ Add Money</button>
         <button class="btn btn-sm btn-outline" style="border-color:rgba(255,255,255,0.6);color:#fff;flex:1;" id="bp-history-btn">🕐 History</button>
       </div>
+      `}
     </div>
     <div class="row2" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
       ${tiles.map(t=>`
@@ -8498,16 +8511,27 @@ function bpHeader(title){
   </div>`;
 }
 
+// Does NOT auto-retry on failure (see the two call sites that gate on
+// billWalletError below) — it used to: a failed load left
+// billWalletBalance at null with nothing else changed, and this function
+// is triggered from the Home dashboard, which re-renders on almost any
+// action anywhere in the app. Every one of those re-renders re-triggered
+// this exact same auto-load condition again, immediately — a flood of
+// simultaneous requests hammering the server (confirmed in Supabase's own
+// logs: dozens of POSTs to bigisub-proxy in the same second, all failing
+// with 502s from the server being overwhelmed) that looked to the person
+// using the app like "Failed to fetch" and "throttling" on everything.
 async function bpLoadWallet(){
-  billLoading = true; refreshMain();
+  billLoading = true; billWalletError = null; refreshMain();
   try{
     const r = await callBigisub('my_wallet_summary', {});
     billWalletBalance = r.wallet_balance; billCurrency = r.currency || 'NGN';
     billPinSet = !!r.bill_pin_set; billPinStatusLoaded = true;
     if(r.estimated_fee_percent) billEstimatedFeePercent = r.estimated_fee_percent;
     if(r.psa_account_number){ billPsaAccountNumber = r.psa_account_number; billPsaBankName = r.psa_bank_name; }
-  }catch(e){ toast(e.message); }
+  }catch(e){ billWalletError = e.message || 'Something went wrong.'; }
   billLoading = false; refreshMain();
+  if(billWalletError) return; // don't also fire the reconcile call below on a failed load
   // Catches any bank-transfer top-up left stuck as "pending" — including
   // ones generated before the webhook was configured correctly, where
   // there's no longer any screen showing that specific transfer to
@@ -8558,7 +8582,9 @@ async function billSendPinOtp(){
 
 function bindBillPaymentsEvents(){
   if(billScreen==='hub'){
-    if(billWalletBalance===null && !billLoading) bpLoadWallet();
+    if(billWalletBalance===null && !billLoading && !billWalletError) bpLoadWallet();
+    const walletRetryBtn2 = document.getElementById('bp-wallet-retry-btn');
+    if(walletRetryBtn2) walletRetryBtn2.addEventListener('click', ()=> bpLoadWallet());
     document.querySelectorAll('[data-bp-tile]').forEach(el=>{
       el.addEventListener('click', ()=>{ billScreen = el.dataset.bpTile; billResetForm(); refreshMain(); });
     });

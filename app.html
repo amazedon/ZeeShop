@@ -3618,6 +3618,8 @@ function bindDashboardEvents(){
   });
   document.querySelectorAll('[data-util-tile]').forEach(el=>{
     el.addEventListener('click', ()=>{
+      if(billTileNavLock) return;
+      billTileNavLock = true; setTimeout(()=>{ billTileNavLock = false; }, 400);
       const id = el.dataset.utilTile;
       route = 'billpayments';
       billScreen = (id==='more') ? 'hub' : id;
@@ -8338,6 +8340,30 @@ let billScreen = 'hub'; // hub | airtime | data | cable | electricity | betting 
 let billLoading = false;
 let billWalletBalance = null;
 let billWalletError = null; // set on a failed wallet load — stops the auto-retry loop until dismissed/retried (see bpLoadWallet)
+// True while ANY bill-payments purchase/top-up request is pending, across
+// all 8 confirm buttons below. This is deliberately state (checked when
+// rendering each button), not just an imperative btn.disabled=true set at
+// click time — because render() fully rebuilds the #app DOM on every call,
+// including from the background sync engine (see pullSync in
+// sync-engine.js, which calls the global render() on its own schedule,
+// completely independent of what the user is doing). A re-render mid-
+// request used to silently replace a "disabled, Processing…" button with
+// a fresh clickable one while the original request was still in flight —
+// letting a slow request look stuck and get submitted a second time,
+// which is how a handful of real purchase attempts could turn into a
+// burst of simultaneous requests. Driving the disabled state off this
+// flag on every render closes that gap: the button stays correctly
+// disabled no matter how many times the DOM gets rebuilt underneath it.
+let billPurchaseInFlight = false;
+let billPurchaseStage = ''; // human label for the current step, e.g. 'Validating…', 'Funding…' — '' just means "Processing…"
+let billTileNavLock = false; // brief guard against rapid double-taps on a VTU tile firing two navigations before the first has settled
+// Renders a purchase confirm button whose disabled/label state is driven
+// by billPurchaseInFlight/billPurchaseStage rather than baked in once at
+// click time — see the comment above billPurchaseInFlight for why that
+// distinction actually matters here.
+function billPurchaseBtnHtml(id, idleLabel){
+  return `<button class="btn btn-primary" id="${id}" ${billPurchaseInFlight?'disabled':''}>${billPurchaseInFlight?(billPurchaseStage||'Processing…'):idleLabel}</button>`;
+}
 let billPinSet = false;
 let billPinStatusLoaded = false; // Settings loads this independently of ever having opened Bill Payments
 let billPinDraft = ''; // in-progress PIN entry in the settings field, cleared after save
@@ -8586,7 +8612,11 @@ function bindBillPaymentsEvents(){
     const walletRetryBtn2 = document.getElementById('bp-wallet-retry-btn');
     if(walletRetryBtn2) walletRetryBtn2.addEventListener('click', ()=> bpLoadWallet());
     document.querySelectorAll('[data-bp-tile]').forEach(el=>{
-      el.addEventListener('click', ()=>{ billScreen = el.dataset.bpTile; billResetForm(); refreshMain(); });
+      el.addEventListener('click', ()=>{
+        if(billTileNavLock) return;
+        billTileNavLock = true; setTimeout(()=>{ billTileNavLock = false; }, 400);
+        billScreen = el.dataset.bpTile; billResetForm(); refreshMain();
+      });
     });
     const goHist = document.querySelector('[data-bp-goto="history"]');
     if(goHist) goHist.addEventListener('click', ()=>{ billScreen='history'; billHistory=[]; refreshMain(); });
@@ -8641,7 +8671,7 @@ function screenBillTopup(){
       </div>
       ${billTopupMode==='card' ? `
         <div class="field"><label>Amount (${billCurrency})</label><input id="bp-topup-amount" type="number" min="100" placeholder="e.g. 5000"></div>
-        <button class="btn btn-primary" id="bp-topup-confirm">Fund Wallet</button>
+        ${billPurchaseBtnHtml('bp-topup-confirm', 'Fund Wallet')}
       ` : billTopupMode==='bank' ? screenBillTopupBank() : screenBillTopupPsa()}
     </div>
   `;
@@ -8726,11 +8756,13 @@ function bindBillTopupEvents(){
 
   const btn = document.getElementById('bp-topup-confirm');
   if(btn) btn.addEventListener('click', ()=>{
+    if(billPurchaseInFlight) return;
     const amount = Number(document.getElementById('bp-topup-amount').value||0);
     if(amount < 100){ toast('Enter at least ₦100.'); return; }
     if(!navigator.onLine){ toast('You need an internet connection to top up.'); return; }
     const u = currentUser();
     const txRef = 'zeeshop_billwallet_' + uid('txn');
+    billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
     FlutterwaveCheckout({
       public_key: FLW_PUBLIC_KEY,
       tx_ref: txRef,
@@ -8742,18 +8774,19 @@ function bindBillTopupEvents(){
       customizations: { title: 'ZeeShop Bill Wallet', description: 'Top up bill payments wallet' },
       callback: async function(response){
         if(response && (response.status==='successful' || response.status==='completed')){
-          toast('Confirming payment…');
+          billPurchaseStage = 'Confirming payment…'; refreshMain();
           try{
             const r = await callBigisub('fund_wallet_verify', { transaction_id: response.transaction_id, expected_amount: amount, expected_currency: billCurrency });
             billWalletBalance = r.wallet_balance;
             billRecordTxAttribution(txRef);
             billRecordTxAttribution(response.transaction_id);
             logAudit('bill_wallet_topup', `Funded bill wallet with ${fmtMoney(amount)} (card)`);
-            toast('Wallet funded ✅'); billScreen='hub'; refreshMain();
+            toast('Wallet funded ✅'); billScreen='hub';
           }catch(e){ toast('Payment received, but confirming it failed: '+e.message+'. Contact support if the balance doesn\'t update shortly.'); }
         } else { toast('Payment was not completed.'); }
+        billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
       },
-      onclose: function(){}
+      onclose: function(){ billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain(); }
     });
   });
 
@@ -8843,7 +8876,7 @@ function screenBillAirtime(){
       <div class="field"><label>Phone Number</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
       <div class="field"><label>Amount (₦)</label><input id="bp-amount" type="number" min="50" value="${escAttr(billForm.amount)}" placeholder="e.g. 500"></div>
       ${cost>0 ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
-      <button class="btn btn-primary" id="bp-airtime-confirm">Buy Airtime</button>
+      ${billPurchaseBtnHtml('bp-airtime-confirm', 'Buy Airtime')}
     </div>
   `;
 }
@@ -8853,25 +8886,28 @@ function bindBillAirtimeEvents(){
   const amt = document.getElementById('bp-amount'); if(amt) amt.addEventListener('input', e=>{ billForm.amount=e.target.value; refreshMain(); });
   const btn = document.getElementById('bp-airtime-confirm');
   if(btn) btn.addEventListener('click', async ()=>{
+    if(billPurchaseInFlight) return;
     const amount = Number(billForm.amount||0);
     if(!billForm.phone.trim() || amount<50){ toast('Enter a valid phone number and amount (min ₦50).'); return; }
     const price = billCustomerPrice(amount);
     if(!confirm(`Buy ₦${amount} airtime for ${billForm.phone}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
-    btn.disabled = true; btn.textContent = 'Processing…';
+    billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
     try{
       const r = await callBigisub('airtime_purchase', { network: Number(billForm.network), phone_number: billForm.phone.trim(), amount, client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
       billRecordTxAttribution(billGetClientRef());
       logAudit('bill_airtime', `Sold ₦${amount} ${BIGISUB_NETWORKS.find(n=>n.id==billForm.network).name} airtime to ${billForm.phone}`);
-      toast('Airtime sent ✅'); billScreen='hub'; refreshMain();
-    }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='Buy Airtime'; }
+      toast('Airtime sent ✅'); billScreen='hub';
+    }catch(e){ toast(e.message); }
+    billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
   });
 }
 
 /* ---------------- DATA ---------------- */
 async function bpLoadDataPlans(){
   if(billCache.dataPlans){ refreshMain(); return; }
+  if(billLoading) return; // an identical load is already in flight — don't fire a duplicate request
   billLoading = true; refreshMain();
   try{ billCache.dataPlans = (await callBigisub('data_plans', {})).plans || []; }
   catch(e){ toast(e.message); billCache.dataPlans = []; }
@@ -8899,38 +8935,41 @@ function screenBillData(){
         <input type="checkbox" id="bp-ported" ${billForm.ported?'checked':''}> This number was ported from another network
       </label>
       ${chosen ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
-      <button class="btn btn-primary" id="bp-data-confirm">Buy Data</button>
+      ${billPurchaseBtnHtml('bp-data-confirm', 'Buy Data')}
     </div>
   `;
 }
 function bindBillDataEvents(){
-  if(!billCache.dataPlans) bpLoadDataPlans();
+  if(!billCache.dataPlans && !billLoading) bpLoadDataPlans();
   const net = document.getElementById('bp-network'); if(net) net.addEventListener('change', e=>{ billForm.network=e.target.value; billForm.planId=''; refreshMain(); });
   const phone = document.getElementById('bp-phone'); if(phone) phone.addEventListener('input', e=>{ billForm.phone=e.target.value; });
   const plan = document.getElementById('bp-plan'); if(plan) plan.addEventListener('change', e=>{ billForm.planId=e.target.value; refreshMain(); });
   const ported = document.getElementById('bp-ported'); if(ported) ported.addEventListener('change', e=>{ billForm.ported=e.target.checked; });
   const btn = document.getElementById('bp-data-confirm');
   if(btn) btn.addEventListener('click', async ()=>{
+    if(billPurchaseInFlight) return;
     const plans = (billCache.dataPlans||[]);
     const chosen = plans.find(p=>String(p.id)===String(billForm.planId));
     if(!billForm.phone.trim() || !chosen){ toast('Enter a phone number and select a plan.'); return; }
     const price = billCustomerPrice(Number(chosen.amount||chosen.price||0));
     if(!confirm(`Buy ${chosen.name||chosen.plan_name} for ${billForm.phone}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
-    btn.disabled = true; btn.textContent = 'Processing…';
+    billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
     try{
       const r = await callBigisub('data_purchase', { network: Number(billForm.network), phone_number: billForm.phone.trim(), plan: chosen.id, ported_number: !!billForm.ported, client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
       billRecordTxAttribution(billGetClientRef());
       logAudit('bill_data', `Sold ${chosen.name||chosen.plan_name} data to ${billForm.phone}`);
-      toast('Data sent ✅'); billScreen='hub'; refreshMain();
-    }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='Buy Data'; }
+      toast('Data sent ✅'); billScreen='hub';
+    }catch(e){ toast(e.message); }
+    billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
   });
 }
 
 /* ---------------- CABLE TV (verify → purchase) ---------------- */
 async function bpLoadCablePlans(){
   if(billCache.cablePlans){ refreshMain(); return; }
+  if(billLoading) return; // an identical load is already in flight — don't fire a duplicate request
   billLoading = true; refreshMain();
   try{ billCache.cablePlans = (await callBigisub('cable_plans', {})).plans || []; }
   catch(e){ toast(e.message); billCache.cablePlans = []; }
@@ -8963,13 +9002,13 @@ function screenBillCable(){
       </div>
       <div class="field"><label>Phone Number (for receipt)</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
       ${chosen ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
-      <button class="btn btn-primary" id="bp-cable-confirm">Pay Subscription</button>
+      ${billPurchaseBtnHtml('bp-cable-confirm', 'Pay Subscription')}
       `}
     </div>
   `;
 }
 function bindBillCableEvents(){
-  if(!billCache.cablePlans) bpLoadCablePlans();
+  if(!billCache.cablePlans && !billLoading) bpLoadCablePlans();
   const prov = document.getElementById('bp-cable-provider'); if(prov) prov.addEventListener('change', e=>{ billForm.cableType=e.target.value; billForm.planId=''; refreshMain(); });
   const card = document.getElementById('bp-cardno'); if(card) card.addEventListener('input', e=>{ billForm.cardNo=e.target.value; });
   const plan = document.getElementById('bp-plan'); if(plan) plan.addEventListener('change', e=>{ billForm.planId=e.target.value; refreshMain(); });
@@ -8989,25 +9028,28 @@ function bindBillCableEvents(){
   });
   const btn = document.getElementById('bp-cable-confirm');
   if(btn) btn.addEventListener('click', async ()=>{
+    if(billPurchaseInFlight) return;
     const chosen = (billCache.cablePlans||[]).find(p=>String(p.id)===String(billForm.planId));
     if(!billForm.phone.trim() || !chosen){ toast('Enter a phone number and select a plan.'); return; }
     const price = billCustomerPrice(Number(chosen.amount||chosen.price||0));
     if(!confirm(`Pay ${chosen.name||chosen.plan_name} for ${billForm.cableCustomerName}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
-    btn.disabled = true; btn.textContent = 'Processing…';
+    billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
     try{
       const r = await callBigisub('cable_purchase', { cable_type: billForm.cableType, card_no: billForm.cardNo.trim(), phone_number: billForm.phone.trim(), amount: Number(chosen.amount||chosen.price||0), plan_id: chosen.id, customer_name: billForm.cableCustomerName, client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
       billRecordTxAttribution(billGetClientRef());
       logAudit('bill_cable', `Paid ${chosen.name||chosen.plan_name} for card ${billForm.cardNo} (${billForm.cableCustomerName})`);
-      toast('Subscription paid ✅'); billScreen='hub'; refreshMain();
-    }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='Pay Subscription'; }
+      toast('Subscription paid ✅'); billScreen='hub';
+    }catch(e){ toast(e.message); }
+    billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
   });
 }
 
 /* ---------------- ELECTRICITY (verify → pay) ---------------- */
 async function bpLoadElectricityProviders(){
   if(billCache.electricityProviders){ refreshMain(); return; }
+  if(billLoading) return; // an identical load is already in flight — don't fire a duplicate request
   billLoading = true; refreshMain();
   try{ billCache.electricityProviders = (await callBigisub('electricity_providers', {})).providers || []; }
   catch(e){ toast(e.message); billCache.electricityProviders = []; }
@@ -9039,13 +9081,13 @@ function screenBillElectricity(){
       <div class="field"><label>Phone Number (for receipt)</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
       <div class="field"><label>Amount (₦)</label><input id="bp-amount" type="number" min="500" value="${escAttr(billForm.amount)}" placeholder="e.g. 5000"></div>
       ${amount>0 ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
-      <button class="btn btn-primary" id="bp-elec-confirm">Buy Token</button>
+      ${billPurchaseBtnHtml('bp-elec-confirm', 'Buy Token')}
       `}
     </div>
   `;
 }
 function bindBillElectricityEvents(){
-  if(!billCache.electricityProviders) bpLoadElectricityProviders();
+  if(!billCache.electricityProviders && !billLoading) bpLoadElectricityProviders();
   const prov = document.getElementById('bp-elec-provider'); if(prov) prov.addEventListener('change', e=>{ billForm.company=e.target.value; });
   const mtype = document.getElementById('bp-meter-type'); if(mtype) mtype.addEventListener('change', e=>{ billForm.meterType=e.target.value; });
   const mno = document.getElementById('bp-meter-no'); if(mno) mno.addEventListener('input', e=>{ billForm.meterNo=e.target.value; });
@@ -9066,12 +9108,13 @@ function bindBillElectricityEvents(){
   });
   const btn = document.getElementById('bp-elec-confirm');
   if(btn) btn.addEventListener('click', async ()=>{
+    if(billPurchaseInFlight) return;
     const amount = Number(billForm.amount||0);
     if(!billForm.phone.trim() || amount<500){ toast('Enter a phone number and an amount of at least ₦500.'); return; }
     const price = billCustomerPrice(amount);
     if(!confirm(`Buy ₦${amount} token for ${billForm.elecCustomerName}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
-    btn.disabled = true; btn.textContent = 'Processing…';
+    billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
     try{
       const r = await callBigisub('electricity_pay', { company: billForm.company, meter_no: billForm.meterNo.trim(), meter_type: billForm.meterType, phone_number: billForm.phone.trim(), amount, customer_name: billForm.elecCustomerName, client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
@@ -9079,14 +9122,16 @@ function bindBillElectricityEvents(){
       billRecordTxAttribution(billGetClientRef());
       logAudit('bill_electricity', `Sold ₦${amount} token for meter ${billForm.meterNo} (${billForm.elecCustomerName})`);
       toast(token ? `Token: ${token}` : 'Token purchased ✅');
-      billScreen='hub'; refreshMain();
-    }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='Buy Token'; }
+      billScreen='hub';
+    }catch(e){ toast(e.message); }
+    billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
   });
 }
 
 /* ---------------- BETTING (validate → fund, immediately) ---------------- */
 async function bpLoadBettingBillers(){
   if(billCache.bettingBillers){ refreshMain(); return; }
+  if(billLoading) return; // an identical load is already in flight — don't fire a duplicate request
   billLoading = true; refreshMain();
   try{ billCache.bettingBillers = (await callBigisub('betting_billers', {})).billers || []; }
   catch(e){ toast(e.message); billCache.bettingBillers = []; }
@@ -9109,44 +9154,47 @@ function screenBillBetting(){
       <div class="field"><label>Amount (₦)</label><input id="bp-amount" type="number" min="100" value="${escAttr(billForm.amount)}" placeholder="e.g. 1000"></div>
       ${amount>0 ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
       <p class="subtle" style="font-size:11px;">We'll confirm the account name right before funding — this platform expires that confirmation quickly, so there's no separate "verify" step here.</p>
-      <button class="btn btn-primary" id="bp-betting-confirm">${billForm.bettingValidating?'Validating…':'Fund Wallet'}</button>
+      ${billPurchaseBtnHtml('bp-betting-confirm', 'Fund Wallet')}
     </div>
   `;
 }
 function bindBillBettingEvents(){
-  if(!billCache.bettingBillers) bpLoadBettingBillers();
+  if(!billCache.bettingBillers && !billLoading) bpLoadBettingBillers();
   const biller = document.getElementById('bp-biller'); if(biller) biller.addEventListener('change', e=>{ billForm.billerCode=e.target.value; });
   const cid = document.getElementById('bp-customer-id'); if(cid) cid.addEventListener('input', e=>{ billForm.customerId=e.target.value; });
   const amt = document.getElementById('bp-amount'); if(amt) amt.addEventListener('input', e=>{ billForm.amount=e.target.value; refreshMain(); });
   const btn = document.getElementById('bp-betting-confirm');
   if(btn) btn.addEventListener('click', async ()=>{
+    if(billPurchaseInFlight) return;
     const amount = Number(billForm.amount||0);
     if(!billForm.billerCode || !billForm.customerId.trim() || amount<100){ toast('Select a platform, enter the customer ID, and an amount of at least ₦100.'); return; }
-    btn.disabled = true; btn.textContent = 'Validating…';
+    billPurchaseInFlight = true; billPurchaseStage = 'Validating…'; refreshMain();
     let validation;
     try{
       validation = await callBigisub('betting_validate', { biller_code: billForm.billerCode, customer_id: billForm.customerId.trim() });
-    }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='Fund Wallet'; return; }
+    }catch(e){ toast(e.message); billPurchaseInFlight=false; billPurchaseStage=''; refreshMain(); return; }
     const price = billCustomerPrice(amount);
     if(!confirm(`Fund ${validation.customer_name||billForm.customerId} with ₦${amount}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)){
-      btn.disabled=false; btn.textContent='Fund Wallet'; return;
+      billPurchaseInFlight=false; billPurchaseStage=''; refreshMain(); return;
     }
     const pin = billPromptPin();
-    if(pin===null){ btn.disabled=false; btn.textContent='Fund Wallet'; return; }
-    btn.textContent = 'Funding…';
+    if(pin===null){ billPurchaseInFlight=false; billPurchaseStage=''; refreshMain(); return; }
+    billPurchaseStage = 'Funding…'; refreshMain();
     try{
       const r = await callBigisub('betting_fund', { biller_code: billForm.billerCode, customer_id: billForm.customerId.trim(), customer_name: validation.customer_name, amount, validation_reference: validation.validation_reference, client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
       billRecordTxAttribution(billGetClientRef());
       logAudit('bill_betting', `Funded ${billForm.customerId} (${validation.customer_name}) with ₦${amount}`);
-      toast('Wallet funded ✅'); billScreen='hub'; refreshMain();
-    }catch(e){ toast(e.message + ' — if this was a timeout on the validation reference, please try again.'); btn.disabled=false; btn.textContent='Fund Wallet'; }
+      toast('Wallet funded ✅'); billScreen='hub';
+    }catch(e){ toast(e.message + ' — if this was a timeout on the validation reference, please try again.'); }
+    billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
   });
 }
 
 /* ---------------- RESULT CHECKER (Education) ---------------- */
 async function bpLoadResultCheckerPrices(){
   if(billCache.resultCheckerPrices){ refreshMain(); return; }
+  if(billLoading) return; // an identical load is already in flight — don't fire a duplicate request
   billLoading = true; refreshMain();
   try{ billCache.resultCheckerPrices = (await callBigisub('result_checker_prices', {})).prices || []; }
   catch(e){ toast(e.message); billCache.resultCheckerPrices = []; }
@@ -9170,16 +9218,17 @@ function screenBillResultChecker(){
       </div>
       <div class="field"><label>Quantity</label><input id="bp-qty" type="number" min="1" value="${qty}"></div>
       ${chosen ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> (₦${unit} × ${qty}) — deducted from your Bill Wallet.</p>` : ''}
-      <button class="btn btn-primary" id="bp-rc-confirm">Buy PIN(s)</button>
+      ${billPurchaseBtnHtml('bp-rc-confirm', 'Buy PIN(s)')}
     </div>
   `;
 }
 function bindBillResultCheckerEvents(){
-  if(!billCache.resultCheckerPrices) bpLoadResultCheckerPrices();
+  if(!billCache.resultCheckerPrices && !billLoading) bpLoadResultCheckerPrices();
   const exam = document.getElementById('bp-exam'); if(exam) exam.addEventListener('change', e=>{ billForm.examName=e.target.value; refreshMain(); });
   const qty = document.getElementById('bp-qty'); if(qty) qty.addEventListener('input', e=>{ billForm.qty=e.target.value; refreshMain(); });
   const btn = document.getElementById('bp-rc-confirm');
   if(btn) btn.addEventListener('click', async ()=>{
+    if(billPurchaseInFlight) return;
     const exams = billCache.resultCheckerPrices||[];
     const chosen = exams.find(x=>String(x.exam||x.exam_type||x.name)===String(billForm.examName));
     const qtyNum = Math.max(1, Number(billForm.qty||1));
@@ -9187,7 +9236,7 @@ function bindBillResultCheckerEvents(){
     const price = billCustomerPrice(Number(chosen.amount||chosen.price||0)*qtyNum);
     if(!confirm(`Buy ${qtyNum} × ${chosen.name||chosen.exam} PIN(s)? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
-    btn.disabled = true; btn.textContent = 'Processing…';
+    billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
     try{
       const r = await callBigisub('result_checker_purchase', { exam: chosen.exam||chosen.exam_type||chosen.name, quantity: qtyNum, client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
@@ -9195,8 +9244,9 @@ function bindBillResultCheckerEvents(){
       billRecordTxAttribution(billGetClientRef());
       logAudit('bill_result_checker', `Bought ${qtyNum} × ${chosen.name||chosen.exam} PIN(s)`);
       toast(pins ? 'PIN(s) generated — see receipt in history' : 'PIN(s) purchased ✅');
-      billScreen='hub'; refreshMain();
-    }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='Buy PIN(s)'; }
+      billScreen='hub';
+    }catch(e){ toast(e.message); }
+    billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
   });
 }
 
@@ -9204,6 +9254,7 @@ function bindBillResultCheckerEvents(){
 async function bpLoadIspPlans(provider){
   const key = provider==='smile' ? 'ispSmilePlans' : 'ispSpectranetPlans';
   if(billCache[key]){ refreshMain(); return; }
+  if(billLoading) return; // an identical load is already in flight — don't fire a duplicate request
   billLoading = true; refreshMain();
   try{ billCache[key] = (await callBigisub(provider==='smile'?'isp_smile_plans':'isp_spectranet_plans', {})).plans || []; }
   catch(e){ toast(e.message); billCache[key] = []; }
@@ -9244,7 +9295,7 @@ function screenBillIsp(){
       <div class="field"><label>Phone Number</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
       ${isSmile ? `<div class="field"><label>Email</label><input id="bp-email" type="email" value="${escAttr(billForm.email)}" placeholder="customer@email.com"></div>` : `<div class="field"><label>Quantity</label><input id="bp-qty" type="number" min="1" value="${billForm.qty||1}"></div>`}
       ${chosen ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b>${ispQty>1?` (₦${unit} × ${ispQty})`:''} — deducted from your Bill Wallet.</p>` : ''}
-      <button class="btn btn-primary" id="bp-isp-confirm">Buy Plan</button>
+      ${billPurchaseBtnHtml('bp-isp-confirm', 'Buy Plan')}
       ` : ''}
     </div>
   `;
@@ -9252,7 +9303,7 @@ function screenBillIsp(){
 function bindBillIspEvents(){
   const provider = document.getElementById('bp-isp-provider');
   if(provider) provider.addEventListener('change', e=>{ billForm.ispProvider=e.target.value; billForm.planId=''; billForm.ispCustomerName=''; refreshMain(); });
-  if(!billCache[billForm.ispProvider==='smile'?'ispSmilePlans':'ispSpectranetPlans']) bpLoadIspPlans(billForm.ispProvider);
+  if(!billCache[billForm.ispProvider==='smile'?'ispSmilePlans':'ispSpectranetPlans'] && !billLoading) bpLoadIspPlans(billForm.ispProvider);
 
   const acct = document.getElementById('bp-account-id'); if(acct) acct.addEventListener('input', e=>{ billForm.accountId=e.target.value; });
   const spNum = document.getElementById('bp-spectranet-number'); if(spNum) spNum.addEventListener('input', e=>{ billForm.spectranetNumber=e.target.value; });
@@ -9275,6 +9326,7 @@ function bindBillIspEvents(){
   });
   const btn = document.getElementById('bp-isp-confirm');
   if(btn) btn.addEventListener('click', async ()=>{
+    if(billPurchaseInFlight) return;
     const isSmile = billForm.ispProvider==='smile';
     const plans = (isSmile ? billCache.ispSmilePlans : billCache.ispSpectranetPlans) || [];
     const chosen = plans.find(p=>String(p.id)===String(billForm.planId));
@@ -9284,7 +9336,7 @@ function bindBillIspEvents(){
     const price = billCustomerPrice(Number(chosen.amount||chosen.price||0));
     if(!confirm(`Buy ${chosen.name||chosen.plan_name}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
-    btn.disabled = true; btn.textContent = 'Processing…';
+    billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
     try{
       const r = isSmile
         ? await callBigisub('isp_smile_topup', { plan: chosen.id, phone_number: billForm.phone.trim(), email: billForm.email.trim(), account_id: billForm.accountId.trim(), client_ref: billGetClientRef(), bill_pin: pin })
@@ -9292,8 +9344,9 @@ function bindBillIspEvents(){
       billWalletBalance = r.wallet_balance;
       billRecordTxAttribution(billGetClientRef());
       logAudit('bill_isp', `Bought ${chosen.name||chosen.plan_name} (${isSmile?'Smile':'Spectranet'})`);
-      toast('Plan purchased ✅'); billScreen='hub'; refreshMain();
-    }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='Buy Plan'; }
+      toast('Plan purchased ✅'); billScreen='hub';
+    }catch(e){ toast(e.message); }
+    billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
   });
 }
 

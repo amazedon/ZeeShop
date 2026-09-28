@@ -650,29 +650,66 @@
   // plan's human-readable size/duration. If nothing matches, we genuinely
   // don't know what field holds it — rather than silently showing just an
   // ID forever, that case is left for the raw-data toggle below to reveal.
+  // Same tolerant parsing the shop app uses (see bigisubPlanLabel in
+  // app.html) — Bigisub's plan objects don't share one set of key names,
+  // so every lookup here is case/punctuation-insensitive and tries many
+  // plausible names, instead of the old exact-key list that showed a plan
+  // as its bare ID (or, worse, showed the numeric "plan" field AS the label).
+  function normKey(k){ return String(k).toLowerCase().replace(/[^a-z0-9]/g,''); }
+  function firstOf(obj, keys){
+    if(!obj || typeof obj !== 'object') return null;
+    const byNorm = {};
+    for(const k of Object.keys(obj)) byNorm[normKey(k)] = obj[k];
+    for(const want of keys){
+      const v = byNorm[normKey(want)];
+      if(v !== undefined && v !== null && typeof v !== 'object' && String(v).trim() !== '') return v;
+    }
+    return null;
+  }
   function planLabel(p){
-    const direct = p.name || p.plan_name || p.plan || p.title || p.exam || p.exam_type || p.package || p.description;
-    if(direct) return direct;
-    const size = p.data || p.size || p.volume || p.data_plan || p.plan_size || p.bundle;
-    const validity = p.validity || p.duration || p.days || p.period;
-    if(size && validity) return `${size} — ${validity}`;
-    if(size) return String(size);
-    return null; // unresolved — table falls back to "#id" and flags it for the raw-data toggle
+    const idStr = p.id != null ? String(p.id) : null;
+    let direct = firstOf(p, ['name','plan_name','planname','plan','title','package','package_name','bundle_name','plan_title','exam','exam_type','description','desc','label','data_plan','dataplan']);
+    if(direct != null && String(direct).trim() === idStr) direct = null;
+    let size = firstOf(p, ['data','data_size','size','plan_size','volume','data_volume','bundle','allowance','data_amount','data_value']);
+    const unit = firstOf(p, ['unit','data_unit','size_unit','plan_unit']);
+    if(size != null && unit != null && /^[\d.]+$/.test(String(size).trim())) size = String(size).trim() + ' ' + unit;
+    let validity = firstOf(p, ['validity','plan_validity','duration','days','period','expiry','expires','validity_period']);
+    if(validity != null && /^\d+$/.test(String(validity).trim())) validity = validity + ' days';
+    const has = (hay, needle) => needle != null && String(hay).toLowerCase().includes(String(needle).toLowerCase());
+    const parts = [];
+    if(direct != null) parts.push(String(direct));
+    if(size != null && !(direct != null && has(direct, size))) parts.push(String(size));
+    if(validity != null && !(parts.length && has(parts.join(' '), validity))) parts.push(String(validity));
+    if(parts.length) return parts.join(' — ');
+    for(const v of Object.values(p)){
+      if(typeof v === 'string' && /\b\d+(\.\d+)?\s*(KB|MB|GB|TB)\b/i.test(v)) return v.trim();
+    }
+    return null; // unresolved — table falls back to "Plan #id" and flags it for the raw-data toggle
+  }
+  function planPrice(p, priceKey){
+    const v = firstOf(p, [priceKey, 'amount','price','plan_amount','plan_price','selling_price','cost','cost_price','api_price','user_price','reseller_price']);
+    return v;
+  }
+  const NETWORK_NAMES = { 1:'MTN', 2:'GLO', 3:'9MOBILE', 4:'AIRTEL' };
+  function networkLabel(p){
+    const n = firstOf(p, ['network_name','networkname','network','network_id','networkid']);
+    if(n == null) return '';
+    return NETWORK_NAMES[String(n).trim()] || String(n);
   }
 
   function renderPriceTable(title, list, priceKey){
     if(list && list.error) return `<p class="subtle" style="margin-top:10px;"><b>${escapeHtml(title)}:</b> could not load — ${escapeHtml(list.error)}</p>`;
     if(!Array.isArray(list) || list.length===0) return `<p class="subtle" style="margin-top:10px;"><b>${escapeHtml(title)}:</b> no plans returned.</p>`;
-    const hasNetwork = list.some(p => p.network_name || p.network);
+    const hasNetwork = list.some(p => networkLabel(p));
     let unresolvedCount = 0;
     const rows = list.map(p=>{
       const label = planLabel(p);
       if(!label) unresolvedCount++;
-      const network = p.network_name || p.network || '';
+      const network = networkLabel(p);
       return `<tr>
         ${hasNetwork ? `<td data-label="Network">${escapeHtml(network||'—')}</td>` : ''}
         <td data-label="Plan">${escapeHtml(label || ('Plan #'+(p.id??'?')))}</td>
-        <td data-label="Cost">${fmtNaira(p[priceKey]||p.amount||p.price)}</td>
+        <td data-label="Cost">${fmtNaira(planPrice(p, priceKey))}</td>
       </tr>`;
     }).join('');
     const rawId = 'raw-' + title.replace(/[^a-z0-9]/gi,'-').toLowerCase();

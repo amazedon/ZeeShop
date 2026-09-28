@@ -157,8 +157,34 @@ function extractStatus(data: any): string {
   const s = (data?.Status || data?.status || "successful").toString().toLowerCase();
   return s.includes("success") ? "success" : (s.includes("fail") ? "failed" : "pending");
 }
+// Bigisub's verify responses aren't consistent about key casing or
+// nesting (e.g. {customer_name} vs {data:{Customer_Name}} vs {details:{name}}),
+// and the old flat-only lookup returned "" for anything nested — which the
+// app then reported as a failed verification even though Bigisub had
+// verified fine. This searches case/punctuation-insensitively at any depth.
+const NAME_KEYS = ["customer_name", "customername", "customer", "account_name", "accountname", "subscriber_name", "subscriber", "card_holder", "cardholder", "owner", "full_name", "fullname", "client_name", "name"];
+function normKey(k: string): string { return k.toLowerCase().replace(/[^a-z0-9]/g, ""); }
+function deepFindString(obj: any, keys: string[], depth = 0): string {
+  if (!obj || typeof obj !== "object" || depth > 6) return "";
+  const byNorm: Record<string, unknown> = {};
+  for (const k of Object.keys(obj)) byNorm[normKey(k)] = obj[k];
+  for (const want of keys) {
+    const v = byNorm[normKey(want)];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  for (const v of Object.values(obj)) {
+    if (v && typeof v === "object") {
+      const found = deepFindString(v, keys, depth + 1);
+      if (found) return found;
+    }
+  }
+  return "";
+}
 function extractCustomerName(data: any): string {
-  return data?.customer_name || data?.Customer_name || data?.Customer || data?.name || "";
+  return deepFindString(data, NAME_KEYS);
+}
+function extractUpstreamMessage(data: any): string {
+  return deepFindString(data, ["message", "msg", "error", "detail", "description"]);
 }
 
 // SHA-256 hash for the shared Bill Payments PIN — no plaintext PIN is ever
@@ -272,13 +298,13 @@ Deno.serve(async (req: Request) => {
       const { cable_name, card_no } = params as { cable_name: string; card_no: string };
       if (!cable_name || !card_no) return json({ error: "Missing cable_name or card_no." }, 400);
       const data = await bigisub("POST", EP.CABLE_VERIFY, { cable_name, card_no });
-      return json({ customer_name: extractCustomerName(data), raw: data }, 200);
+      return json({ customer_name: extractCustomerName(data), upstream_message: extractUpstreamMessage(data), raw: data }, 200);
     }
     if (action === "electricity_verify") {
       const { company, meter_no, meter_type } = params as { company: string; meter_no: string; meter_type: string };
       if (!company || !meter_no || !meter_type) return json({ error: "Missing company, meter_no, or meter_type." }, 400);
       const data = await bigisub("POST", EP.ELECTRICITY_VERIFY, { company, meter_no, meter_type });
-      return json({ customer_name: extractCustomerName(data), raw: data }, 200);
+      return json({ customer_name: extractCustomerName(data), upstream_message: extractUpstreamMessage(data), raw: data }, 200);
     }
     if (action === "betting_validate") {
       const { biller_code, customer_id } = params as { biller_code: string; customer_id: string };
@@ -292,7 +318,7 @@ Deno.serve(async (req: Request) => {
       const { account_id } = params as { account_id: string };
       if (!account_id) return json({ error: "Missing account_id." }, 400);
       const data = await bigisub("POST", EP.ISP_SMILE_VERIFY, { account_id });
-      return json({ customer_name: extractCustomerName(data), raw: data }, 200);
+      return json({ customer_name: extractCustomerName(data), upstream_message: extractUpstreamMessage(data), raw: data }, 200);
     }
 
     if (action === "list_transactions") {
@@ -713,7 +739,10 @@ async function lookupPlanAmount(path: string, preferredKey: string, matchValue: 
     const list = normalizeList(raw, preferredKey);
     const item = list.find((x: any) => matchKeys.some((k) => String(x?.[k]) === String(matchValue)));
     if (!item) return null;
-    const amt = Number(item.amount ?? item.price);
+    const amt = Number(
+      item.amount ?? item.price ?? item.plan_amount ?? item.plan_price ?? item.selling_price ??
+      item.cost ?? item.cost_price ?? item.api_price ?? item.user_price ?? item.reseller_price
+    );
     return Number.isFinite(amt) ? amt : null;
   } catch (_e) {
     return null;

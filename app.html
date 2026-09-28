@@ -8382,11 +8382,11 @@ let billCache = { dataPlans:null, cablePlans:null, electricityProviders:null, re
 // tile is opened from the hub (see bindBillPaymentsEvents).
 let billForm = {
   network:1, phone:'', amount:'', planId:'', ported:false,
-  cableType:'', cardNo:'', cableVerifying:false, cableCustomerName:'',
-  company:'', meterType:'prepaid', meterNo:'', elecVerifying:false, elecCustomerName:'',
+  cableType:'', cardNo:'', cableVerifying:false, cableCustomerName:'', cableVerifyError:'',
+  company:'', meterType:'prepaid', meterNo:'', elecVerifying:false, elecCustomerName:'', elecVerifyError:'',
   billerCode:'', customerId:'', bettingValidating:false, bettingCustomerName:'', validationReference:'',
   examName:'', qty:1,
-  ispProvider:'smile', accountId:'', email:'', spectranetNumber:'', ispVerifying:false, ispCustomerName:'',
+  ispProvider:'smile', accountId:'', email:'', spectranetNumber:'', ispVerifying:false, ispCustomerName:'', ispVerifyError:'',
 };
 
 let billHistory = [];
@@ -8396,11 +8396,11 @@ let billHistoryError = null; // set on a failed load — stops the auto-retry lo
 function billResetForm(){
   billForm = {
     network:1, phone:'', amount:'', planId:'', ported:false,
-    cableType:'', cardNo:'', cableVerifying:false, cableCustomerName:'',
-    company:'', meterType:'prepaid', meterNo:'', elecVerifying:false, elecCustomerName:'',
+    cableType:'', cardNo:'', cableVerifying:false, cableCustomerName:'', cableVerifyError:'',
+    company:'', meterType:'prepaid', meterNo:'', elecVerifying:false, elecCustomerName:'', elecVerifyError:'',
     billerCode:'', customerId:'', bettingValidating:false, bettingCustomerName:'', validationReference:'',
     examName:'', qty:1,
-    ispProvider:'smile', accountId:'', email:'', spectranetNumber:'', ispVerifying:false, ispCustomerName:'',
+    ispProvider:'smile', accountId:'', email:'', spectranetNumber:'', ispVerifying:false, ispCustomerName:'', ispVerifyError:'',
   };
 }
 
@@ -8458,14 +8458,30 @@ async function callBigisub(action, params){
   if(!navigator.onLine) throw new Error('You need an internet connection for bill payments.');
   const token = await bigisubAuthToken();
   if(!token) throw new Error('Please log in online first (bill payments need a live connection).');
-  const res = await fetch(`${SITE_CONTENT_URL}/functions/v1/bigisub-proxy`, {
-    method: 'POST',
-    headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+token, 'apikey': SITE_CONTENT_ANON_KEY },
-    body: JSON.stringify({ action, ...params })
-  });
+  // 30s ceiling so a hung connection can't leave a screen stuck forever,
+  // and a raw browser "Failed to fetch" is translated into something a
+  // person can act on. NOTE for purchases: a timeout doesn't prove the
+  // purchase failed (the server may still have completed it), hence the
+  // wording pointing at Transaction History instead of just "try again".
+  const ctrl = new AbortController();
+  const timer = setTimeout(()=>ctrl.abort(), 30000);
+  let res;
+  try{
+    res = await fetch(`${SITE_CONTENT_URL}/functions/v1/bigisub-proxy`, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+token, 'apikey': SITE_CONTENT_ANON_KEY },
+      body: JSON.stringify({ action, ...params }),
+      signal: ctrl.signal
+    });
+  }catch(e){
+    clearTimeout(timer);
+    if(e && e.name === 'AbortError') throw new Error('The server took too long to respond. If you were making a purchase, check Transaction History before trying again.');
+    throw new Error("Couldn't reach the server. Check your internet connection and try again.");
+  }
+  clearTimeout(timer);
   let result;
-  try{ result = await res.json(); }catch(e){ throw new Error('Unexpected response from server.'); }
-  if(!res.ok || result.error) throw new Error(result.error || 'Something went wrong.');
+  try{ result = await res.json(); }catch(e){ throw new Error(`Unexpected response from server (${res.status}).`); }
+  if(!res.ok || result.error) throw new Error(result.error || result.message || `Server error (${res.status}).`);
   return result;
 }
 
@@ -8478,6 +8494,86 @@ async function callBigisub(action, params){
 // place that actually decides the real charge either way.
 function billCustomerPrice(costPrice){ return costPrice; }
 function billPreviewPrice(pricingService, planKey, quantity, costPrice){ return costPrice; }
+
+/* ---------------- Bigisub response parsing helpers ----------------
+   Bigisub's plan and verification payloads don't use one consistent set
+   of key names (or nesting depth), so nothing below assumes a single
+   shape — every lookup tries a list of plausible names, case- and
+   punctuation-insensitively, and verification lookups search nested
+   objects too. Without this, a plan with no "name" key rendered as
+   "Plan 135", and a verify call that succeeded upstream but nested the
+   customer's name one level down looked to the app like a failed
+   verification ("Could not verify this meter"). */
+function bigisubNormKey(k){ return String(k).toLowerCase().replace(/[^a-z0-9]/g,''); }
+// First non-empty value among `keys`, matched against obj's own keys
+// ignoring case, underscores, spaces and hyphens.
+function bigisubFirst(obj, keys){
+  if(!obj || typeof obj !== 'object') return null;
+  const byNorm = {};
+  for(const k of Object.keys(obj)) byNorm[bigisubNormKey(k)] = obj[k];
+  for(const want of keys){
+    const v = byNorm[bigisubNormKey(want)];
+    if(v !== undefined && v !== null && typeof v !== 'object' && String(v).trim() !== '') return v;
+  }
+  return null;
+}
+function bigisubPlanLabel(p){
+  if(!p) return '';
+  const idStr = p.id != null ? String(p.id) : null;
+  const meaningful = v => v != null && String(v).trim() !== '' && String(v).trim() !== idStr;
+  let direct = bigisubFirst(p, ['name','plan_name','planname','plan','title','package','package_name','bundle_name','plan_title','description','desc','label','data_plan','dataplan']);
+  if(!meaningful(direct)) direct = null;
+  let size = bigisubFirst(p, ['data','data_size','size','plan_size','volume','data_volume','bundle','allowance','data_amount','data_value']);
+  const unit = bigisubFirst(p, ['unit','data_unit','size_unit','plan_unit']);
+  if(size != null && unit != null && /^[\d.]+$/.test(String(size).trim())) size = String(size).trim() + ' ' + unit;
+  let validity = bigisubFirst(p, ['validity','plan_validity','duration','days','period','expiry','expires','validity_period']);
+  if(validity != null && /^\d+$/.test(String(validity).trim())) validity = validity + ' days';
+  const has = (hay, needle) => needle != null && String(hay).toLowerCase().includes(String(needle).toLowerCase());
+  const parts = [];
+  if(direct) parts.push(String(direct));
+  if(size != null && !(direct && has(direct, size))) parts.push(String(size));
+  if(validity != null && !(parts.length && has(parts.join(' '), validity))) parts.push(String(validity));
+  if(parts.length) return parts.join(' — ');
+  // Last resort before giving up: scan EVERY string field for something
+  // that reads like a data size (e.g. "1.5GB", "500 MB") — catches plans
+  // whose size is stored under a key we haven't listed.
+  for(const v of Object.values(p)){
+    if(typeof v === 'string' && /\b\d+(\.\d+)?\s*(KB|MB|GB|TB)\b/i.test(v)) return v.trim();
+  }
+  return 'Plan ' + (p.id != null ? p.id : '?');
+}
+function bigisubPlanPrice(p){
+  const v = bigisubFirst(p, ['amount','price','plan_amount','plan_price','selling_price','cost','cost_price','api_price','user_price','reseller_price']);
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+function bigisubCableProvider(p){
+  return bigisubFirst(p, ['provider','cable_type','cable_name','cablename','cable','provider_name','biller','company']);
+}
+// Verification responses: prefer the flat customer_name the server sends,
+// but fall back to searching the raw upstream payload at any depth.
+function bigisubDeepFindByKeys(obj, keys, depth){
+  depth = depth || 0;
+  if(!obj || typeof obj !== 'object' || depth > 6) return '';
+  const direct = bigisubFirst(obj, keys);
+  if(direct != null) return String(direct).trim();
+  for(const v of Object.values(obj)){
+    if(v && typeof v === 'object'){
+      const f = bigisubDeepFindByKeys(v, keys, depth + 1);
+      if(f) return f;
+    }
+  }
+  return '';
+}
+function bigisubNameFromResponse(r){
+  if(r && typeof r.customer_name === 'string' && r.customer_name.trim()) return r.customer_name.trim();
+  return bigisubDeepFindByKeys(r && r.raw, ['customer_name','customername','customer','account_name','accountname','subscriber_name','subscriber','card_holder','cardholder','owner','full_name','fullname','client_name','name']);
+}
+// Bigisub sometimes answers HTTP 200 with a failure explained inside the
+// body — surface THAT reason instead of a generic "couldn't verify".
+function bigisubUpstreamMessage(raw){
+  return bigisubDeepFindByKeys(raw, ['message','msg','error','detail','description']);
+}
 
 /* ---------------- HUB ---------------- */
 function screenBillPayments(){
@@ -8916,7 +9012,7 @@ async function bpLoadDataPlans(){
 function screenBillData(){
   const plans = (billCache.dataPlans||[]).filter(p=>String(p.network)===String(billForm.network));
   const chosen = plans.find(p=>String(p.id)===String(billForm.planId));
-  const cost = chosen ? Number(chosen.amount||chosen.price||0) : 0;
+  const cost = chosen ? bigisubPlanPrice(chosen) : 0;
   const price = chosen ? billPreviewPrice('data', chosen.id, 1, cost) : 0;
   return `
     ${bpHeader('Data Bundles')}
@@ -8928,7 +9024,7 @@ function screenBillData(){
       <div class="field"><label>Plan</label>
         <select id="bp-plan" ${billLoading?'disabled':''}>
           <option value="">${billLoading?'Loading plans…':'Select a plan'}</option>
-          ${plans.map(p=>`<option value="${p.id}" ${billForm.planId==p.id?'selected':''}>${escapeHtml(p.name||p.plan_name||('Plan '+p.id))} — ₦${p.amount||p.price}</option>`).join('')}
+          ${plans.map(p=>`<option value="${p.id}" ${billForm.planId==p.id?'selected':''}>${escapeHtml(bigisubPlanLabel(p))} — ₦${bigisubPlanPrice(p)}</option>`).join('')}
         </select>
       </div>
       <label style="display:flex;align-items:center;gap:8px;margin:8px 0;font-size:13px;">
@@ -8951,15 +9047,15 @@ function bindBillDataEvents(){
     const plans = (billCache.dataPlans||[]);
     const chosen = plans.find(p=>String(p.id)===String(billForm.planId));
     if(!billForm.phone.trim() || !chosen){ toast('Enter a phone number and select a plan.'); return; }
-    const price = billCustomerPrice(Number(chosen.amount||chosen.price||0));
-    if(!confirm(`Buy ${chosen.name||chosen.plan_name} for ${billForm.phone}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
+    const price = billCustomerPrice(bigisubPlanPrice(chosen));
+    if(!confirm(`Buy ${bigisubPlanLabel(chosen)} for ${billForm.phone}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
     try{
       const r = await callBigisub('data_purchase', { network: Number(billForm.network), phone_number: billForm.phone.trim(), plan: chosen.id, ported_number: !!billForm.ported, client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
       billRecordTxAttribution(billGetClientRef());
-      logAudit('bill_data', `Sold ${chosen.name||chosen.plan_name} data to ${billForm.phone}`);
+      logAudit('bill_data', `Sold ${bigisubPlanLabel(chosen)} data to ${billForm.phone}`);
       toast('Data sent ✅'); billScreen='hub';
     }catch(e){ toast(e.message); }
     billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
@@ -8976,10 +9072,10 @@ async function bpLoadCablePlans(){
   billLoading = false; refreshMain();
 }
 function screenBillCable(){
-  const providers = [...new Set((billCache.cablePlans||[]).map(p=>p.provider||p.cable_type||p.cable_name))].filter(Boolean);
-  const plans = (billCache.cablePlans||[]).filter(p=>(p.provider||p.cable_type||p.cable_name)===billForm.cableType);
+  const providers = [...new Set((billCache.cablePlans||[]).map(p=>bigisubCableProvider(p)))].filter(Boolean);
+  const plans = (billCache.cablePlans||[]).filter(p=>(bigisubCableProvider(p))===billForm.cableType);
   const chosen = plans.find(p=>String(p.id)===String(billForm.planId));
-  const cost = chosen ? Number(chosen.amount||chosen.price||0) : 0;
+  const cost = chosen ? bigisubPlanPrice(chosen) : 0;
   const price = chosen ? billPreviewPrice('cable', chosen.id, 1, cost) : 0;
   const verified = !!billForm.cableCustomerName;
   return `
@@ -8992,12 +9088,12 @@ function screenBillCable(){
         </select>
       </div>
       <div class="field"><label>Smart Card / IUC Number</label><input id="bp-cardno" value="${escAttr(billForm.cardNo)}" placeholder="e.g. 1234567890" ${verified?'disabled':''}></div>
-      ${!verified ? `<button class="btn btn-outline" id="bp-cable-verify" ${billForm.cableVerifying?'disabled':''}>${billForm.cableVerifying?'Verifying…':'Verify Card'}</button>` : `
+      ${!verified ? `<button class="btn btn-outline" id="bp-cable-verify" ${billForm.cableVerifying?'disabled':''}>${billForm.cableVerifying?'Verifying…':'Verify Card'}</button>${billForm.cableVerifyError ? `<p class="subtle" style="color:var(--red);margin-top:8px;">${escapeHtml(billForm.cableVerifyError)}</p>` : ''}` : `
       <p class="subtle" style="color:var(--marigold-dark);">✓ Verified: <b>${escapeHtml(billForm.cableCustomerName)}</b> <a href="#" id="bp-cable-reverify" style="margin-left:8px;">change</a></p>
       <div class="field"><label>Plan</label>
         <select id="bp-plan">
           <option value="">Select a plan</option>
-          ${plans.map(p=>`<option value="${p.id}" ${billForm.planId==p.id?'selected':''}>${escapeHtml(p.name||p.plan_name||('Plan '+p.id))} — ₦${p.amount||p.price}</option>`).join('')}
+          ${plans.map(p=>`<option value="${p.id}" ${billForm.planId==p.id?'selected':''}>${escapeHtml(bigisubPlanLabel(p))} — ₦${bigisubPlanPrice(p)}</option>`).join('')}
         </select>
       </div>
       <div class="field"><label>Phone Number (for receipt)</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
@@ -9014,16 +9110,21 @@ function bindBillCableEvents(){
   const plan = document.getElementById('bp-plan'); if(plan) plan.addEventListener('change', e=>{ billForm.planId=e.target.value; refreshMain(); });
   const phone = document.getElementById('bp-phone'); if(phone) phone.addEventListener('input', e=>{ billForm.phone=e.target.value; });
   const reverify = document.getElementById('bp-cable-reverify');
-  if(reverify) reverify.addEventListener('click', e=>{ e.preventDefault(); billForm.cableCustomerName=''; billForm.planId=''; refreshMain(); });
+  if(reverify) reverify.addEventListener('click', e=>{ e.preventDefault(); billForm.cableCustomerName=''; billForm.cableVerifyError=''; billForm.planId=''; refreshMain(); });
   const verifyBtn = document.getElementById('bp-cable-verify');
   if(verifyBtn) verifyBtn.addEventListener('click', async ()=>{
-    if(!billForm.cableType || !billForm.cardNo.trim()){ toast('Select a provider and enter the card number.'); return; }
-    billForm.cableVerifying = true; refreshMain();
+    if(billForm.cableVerifying) return;
+    if(!billForm.cableType || !billForm.cardNo.trim()){ billForm.cableVerifyError = 'Select a provider and enter the smart card / IUC number.'; refreshMain(); return; }
+    billForm.cableVerifying = true; billForm.cableVerifyError = ''; refreshMain();
     try{
       const r = await callBigisub('cable_verify', { cable_name: billForm.cableType, card_no: billForm.cardNo.trim() });
-      if(!r.customer_name){ toast('Could not verify this card. Double-check the number.'); billForm.cableVerifying=false; refreshMain(); return; }
-      billForm.cableCustomerName = r.customer_name;
-    }catch(e){ toast(e.message); }
+      const name = bigisubNameFromResponse(r);
+      if(!name){
+        billForm.cableVerifyError = bigisubUpstreamMessage(r && r.raw) || "Couldn't verify this card — check the number and that the provider is right.";
+      } else {
+        billForm.cableCustomerName = name;
+      }
+    }catch(e){ billForm.cableVerifyError = e.message || 'Verification failed.'; }
     billForm.cableVerifying = false; refreshMain();
   });
   const btn = document.getElementById('bp-cable-confirm');
@@ -9031,15 +9132,15 @@ function bindBillCableEvents(){
     if(billPurchaseInFlight) return;
     const chosen = (billCache.cablePlans||[]).find(p=>String(p.id)===String(billForm.planId));
     if(!billForm.phone.trim() || !chosen){ toast('Enter a phone number and select a plan.'); return; }
-    const price = billCustomerPrice(Number(chosen.amount||chosen.price||0));
-    if(!confirm(`Pay ${chosen.name||chosen.plan_name} for ${billForm.cableCustomerName}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
+    const price = billCustomerPrice(bigisubPlanPrice(chosen));
+    if(!confirm(`Pay ${bigisubPlanLabel(chosen)} for ${billForm.cableCustomerName}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
     try{
-      const r = await callBigisub('cable_purchase', { cable_type: billForm.cableType, card_no: billForm.cardNo.trim(), phone_number: billForm.phone.trim(), amount: Number(chosen.amount||chosen.price||0), plan_id: chosen.id, customer_name: billForm.cableCustomerName, client_ref: billGetClientRef(), bill_pin: pin });
+      const r = await callBigisub('cable_purchase', { cable_type: billForm.cableType, card_no: billForm.cardNo.trim(), phone_number: billForm.phone.trim(), amount: bigisubPlanPrice(chosen), plan_id: chosen.id, customer_name: billForm.cableCustomerName, client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
       billRecordTxAttribution(billGetClientRef());
-      logAudit('bill_cable', `Paid ${chosen.name||chosen.plan_name} for card ${billForm.cardNo} (${billForm.cableCustomerName})`);
+      logAudit('bill_cable', `Paid ${bigisubPlanLabel(chosen)} for card ${billForm.cardNo} (${billForm.cableCustomerName})`);
       toast('Subscription paid ✅'); billScreen='hub';
     }catch(e){ toast(e.message); }
     billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
@@ -9076,7 +9177,7 @@ function screenBillElectricity(){
         </select>
       </div>
       <div class="field"><label>Meter Number</label><input id="bp-meter-no" value="${escAttr(billForm.meterNo)}" placeholder="e.g. 04123456789" ${verified?'disabled':''}></div>
-      ${!verified ? `<button class="btn btn-outline" id="bp-elec-verify" ${billForm.elecVerifying?'disabled':''}>${billForm.elecVerifying?'Verifying…':'Verify Meter'}</button>` : `
+      ${!verified ? `<button class="btn btn-outline" id="bp-elec-verify" ${billForm.elecVerifying?'disabled':''}>${billForm.elecVerifying?'Verifying…':'Verify Meter'}</button>${billForm.elecVerifyError ? `<p class="subtle" style="color:var(--red);margin-top:8px;">${escapeHtml(billForm.elecVerifyError)}</p>` : ''}` : `
       <p class="subtle" style="color:var(--marigold-dark);">✓ Verified: <b>${escapeHtml(billForm.elecCustomerName)}</b> <a href="#" id="bp-elec-reverify" style="margin-left:8px;">change</a></p>
       <div class="field"><label>Phone Number (for receipt)</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
       <div class="field"><label>Amount (₦)</label><input id="bp-amount" type="number" min="500" value="${escAttr(billForm.amount)}" placeholder="e.g. 5000"></div>
@@ -9094,16 +9195,21 @@ function bindBillElectricityEvents(){
   const phone = document.getElementById('bp-phone'); if(phone) phone.addEventListener('input', e=>{ billForm.phone=e.target.value; });
   const amt = document.getElementById('bp-amount'); if(amt) amt.addEventListener('input', e=>{ billForm.amount=e.target.value; refreshMain(); });
   const reverify = document.getElementById('bp-elec-reverify');
-  if(reverify) reverify.addEventListener('click', e=>{ e.preventDefault(); billForm.elecCustomerName=''; refreshMain(); });
+  if(reverify) reverify.addEventListener('click', e=>{ e.preventDefault(); billForm.elecCustomerName=''; billForm.elecVerifyError=''; refreshMain(); });
   const verifyBtn = document.getElementById('bp-elec-verify');
   if(verifyBtn) verifyBtn.addEventListener('click', async ()=>{
-    if(!billForm.company || !billForm.meterNo.trim()){ toast('Select a disco and enter the meter number.'); return; }
-    billForm.elecVerifying = true; refreshMain();
+    if(billForm.elecVerifying) return;
+    if(!billForm.company || !billForm.meterNo.trim()){ billForm.elecVerifyError = 'Select a disco and enter the meter number.'; refreshMain(); return; }
+    billForm.elecVerifying = true; billForm.elecVerifyError = ''; refreshMain();
     try{
       const r = await callBigisub('electricity_verify', { company: billForm.company, meter_no: billForm.meterNo.trim(), meter_type: billForm.meterType });
-      if(!r.customer_name){ toast('Could not verify this meter. Double-check the number.'); billForm.elecVerifying=false; refreshMain(); return; }
-      billForm.elecCustomerName = r.customer_name;
-    }catch(e){ toast(e.message); }
+      const name = bigisubNameFromResponse(r);
+      if(!name){
+        billForm.elecVerifyError = bigisubUpstreamMessage(r && r.raw) || "Couldn't verify this meter — check the number, the disco, and prepaid/postpaid.";
+      } else {
+        billForm.elecCustomerName = name;
+      }
+    }catch(e){ billForm.elecVerifyError = e.message || 'Verification failed.'; }
     billForm.elecVerifying = false; refreshMain();
   });
   const btn = document.getElementById('bp-elec-confirm');
@@ -9173,18 +9279,19 @@ function bindBillBettingEvents(){
     try{
       validation = await callBigisub('betting_validate', { biller_code: billForm.billerCode, customer_id: billForm.customerId.trim() });
     }catch(e){ toast(e.message); billPurchaseInFlight=false; billPurchaseStage=''; refreshMain(); return; }
+    const bettingName = bigisubNameFromResponse(validation) || billForm.customerId;
     const price = billCustomerPrice(amount);
-    if(!confirm(`Fund ${validation.customer_name||billForm.customerId} with ₦${amount}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)){
+    if(!confirm(`Fund ${bettingName} with ₦${amount}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)){
       billPurchaseInFlight=false; billPurchaseStage=''; refreshMain(); return;
     }
     const pin = billPromptPin();
     if(pin===null){ billPurchaseInFlight=false; billPurchaseStage=''; refreshMain(); return; }
     billPurchaseStage = 'Funding…'; refreshMain();
     try{
-      const r = await callBigisub('betting_fund', { biller_code: billForm.billerCode, customer_id: billForm.customerId.trim(), customer_name: validation.customer_name, amount, validation_reference: validation.validation_reference, client_ref: billGetClientRef(), bill_pin: pin });
+      const r = await callBigisub('betting_fund', { biller_code: billForm.billerCode, customer_id: billForm.customerId.trim(), customer_name: bettingName, amount, validation_reference: validation.validation_reference, client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
       billRecordTxAttribution(billGetClientRef());
-      logAudit('bill_betting', `Funded ${billForm.customerId} (${validation.customer_name}) with ₦${amount}`);
+      logAudit('bill_betting', `Funded ${billForm.customerId} (${bettingName}) with ₦${amount}`);
       toast('Wallet funded ✅'); billScreen='hub';
     }catch(e){ toast(e.message + ' — if this was a timeout on the validation reference, please try again.'); }
     billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
@@ -9204,7 +9311,7 @@ function screenBillResultChecker(){
   const exams = billCache.resultCheckerPrices || [];
   const chosen = exams.find(x=>String(x.exam||x.exam_type||x.name)===String(billForm.examName));
   const qty = Math.max(1, Number(billForm.qty||1));
-  const unit = chosen ? Number(chosen.amount||chosen.price||0) : 0;
+  const unit = chosen ? bigisubPlanPrice(chosen) : 0;
   const examKey = chosen ? (chosen.exam||chosen.exam_type||chosen.name) : null;
   const price = chosen ? billPreviewPrice('result_checker', examKey, qty, unit*qty) : 0;
   return `
@@ -9233,7 +9340,7 @@ function bindBillResultCheckerEvents(){
     const chosen = exams.find(x=>String(x.exam||x.exam_type||x.name)===String(billForm.examName));
     const qtyNum = Math.max(1, Number(billForm.qty||1));
     if(!chosen){ toast('Select an exam.'); return; }
-    const price = billCustomerPrice(Number(chosen.amount||chosen.price||0)*qtyNum);
+    const price = billCustomerPrice(bigisubPlanPrice(chosen)*qtyNum);
     if(!confirm(`Buy ${qtyNum} × ${chosen.name||chosen.exam} PIN(s)? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
@@ -9265,7 +9372,7 @@ function screenBillIsp(){
   const plans = (isSmile ? billCache.ispSmilePlans : billCache.ispSpectranetPlans) || [];
   const chosen = plans.find(p=>String(p.id)===String(billForm.planId));
   const ispQty = isSmile ? 1 : Math.max(1, Number(billForm.qty||1));
-  const unit = chosen ? Number(chosen.amount||chosen.price||0) : 0;
+  const unit = chosen ? bigisubPlanPrice(chosen) : 0;
   const pricingService = isSmile ? 'isp_smile' : 'isp_spectranet';
   const price = chosen ? billPreviewPrice(pricingService, chosen.id, ispQty, unit*ispQty) : 0;
   const verified = !isSmile || !!billForm.ispCustomerName; // Spectranet has no verify step
@@ -9280,7 +9387,7 @@ function screenBillIsp(){
       </div>
       ${isSmile ? `
         <div class="field"><label>Account ID</label><input id="bp-account-id" value="${escAttr(billForm.accountId)}" placeholder="e.g. 12345678" ${verified?'disabled':''}></div>
-        ${!verified ? `<button class="btn btn-outline" id="bp-isp-verify" ${billForm.ispVerifying?'disabled':''}>${billForm.ispVerifying?'Verifying…':'Verify Account'}</button>` : `
+        ${!verified ? `<button class="btn btn-outline" id="bp-isp-verify" ${billForm.ispVerifying?'disabled':''}>${billForm.ispVerifying?'Verifying…':'Verify Account'}</button>${billForm.ispVerifyError ? `<p class="subtle" style="color:var(--red);margin-top:8px;">${escapeHtml(billForm.ispVerifyError)}</p>` : ''}` : `
         <p class="subtle" style="color:var(--marigold-dark);">✓ Verified: <b>${escapeHtml(billForm.ispCustomerName)}</b> <a href="#" id="bp-isp-reverify" style="margin-left:8px;">change</a></p>`}
       ` : `
         <div class="field"><label>Spectranet Device Number</label><input id="bp-spectranet-number" value="${escAttr(billForm.spectranetNumber)}" placeholder="e.g. SP12345"></div>
@@ -9289,7 +9396,7 @@ function screenBillIsp(){
       <div class="field"><label>Plan</label>
         <select id="bp-plan" ${billLoading?'disabled':''}>
           <option value="">${billLoading?'Loading…':'Select a plan'}</option>
-          ${plans.map(p=>`<option value="${p.id}" ${billForm.planId==p.id?'selected':''}>${escapeHtml(p.name||p.plan_name||('Plan '+p.id))} — ₦${p.amount||p.price}</option>`).join('')}
+          ${plans.map(p=>`<option value="${p.id}" ${billForm.planId==p.id?'selected':''}>${escapeHtml(bigisubPlanLabel(p))} — ₦${bigisubPlanPrice(p)}</option>`).join('')}
         </select>
       </div>
       <div class="field"><label>Phone Number</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
@@ -9302,7 +9409,7 @@ function screenBillIsp(){
 }
 function bindBillIspEvents(){
   const provider = document.getElementById('bp-isp-provider');
-  if(provider) provider.addEventListener('change', e=>{ billForm.ispProvider=e.target.value; billForm.planId=''; billForm.ispCustomerName=''; refreshMain(); });
+  if(provider) provider.addEventListener('change', e=>{ billForm.ispProvider=e.target.value; billForm.planId=''; billForm.ispCustomerName=''; billForm.ispVerifyError=''; refreshMain(); });
   if(!billCache[billForm.ispProvider==='smile'?'ispSmilePlans':'ispSpectranetPlans'] && !billLoading) bpLoadIspPlans(billForm.ispProvider);
 
   const acct = document.getElementById('bp-account-id'); if(acct) acct.addEventListener('input', e=>{ billForm.accountId=e.target.value; });
@@ -9312,16 +9419,21 @@ function bindBillIspEvents(){
   const email = document.getElementById('bp-email'); if(email) email.addEventListener('input', e=>{ billForm.email=e.target.value; });
   const qty = document.getElementById('bp-qty'); if(qty) qty.addEventListener('input', e=>{ billForm.qty=e.target.value; });
   const reverify = document.getElementById('bp-isp-reverify');
-  if(reverify) reverify.addEventListener('click', e=>{ e.preventDefault(); billForm.ispCustomerName=''; refreshMain(); });
+  if(reverify) reverify.addEventListener('click', e=>{ e.preventDefault(); billForm.ispCustomerName=''; billForm.ispVerifyError=''; refreshMain(); });
   const verifyBtn = document.getElementById('bp-isp-verify');
   if(verifyBtn) verifyBtn.addEventListener('click', async ()=>{
-    if(!billForm.accountId.trim()){ toast('Enter the Smile account ID.'); return; }
-    billForm.ispVerifying = true; refreshMain();
+    if(billForm.ispVerifying) return;
+    if(!billForm.accountId.trim()){ billForm.ispVerifyError = 'Enter the Smile account ID.'; refreshMain(); return; }
+    billForm.ispVerifying = true; billForm.ispVerifyError = ''; refreshMain();
     try{
       const r = await callBigisub('isp_smile_verify', { account_id: billForm.accountId.trim() });
-      if(!r.customer_name){ toast('Could not verify this account. Double-check the ID.'); billForm.ispVerifying=false; refreshMain(); return; }
-      billForm.ispCustomerName = r.customer_name;
-    }catch(e){ toast(e.message); }
+      const name = bigisubNameFromResponse(r);
+      if(!name){
+        billForm.ispVerifyError = bigisubUpstreamMessage(r && r.raw) || "Couldn't verify this Smile account — double-check the ID.";
+      } else {
+        billForm.ispCustomerName = name;
+      }
+    }catch(e){ billForm.ispVerifyError = e.message || 'Verification failed.'; }
     billForm.ispVerifying = false; refreshMain();
   });
   const btn = document.getElementById('bp-isp-confirm');
@@ -9333,8 +9445,8 @@ function bindBillIspEvents(){
     if(!chosen || !billForm.phone.trim()){ toast('Select a plan and enter a phone number.'); return; }
     if(isSmile && !billForm.email.trim()){ toast('Enter an email for the Smile top-up.'); return; }
     if(!isSmile && !billForm.spectranetNumber.trim()){ toast('Enter the Spectranet device number.'); return; }
-    const price = billCustomerPrice(Number(chosen.amount||chosen.price||0));
-    if(!confirm(`Buy ${chosen.name||chosen.plan_name}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
+    const price = billCustomerPrice(bigisubPlanPrice(chosen));
+    if(!confirm(`Buy ${bigisubPlanLabel(chosen)}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
     try{
@@ -9343,7 +9455,7 @@ function bindBillIspEvents(){
         : await callBigisub('isp_spectranet_topup', { plan: chosen.id, phone_number: billForm.phone.trim(), spectranet_number: billForm.spectranetNumber.trim(), quantity: Math.max(1,Number(billForm.qty||1)), client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
       billRecordTxAttribution(billGetClientRef());
-      logAudit('bill_isp', `Bought ${chosen.name||chosen.plan_name} (${isSmile?'Smile':'Spectranet'})`);
+      logAudit('bill_isp', `Bought ${bigisubPlanLabel(chosen)} (${isSmile?'Smile':'Spectranet'})`);
       toast('Plan purchased ✅'); billScreen='hub';
     }catch(e){ toast(e.message); }
     billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();

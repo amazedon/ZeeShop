@@ -62,21 +62,21 @@ const corsHeaders = {
 const BIGISUB_BASE = Deno.env.get("BIGISUB_BASE_URL") || "https://api.bigisub.ng";
 const BIGISUB_TOKEN = Deno.env.get("BIGISUB_TOKEN") || "";
 const BIGISUB_PIN = Deno.env.get("BIGISUB_PIN") || ""; // the Bigisub ACCOUNT's transaction PIN — never entered by shop staff
-const FLW_SECRET_KEY = Deno.env.get("FLW_SECRET_KEY") || ""; // same Flutterwave secret key your verify-payment function already uses
-// Used only for the "estimated fee" shown to the person BEFORE they fund
-// their wallet (Bank Transfer / My Account) — the ACTUAL amount credited
-// always comes from Flutterwave's own amount_settled field wherever it's
-// available (see fund_wallet_verify, check_bank_transfer_topup,
-// reconcile_pending_bank_transfers), never from this estimate. Only
-// sync_psa_wallet falls back to this percentage for the real deduction
-// too, since that specific Flutterwave endpoint's response doesn't expose
-// a fee field the way the main transaction-verify ones do. Defaults to
-// Flutterwave's officially published Nigeria local-card rate (2.0%) —
-// override with the real FLW_ESTIMATED_FEE_PERCENT secret once you've
-// confirmed your account's actual contracted bank-transfer rate from
-// Flutterwave's dashboard (Settings → Pricing), which can differ from
-// the public rate.
-const FLW_ESTIMATED_FEE_PERCENT = Number(Deno.env.get("FLW_ESTIMATED_FEE_PERCENT")) || 2.0;
+// FonPayEdge — wallet funding (permanent virtual account per business).
+// Subscriptions still use Flutterwave elsewhere (verify-payment /
+// flutterwave-webhook); nothing in THIS file uses Flutterwave anymore.
+// Set both as Supabase secrets (never in code or chat):
+//   FONPAYEDGE_SECRET_KEY, FONPAYEDGE_BUSINESS_ID
+const FONPAYEDGE_SECRET_KEY = Deno.env.get("FONPAYEDGE_SECRET_KEY") || "";
+const FONPAYEDGE_BUSINESS_ID = Deno.env.get("FONPAYEDGE_BUSINESS_ID") || "";
+const FONPAYEDGE_BASE = "https://fonpayedge.ng/api";
+// FonPayEdge's flat fee per transfer received. fonpayedge-webhook deducts
+// the same amount before crediting the wallet — keep both in sync (same
+// FONPAYEDGE_FLAT_FEE secret, default 50). Only used here to show the fee.
+const FONPAYEDGE_FLAT_FEE = Number(Deno.env.get("FONPAYEDGE_FLAT_FEE")) || 50;
+// Each business's virtual account is registered under this unique email;
+// fonpayedge-webhook reads the business id back out of it. Must match.
+const walletEmailFor = (businessId: string) => `${businessId}@wallet.zeeshop.app`;
 
 const EP = {
   WALLET_BALANCE: "/api/v2/financial/wallet/balance/",
@@ -237,7 +237,7 @@ Deno.serve(async (req: Request) => {
     // keyed by auth_user_id — same lookup pattern as super-admin/index.ts.
     const { data: caller, error: callerRowErr } = await admin
       .from("app_users")
-      .select("id, business_id, role, is_active, can_bill_payments, phone, email")
+      .select("id, business_id, role, is_active, can_bill_payments, phone, email, first_name, last_name")
       .eq("auth_user_id", callerData.user.id)
       .maybeSingle();
     if (callerRowErr) return json({ error: callerRowErr.message }, 500);
@@ -252,7 +252,7 @@ Deno.serve(async (req: Request) => {
     if (!businessId) return json({ error: `Your account (app_users.id = ${caller.id}) has no business_id set — it isn't linked to a business on the server yet. This can happen if this account was created/updated locally and hasn't finished syncing. Try again once the device shows fully synced (check the sync status dot), or check that row's business_id directly in Supabase.` }, 404);
     const { data: biz, error: bizErr } = await admin
       .from("businesses")
-      .select("id, name, currency, country, bill_wallet_balance, bill_payments_pin_hash, psa_account_reference, psa_account_number, psa_bank_name, psa_status, psa_last_synced_at")
+      .select("id, name, currency, country, bill_wallet_balance, bill_payments_pin_hash, psa_account_number, psa_bank_name, psa_status")
       .eq("id", businessId)
       .maybeSingle();
     if (bizErr) return json({ error: bizErr.message }, 500);
@@ -267,7 +267,7 @@ Deno.serve(async (req: Request) => {
         wallet_balance: Number(biz.bill_wallet_balance || 0), currency,
         psa_account_number: biz.psa_account_number || null, psa_bank_name: biz.psa_bank_name || null, psa_status: biz.psa_status || null,
         bill_pin_set: !!biz.bill_payments_pin_hash,
-        estimated_fee_percent: FLW_ESTIMATED_FEE_PERCENT,
+        topup_flat_fee: FONPAYEDGE_FLAT_FEE,
       }, 200);
     }
     // Shared by every simple list-fetch action below — if Bigisub itself
@@ -399,291 +399,58 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true }, 200);
     }
 
-    // ---------- wallet top-up (Flutterwave verify → credit) ----------
-    if (action === "fund_wallet_verify") {
-      const { transaction_id, expected_amount, expected_currency } = params;
-      if (!transaction_id || !expected_amount) return json({ error: "Missing transaction_id or expected_amount." }, 400);
-      if (!FLW_SECRET_KEY) return json({ error: "Payment verification isn't configured yet (missing FLW_SECRET_KEY)." }, 500);
-
-      const flwRes = await fetch(`https://api.flutterwave.com/v3/transactions/${transaction_id}/verify`, {
-        headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` },
-      });
-      const flwData = await flwRes.json();
-      const tx = flwData?.data;
-      const verified = flwRes.ok && flwData?.status === "success" && tx?.status === "successful"
-        && Number(tx.amount) >= Number(expected_amount) && tx.currency === (expected_currency || currency);
-      if (!verified) return json({ error: "Payment could not be verified." }, 400);
-
-      const { data: existing } = await admin.from("wallet_topups").select("id").eq("flutterwave_transaction_id", String(transaction_id)).maybeSingle();
-      if (existing) return json({ error: "This payment has already been credited." }, 400);
-
-      // Credit what Flutterwave actually settles to you, not the gross
-      // amount the customer paid — amount_settled already has their fee
-      // deducted, so this is what keeps you from silently absorbing it.
-      // Falls back to the gross amount only if that field is ever absent.
-      const settledAmount = Number(tx.amount_settled ?? tx.amount);
-      const newBalance = Number(biz.bill_wallet_balance || 0) + settledAmount;
-      const { error: updErr } = await admin.from("businesses").update({ bill_wallet_balance: newBalance }).eq("id", businessId);
-      if (updErr) return json({ error: updErr.message }, 500);
-
-      await admin.from("wallet_topups").insert({
-        id: crypto.randomUUID(), business_id: businessId, amount: settledAmount,
-        flutterwave_tx_ref: tx.tx_ref, flutterwave_transaction_id: String(transaction_id), status: "success",
-      });
-
-      return json({ wallet_balance: newBalance }, 200);
-    }
-
-    // ---------- wallet top-up (bank transfer via temporary virtual account) ----------
-    // Uses Flutterwave's plain virtual-account-numbers endpoint with
-    // is_permanent omitted/false, so no BVN is required. The account is
-    // single-use for this exact amount and expires — actual crediting
-    // happens in the separate flutterwave-webhook function when Flutterwave
-    // notifies us the transfer landed, NOT here (we only ask Flutterwave to
-    // generate the account here). This action just records a "pending" row
-    // so the webhook has something to match against.
-    if (action === "generate_bank_transfer_topup") {
-      const amount = Number(params.amount);
-      if (!amount || amount < 100) return json({ error: "Enter an amount of at least ₦100." }, 400);
-      if (!FLW_SECRET_KEY) return json({ error: "Bank transfer isn't configured yet (missing FLW_SECRET_KEY)." }, 500);
-
-      const txRef = `zeeshop_bt_${businessId}_${Date.now()}`;
-      const flwRes = await fetch("https://api.flutterwave.com/v3/virtual-account-numbers", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${FLW_SECRET_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: callerData.user.email || `business-${businessId}@zeeshop.app`,
-          amount, tx_ref: txRef,
-          narration: `ZeeShop Bill Wallet top-up`,
-          is_permanent: false,
-        }),
-      });
-      const flwData = await flwRes.json();
-      const acct = flwData?.data;
-      if (!flwRes.ok || flwData?.status !== "success" || !acct?.account_number) {
-        return json({ error: flwData?.message || "Could not generate a transfer account. Please try again." }, 502);
-      }
-
-      await admin.from("wallet_topups").insert({
-        id: crypto.randomUUID(), business_id: businessId, amount,
-        flutterwave_tx_ref: txRef, status: "pending",
-      });
-
-      return json({
-        tx_ref: txRef, account_number: acct.account_number, bank_name: acct.bank_name,
-        expiry_date: acct.expiry_date || null, amount,
-      }, 200);
-    }
-
-    // Lets the app poll after showing the account details. Doesn't just
-    // read the stored row anymore — if it's still "pending," this now
-    // independently asks Flutterwave directly (via verify_by_reference,
-    // using OUR OWN generated tx_ref — no Flutterwave transaction ID
-    // needed, which matters because we'd never have gotten one if the
-    // webhook never fired). This makes the whole bank-transfer flow
-    // self-healing the same way sync_psa_wallet already is for dedicated
-    // accounts: the webhook is the fast path, this is the fallback that
-    // still finds the money even if the webhook was never configured
-    // correctly, misfired, or hasn't been set up yet.
-    if (action === "check_bank_transfer_topup") {
-      const txRef = params.tx_ref;
-      if (!txRef) return json({ error: "Missing tx_ref." }, 400);
-      const { data: topup } = await admin.from("wallet_topups").select("id, status, amount").eq("flutterwave_tx_ref", txRef).eq("business_id", businessId).maybeSingle();
-      if (!topup) return json({ error: "Top-up not found." }, 404);
-      if (topup.status === "success") {
-        const { data: freshBiz } = await admin.from("businesses").select("bill_wallet_balance").eq("id", businessId).maybeSingle();
-        return json({ status: "success", wallet_balance: Number(freshBiz?.bill_wallet_balance || 0) }, 200);
-      }
-
-      if (FLW_SECRET_KEY) {
-        try {
-          const flwRes = await fetch(`https://api.flutterwave.com/v3/transactions/verify_by_reference?tx_ref=${encodeURIComponent(String(txRef))}`, {
-            headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` },
-          });
-          const flwData = await flwRes.json();
-          const tx = flwData?.data;
-          if (flwRes.ok && flwData?.status === "success" && tx?.status === "successful") {
-            const settledAmount = Number(tx.amount_settled ?? tx.amount);
-            const { data: freshBiz } = await admin.from("businesses").select("bill_wallet_balance").eq("id", businessId).maybeSingle();
-            const newBalance = Number(freshBiz?.bill_wallet_balance || 0) + settledAmount;
-            await admin.from("businesses").update({ bill_wallet_balance: newBalance }).eq("id", businessId);
-            await admin.from("wallet_topups").update({ status: "success", flutterwave_transaction_id: String(tx.id), amount: settledAmount }).eq("id", topup.id);
-            return json({ status: "success", wallet_balance: newBalance }, 200);
-          }
-        } catch (_e) {
-          // Flutterwave lookup failed (network hiccup, etc.) — fall through
-          // to reporting the stored status rather than erroring the poll.
-        }
-      }
-      return json({ status: topup.status }, 200);
-    }
-
-    // Catches any bank-transfer top-up left stuck as "pending" — including
-    // ones generated before this reconciliation logic existed, where the
-    // client has since navigated away and lost the one screen that used to
-    // be the only way to re-check a specific transfer. Runs automatically
-    // whenever the Bill Payments hub loads (see bpLoadWallet client-side),
-    // not just while a transfer's account-details screen happens to still
-    // be open — so a transfer made hours or days ago still gets found and
-    // credited the next time the owner opens the app, not just today's.
-    if (action === "reconcile_pending_bank_transfers") {
-      const { data: pending } = await admin.from("wallet_topups")
-        .select("id, flutterwave_tx_ref, amount").eq("business_id", businessId).eq("status", "pending")
-        .not("flutterwave_tx_ref", "is", null).limit(20);
-      let credited = 0;
-      let runningBalance = Number(biz.bill_wallet_balance || 0);
-      if (FLW_SECRET_KEY) {
-        for (const topup of pending || []) {
-          try {
-            const flwRes = await fetch(`https://api.flutterwave.com/v3/transactions/verify_by_reference?tx_ref=${encodeURIComponent(String(topup.flutterwave_tx_ref))}`, {
-              headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` },
-            });
-            const flwData = await flwRes.json();
-            const tx = flwData?.data;
-            if (flwRes.ok && flwData?.status === "success" && tx?.status === "successful") {
-              const settledAmount = Number(tx.amount_settled ?? tx.amount);
-              runningBalance += settledAmount;
-              await admin.from("wallet_topups").update({ status: "success", flutterwave_transaction_id: String(tx.id), amount: settledAmount }).eq("id", topup.id);
-              credited++;
-            }
-          } catch (_e) { /* skip this one, try the rest */ }
-        }
-      }
-      if (credited > 0) await admin.from("businesses").update({ bill_wallet_balance: runningBalance }).eq("id", businessId);
-      return json({ credited, wallet_balance: runningBalance }, 200);
-    }
-
-    // ---------- wallet top-up (dedicated permanent account — Payout Subaccounts) ----------
-    // This is Flutterwave's Payout Subaccounts (PSA) product — NOT the same
-    // endpoint as fund_wallet_verify/generate_bank_transfer_topup above.
-    // Confirmed from Flutterwave's own PSA reference docs (including exact
-    // request/response bodies): creating a PSA wallet only needs
-    // account_name/email/mobilenumber/country — no BVN anywhere. Per
-    // Flutterwave support directly: no manual approval is needed for this
-    // feature itself, but your Flutterwave account must be fully
-    // KYC-verified / live-approved before PSA calls succeed in production.
-    // The bank-facing account name that actually gets issued may NOT match
-    // what you send as account_name (Flutterwave's own docs show "John Doe"
-    // submitted but "Flutterwave Developers" issued instead) — expected,
-    // not a bug, and matches Billpoint's own screen (generic "Billpoint
-    // Checkout" name, not the individual customer's). One account is
-    // created once per business and reused forever — never regenerated.
-    //
-    // Create already returns the account number (nuban) directly in most
-    // cases — confirmed from the docs' own example response. As a fallback
-    // (documented as a separate "fetch static account" endpoint, for cases
-    // where create doesn't include it, or to re-fetch it later), this also
-    // calls GET .../static-account if nuban is missing from the create
-    // response.
+    // ---------- wallet top-up: dedicated account (FonPayEdge) ----------
+    // One permanent virtual account per business, created once and reused.
+    // Money sent to it is credited by the separate fonpayedge-webhook
+    // function (minus the flat fee) — NOT here. This action only creates
+    // the account and stores its number/bank on the business row.
+    // The business is identified on FonPayEdge's side by the unique email
+    // walletEmailFor(businessId) — the webhook matches payments back to
+    // the business through that email.
+    // (The old psa_account_reference column is no longer used; the
+    // psa_account_number / psa_bank_name / psa_status columns are reused.)
     if (action === "get_or_create_psa_account") {
       if (biz.psa_account_number && biz.psa_status === "active") {
         return json({ account_number: biz.psa_account_number, bank_name: biz.psa_bank_name, status: biz.psa_status }, 200);
       }
-      if (!FLW_SECRET_KEY) return json({ error: "Dedicated accounts aren't configured yet (missing FLW_SECRET_KEY)." }, 500);
-
-      const flwRes = await fetch("https://api.flutterwave.com/v3/payout-subaccounts", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${FLW_SECRET_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          account_name: biz.name || "ZeeShop Business",
-          email: callerData.user.email || `business-${businessId}@zeeshop.app`,
-          mobilenumber: caller.phone || "08000000000",
-          // Hardcoded, not biz.country — Bigisub and every service in this
-          // feature are Nigeria-only, and biz.country likely stores a full
-          // name ("Nigeria") rather than the ISO2 code ("NG") Flutterwave's
-          // PSA endpoint actually requires, which is what triggered
-          // "country length must be 2 characters long."
-          country: "NG",
-        }),
-      });
-      const flwData = await flwRes.json();
-      let acct = flwData?.data;
-      if (!flwRes.ok || flwData?.status !== "success" || !acct?.account_reference) {
-        const msg = flwData?.message || "Could not set up a dedicated account.";
-        return json({ error: /not enabled|not permitted|unauthorized|kyc|verif/i.test(msg) ? `${msg} — this usually means your Flutterwave account isn't fully KYC-verified / live-approved yet.` : msg }, 502);
+      if (!FONPAYEDGE_SECRET_KEY || !FONPAYEDGE_BUSINESS_ID) {
+        return json({ error: "Dedicated accounts aren't configured yet (missing FonPayEdge keys)." }, 500);
       }
 
-      // Fallback: some create responses may not include nuban directly —
-      // fetch it explicitly from the static-account endpoint in that case.
-      if (!acct.nuban) {
-        const staticRes = await fetch(`https://api.flutterwave.com/v3/payout-subaccounts/${acct.account_reference}/static-account?verbose=1`, {
-          headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` },
+      const bizName = biz.name || "ZeeShop Business";
+      let fpRes: Response;
+      let fpData: any = null;
+      try {
+        fpRes = await fetch(`${FONPAYEDGE_BASE}/createVirtualAccount/`, {
+          method: "POST",
+          headers: { Token: FONPAYEDGE_SECRET_KEY, businessid: FONPAYEDGE_BUSINESS_ID, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            accountName: bizName,
+            firstname: caller.first_name || "ZeeShop",
+            lastname: caller.last_name || bizName,
+            phone: caller.phone || "08000000000",
+            email: walletEmailFor(String(businessId)),
+            ref: String(businessId),
+          }),
         });
-        const staticData = await staticRes.json();
-        const staticAcct = staticData?.data?.static_accounts?.[0] || staticData?.data?.static_virtual_accounts?.[0];
-        if (staticRes.ok && staticAcct) {
-          acct = { ...acct, nuban: staticAcct.account_number, bank_name: staticAcct.bank_name };
-        }
+        try { fpData = await fpRes.json(); } catch (_e) { /* non-JSON response */ }
+      } catch (_e) {
+        return json({ error: "Could not reach the payment provider. Please try again." }, 502);
       }
-      if (!acct.nuban) return json({ error: "Account created but no account number came back yet — try Refresh Balance in a moment." }, 502);
 
-      await admin.from("businesses").update({
-        psa_account_reference: acct.account_reference, psa_account_number: acct.nuban,
-        psa_bank_name: acct.bank_name, psa_status: acct.status || "active",
+      const acct = fpData?.data;
+      if (!fpRes.ok || fpData?.status !== "success" || !acct?.bankAccountNumber) {
+        const msg = (typeof fpData?.message === "string" && fpData.message) || "Could not set up a dedicated account.";
+        return json({ error: msg }, 502);
+      }
+
+      const bankName = acct.walletBank || acct.bankName || "Bank";
+      const { error: saveErr } = await admin.from("businesses").update({
+        psa_account_number: String(acct.bankAccountNumber), psa_bank_name: bankName, psa_status: "active",
       }).eq("id", businessId);
+      if (saveErr) return json({ error: saveErr.message }, 500);
 
-      return json({ account_number: acct.nuban, bank_name: acct.bank_name, status: acct.status || "active" }, 200);
-    }
-
-    // Reconciliation fallback for PSA funding — doesn't replace the
-    // webhook (still the fast path), but the exact webhook payload shape
-    // for PSA funding events wasn't part of anything confirmed from docs,
-    // so this gives a second, independently-confirmed way to catch a
-    // transfer even if that guess turns out wrong: Flutterwave's own PSA
-    // transactions-list endpoint. Called on a timer from the client while
-    // the PSA top-up screen is open, and available as a manual "Sync Now."
-    // Each Flutterwave transaction's `reference` is stored as this
-    // business's flutterwave_transaction_id, and the column's unique
-    // constraint is what actually prevents double-crediting if the
-    // webhook and this sync both see the same transfer — inserting first
-    // and only crediting the balance if that insert succeeds, rather than
-    // checking-then-inserting, so the two can't race each other into a
-    // double credit.
-    //
-    // The lookback window tracks psa_last_synced_at per business rather
-    // than always using a fixed "30 days ago" — a fixed window means a
-    // transfer landing more than 30 days before the NEXT time anyone opens
-    // this screen would fall outside the window forever, not just be
-    // delayed. Using last-synced-at (with a 1-day overlap buffer, in case
-    // Flutterwave's own transaction timestamps lag slightly behind when we
-    // last checked) means every sync only needs to cover the gap since the
-    // previous one, however long that gap was.
-    if (action === "sync_psa_wallet") {
-      if (!biz.psa_account_reference) return json({ error: "No dedicated account set up yet." }, 400);
-      const lastSyncedAt: string | null = (biz as any).psa_last_synced_at || null;
-      const from = lastSyncedAt
-        ? new Date(new Date(lastSyncedAt).getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-        : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10); // first-ever sync: 30-day initial lookback
-      const to = new Date().toISOString().slice(0, 10);
-      const flwRes = await fetch(`https://api.flutterwave.com/v3/payout-subaccounts/${biz.psa_account_reference}/transactions?from=${from}&to=${to}`, {
-        headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` },
-      });
-      const flwData = await flwRes.json();
-      const txns: any[] = flwData?.data?.transactions || [];
-      let synced = 0;
-      let runningBalance = Number(biz.bill_wallet_balance || 0);
-      for (const t of txns) {
-        if (t.type !== "credit" || t.status !== "successful" || !t.reference) continue;
-        // This endpoint's own response doesn't include amount_settled or
-        // any fee field the way the main transaction-verify endpoints do
-        // (only id/type/amount/currency/narration/status/reference/
-        // created_at are documented) — so unlike every other top-up path
-        // in this file, there's no real fee figure to deduct here. Falls
-        // back to the same estimated percentage shown to the person
-        // before funding, applied to what actually gets credited.
-        const netAmount = Math.round(Number(t.amount) * (1 - FLW_ESTIMATED_FEE_PERCENT / 100) * 100) / 100;
-        const { error: insertErr } = await admin.from("wallet_topups").insert({
-          id: crypto.randomUUID(), business_id: businessId, amount: netAmount,
-          flutterwave_transaction_id: String(t.reference), status: "success",
-        });
-        if (insertErr) continue; // unique-constraint conflict = already recorded (by webhook or a prior sync) — skip, don't double-credit
-        runningBalance += netAmount;
-        synced++;
-      }
-      const bizUpdate: Record<string, unknown> = { psa_last_synced_at: new Date().toISOString() };
-      if (synced > 0) bizUpdate.bill_wallet_balance = runningBalance;
-      await admin.from("businesses").update(bizUpdate).eq("id", businessId);
-      return json({ wallet_balance: runningBalance, synced }, 200);
+      return json({ account_number: String(acct.bankAccountNumber), bank_name: bankName, status: "active" }, 200);
     }
 
     // ---------- purchases (debit wallet, call Bigisub, log) ----------

@@ -8371,7 +8371,7 @@ let billPinOtpSent = false; // whether a reset code has been requested this sess
 let billPinOtpSending = false;
 let billPinOtpDraft = ''; // entered 6-digit code
 let billPinOtpMaskedEmail = '';
-let billEstimatedFeePercent = 2.0; // Flutterwave's estimated cut on Bank Transfer / My Account top-ups — shown before funding, not charged by us
+let billTopupFlatFee = 50; // flat fee deducted from each transfer received — real value comes from my_wallet_summary
 let billCurrency = 'NGN';
 
 // Reference data from Bigisub, cached per app session only — prices and
@@ -8649,24 +8649,10 @@ async function bpLoadWallet(){
     const r = await callBigisub('my_wallet_summary', {});
     billWalletBalance = r.wallet_balance; billCurrency = r.currency || 'NGN';
     billPinSet = !!r.bill_pin_set; billPinStatusLoaded = true;
-    if(r.estimated_fee_percent) billEstimatedFeePercent = r.estimated_fee_percent;
+    if(r.topup_flat_fee != null) billTopupFlatFee = Number(r.topup_flat_fee);
     if(r.psa_account_number){ billPsaAccountNumber = r.psa_account_number; billPsaBankName = r.psa_bank_name; }
   }catch(e){ billWalletError = e.message || 'Something went wrong.'; }
   billLoading = false; refreshMain();
-  if(billWalletError) return; // don't also fire the reconcile call below on a failed load
-  // Catches any bank-transfer top-up left stuck as "pending" — including
-  // ones generated before the webhook was configured correctly, where
-  // there's no longer any screen showing that specific transfer to
-  // manually re-check. Silent unless it actually finds something.
-  try{
-    const rec = await callBigisub('reconcile_pending_bank_transfers', {});
-    if(rec.credited > 0){
-      billWalletBalance = rec.wallet_balance;
-      logAudit('bill_wallet_topup', `Recovered ${rec.credited} previously-stuck bank transfer top-up(s)`);
-      toast(`Found and credited ${rec.credited} pending transfer${rec.credited>1?'s':''} ✅`);
-      refreshMain();
-    }
-  }catch(e){ /* silent — this is a background safety net, not a user-facing action */ }
 }
 
 // Lets Settings show accurate PIN status even if Bill Payments has never
@@ -8736,19 +8722,10 @@ function bindBillPaymentsEvents(){
 }
 
 /* ---------------- TOP UP ----------------
-   Two methods:
-   - Card: Flutterwave's inline checkout, verified synchronously right
-     after payment (fund_wallet_verify) — same pattern as subscriptions.
-   - Bank Transfer: a temporary virtual account (no BVN needed) generated
-     for this exact amount. Crediting happens asynchronously via the
-     flutterwave-webhook function when the transfer lands, so this screen
-     polls every few seconds while it's open to reflect that as soon as
-     it happens rather than making the owner manually refresh. */
-let billTopupMode = 'card'; // 'card' | 'bank' | 'psa'
-let billBankTopup = null;   // { tx_ref, account_number, bank_name, expiry_date, amount } once generated
-let billBankAmountDraft = ''; // live-updated as they type, so the fee preview updates before generating an account
-let billBankTopupPolling = false;
-let billBankTopupPollTimer = null;
+   One permanent dedicated account number per business (FonPayEdge).
+   Transfers to it are credited by the fonpayedge-webhook function (minus
+   a flat fee), so while this screen is open it just re-reads the wallet
+   balance every few seconds to show a new credit as soon as it lands. */
 let billPsaAccountNumber = null; // set from my_wallet_summary once the business has a dedicated account
 let billPsaBankName = null;
 let billPsaLoading = false;
@@ -8759,42 +8736,8 @@ function screenBillTopup(){
   return `
     ${bpHeader('Add Money')}
     <div class="card">
-      <p class="subtle">Fund your Bill Wallet to start selling airtime, data and bills. Payments are processed securely by Flutterwave.</p>
-      <div style="display:flex;gap:8px;margin-bottom:12px;">
-        <button class="btn ${billTopupMode==='card'?'btn-primary':'btn-outline'} btn-sm" id="bp-mode-card" style="flex:1;">Card</button>
-        <button class="btn ${billTopupMode==='bank'?'btn-primary':'btn-outline'} btn-sm" id="bp-mode-bank" style="flex:1;">Bank Transfer</button>
-        <button class="btn ${billTopupMode==='psa'?'btn-primary':'btn-outline'} btn-sm" id="bp-mode-psa" style="flex:1;">My Account</button>
-      </div>
-      ${billTopupMode==='card' ? `
-        <div class="field"><label>Amount (${billCurrency})</label><input id="bp-topup-amount" type="number" min="100" placeholder="e.g. 5000"></div>
-        ${billPurchaseBtnHtml('bp-topup-confirm', 'Fund Wallet')}
-      ` : billTopupMode==='bank' ? screenBillTopupBank() : screenBillTopupPsa()}
-    </div>
-  `;
-}
-
-function screenBillTopupBank(){
-  if(!billBankTopup){
-    const amt = Number(billBankAmountDraft||0);
-    const estNet = amt>0 ? Math.round(amt * (1 - billEstimatedFeePercent/100) * 100)/100 : 0;
-    return `
-      <div class="field"><label>Amount (${billCurrency})</label><input id="bp-bank-amount" type="number" min="100" placeholder="e.g. 5000" value="${escAttr(billBankAmountDraft)}"></div>
-      ${amt>0 ? `<p class="subtle">Flutterwave charges an estimated ${billEstimatedFeePercent}% on transfers — you'll send ${fmtMoney(amt)}, approximately <b>${fmtMoney(estNet)}</b> will be credited to your Bill Wallet.</p>` : `<p class="subtle" style="font-size:11px;">Flutterwave charges an estimated ${billEstimatedFeePercent}% fee on transfers, deducted automatically before crediting your wallet.</p>`}
-      <button class="btn btn-primary" id="bp-bank-generate">Get Transfer Account</button>
-    `;
-  }
-  const b = billBankTopup;
-  const estNet = Math.round(Number(b.amount) * (1 - billEstimatedFeePercent/100) * 100)/100;
-  return `
-    <div style="text-align:center;padding:12px 0;">
-      <p class="subtle">Transfer exactly <b>${fmtMoney(b.amount)}</b> to:</p>
-      <div style="font-size:22px;font-weight:700;letter-spacing:1px;margin:6px 0;">${escapeHtml(b.account_number)}</div>
-      <div class="t1">${escapeHtml(b.bank_name)}</div>
-      <p class="subtle" style="font-size:11px;margin-top:4px;">After Flutterwave's estimated ${billEstimatedFeePercent}% fee, approximately ${fmtMoney(estNet)} will be credited.</p>
-      ${b.expiry_date ? `<p class="subtle" style="font-size:11px;margin-top:6px;">Expires ${new Date(b.expiry_date).toLocaleString()}</p>` : ''}
-      <button class="btn btn-outline btn-sm" id="bp-bank-copy" style="margin-top:10px;">Copy Account Number</button>
-      <p class="subtle" style="margin-top:14px;">${billBankTopupPolling ? 'Waiting for the transfer to land…' : 'Checking…'}</p>
-      <button class="btn btn-outline btn-sm" id="bp-bank-cancel">Start Over</button>
+      <p class="subtle">Fund your Bill Wallet to start selling airtime, data and bills.</p>
+      ${screenBillTopupPsa()}
     </div>
   `;
 }
@@ -8804,7 +8747,7 @@ function screenBillTopupPsa(){
   if(!billPsaAccountNumber){
     return `
       <p class="subtle">Get one dedicated account number for your business — transfer to it anytime, any amount, and it always credits your Bill Wallet. No need to generate a new one each time.</p>
-      <p class="subtle" style="font-size:11px;">Flutterwave charges an estimated ${billEstimatedFeePercent}% fee on funds received here, deducted automatically before crediting your wallet — not charged separately.</p>
+      <p class="subtle" style="font-size:11px;">A fee of ${fmtMoney(billTopupFlatFee)} is deducted from each transfer before it's credited to your wallet.</p>
       <button class="btn btn-primary" id="bp-psa-setup">Set Up My Dedicated Account</button>
     `;
   }
@@ -8813,23 +8756,16 @@ function screenBillTopupPsa(){
       <p class="subtle">Your permanent top-up account — transfer any amount, anytime:</p>
       <div style="font-size:22px;font-weight:700;letter-spacing:1px;margin:6px 0;">${escapeHtml(billPsaAccountNumber)}</div>
       <div class="t1">${escapeHtml(billPsaBankName||'')}</div>
-      <p class="subtle" style="font-size:11px;margin-top:4px;">An estimated ${billEstimatedFeePercent}% Flutterwave fee is deducted from whatever you transfer before it's credited.</p>
+      <p class="subtle" style="font-size:11px;margin-top:4px;">A fee of ${fmtMoney(billTopupFlatFee)} is deducted from each transfer before it's credited to your wallet.</p>
       <button class="btn btn-outline btn-sm" id="bp-psa-copy" style="margin-top:10px;">Copy Account Number</button>
-      <br><button class="btn btn-outline btn-sm" id="bp-psa-sync" style="margin-top:10px;">${billPsaSyncing?'Checking…':'↻ Sync Now'}</button>
-      <p class="subtle" style="font-size:11px;margin-top:10px;">Already checking automatically every few seconds while this is open.</p>
+      <br><button class="btn btn-outline btn-sm" id="bp-psa-sync" style="margin-top:10px;">${billPsaSyncing?'Checking…':'↻ Refresh Balance'}</button>
+      <p class="subtle" style="font-size:11px;margin-top:10px;">Your balance updates automatically within a few seconds of your transfer.</p>
     </div>
   `;
 }
 
-
 function bindBillTopupEvents(){
-  const modeCard = document.getElementById('bp-mode-card');
-  const modeBank = document.getElementById('bp-mode-bank');
-  if(modeCard) modeCard.addEventListener('click', ()=>{ billTopupMode='card'; bpStopBankPolling(); bpStopPsaPolling(); refreshMain(); });
-  if(modeBank) modeBank.addEventListener('click', ()=>{ billTopupMode='bank'; bpStopPsaPolling(); refreshMain(); });
-  const modePsa = document.getElementById('bp-mode-psa');
-  if(modePsa) modePsa.addEventListener('click', ()=>{ billTopupMode='psa'; bpStopBankPolling(); refreshMain(); });
-  if(billTopupMode==='psa' && billPsaAccountNumber && !billPsaPollTimer) bpStartPsaPolling();
+  if(billPsaAccountNumber && !billPsaPollTimer) bpStartPsaPolling();
 
   const psaSetupBtn = document.getElementById('bp-psa-setup');
   if(psaSetupBtn) psaSetupBtn.addEventListener('click', async ()=>{
@@ -8849,109 +8785,32 @@ function bindBillTopupEvents(){
   });
   const psaSyncBtn = document.getElementById('bp-psa-sync');
   if(psaSyncBtn) psaSyncBtn.addEventListener('click', ()=>bpSyncPsaWallet(true));
-
-  const btn = document.getElementById('bp-topup-confirm');
-  if(btn) btn.addEventListener('click', ()=>{
-    if(billPurchaseInFlight) return;
-    const amount = Number(document.getElementById('bp-topup-amount').value||0);
-    if(amount < 100){ toast('Enter at least ₦100.'); return; }
-    if(!navigator.onLine){ toast('You need an internet connection to top up.'); return; }
-    const u = currentUser();
-    const txRef = 'zeeshop_billwallet_' + uid('txn');
-    billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
-    FlutterwaveCheckout({
-      public_key: FLW_PUBLIC_KEY,
-      tx_ref: txRef,
-      amount: amount,
-      currency: billCurrency,
-      payment_options: 'card',
-      meta: { business_id: business().id, purpose: 'bill_wallet_topup' },
-      customer: { email: (u && u.email) || 'customer@zeeshop.app', name: (u ? (u.firstName+' '+(u.lastName||'')) : 'ZeeShop Customer') },
-      customizations: { title: 'ZeeShop Bill Wallet', description: 'Top up bill payments wallet' },
-      callback: async function(response){
-        if(response && (response.status==='successful' || response.status==='completed')){
-          billPurchaseStage = 'Confirming payment…'; refreshMain();
-          try{
-            const r = await callBigisub('fund_wallet_verify', { transaction_id: response.transaction_id, expected_amount: amount, expected_currency: billCurrency });
-            billWalletBalance = r.wallet_balance;
-            billRecordTxAttribution(txRef);
-            billRecordTxAttribution(response.transaction_id);
-            logAudit('bill_wallet_topup', `Funded bill wallet with ${fmtMoney(amount)} (card)`);
-            toast('Wallet funded ✅'); billScreen='hub';
-          }catch(e){ toast('Payment received, but confirming it failed: '+e.message+'. Contact support if the balance doesn\'t update shortly.'); }
-        } else { toast('Payment was not completed.'); }
-        billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
-      },
-      onclose: function(){ billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain(); }
-    });
-  });
-
-  const bankAmountInput = document.getElementById('bp-bank-amount');
-  if(bankAmountInput) bankAmountInput.addEventListener('input', e=>{ billBankAmountDraft = e.target.value; refreshMain(); });
-  const genBtn = document.getElementById('bp-bank-generate');
-  if(genBtn) genBtn.addEventListener('click', async ()=>{
-    const amount = Number(billBankAmountDraft||0);
-    if(amount < 100){ toast('Enter at least ₦100.'); return; }
-    genBtn.disabled = true; genBtn.textContent = 'Generating…';
-    try{
-      const r = await callBigisub('generate_bank_transfer_topup', { amount });
-      billBankTopup = r; billBankAmountDraft = '';
-      if(r && r.tx_ref) billRecordTxAttribution(r.tx_ref);
-      refreshMain();
-      bpStartBankPolling();
-    }catch(e){ toast(e.message); genBtn.disabled=false; genBtn.textContent='Get Transfer Account'; }
-  });
-  const copyBtn = document.getElementById('bp-bank-copy');
-  if(copyBtn) copyBtn.addEventListener('click', ()=>{
-    if(navigator.clipboard) navigator.clipboard.writeText(billBankTopup.account_number);
-    toast('Account number copied');
-  });
-  const cancelBtn = document.getElementById('bp-bank-cancel');
-  if(cancelBtn) cancelBtn.addEventListener('click', ()=>{ bpStopBankPolling(); billBankTopup=null; billBankAmountDraft=''; refreshMain(); });
 }
 
-function bpStartBankPolling(){
-  billBankTopupPolling = true;
-  bpStopBankPolling(); // clear any previous timer first
-  billBankTopupPollTimer = setInterval(async ()=>{
-    if(!billBankTopup || billScreen!=='topup'){ bpStopBankPolling(); return; }
-    try{
-      const r = await callBigisub('check_bank_transfer_topup', { tx_ref: billBankTopup.tx_ref });
-      if(r.status==='success'){
-        bpStopBankPolling();
-        billWalletBalance = r.wallet_balance;
-        logAudit('bill_wallet_topup', `Funded bill wallet with ${fmtMoney(billBankTopup.amount)} (bank transfer)`);
-        billBankTopup = null;
-        toast('Wallet funded ✅'); billScreen='hub'; refreshMain();
-      }
-    }catch(e){ /* keep polling silently — a single failed check isn't worth interrupting the owner */ }
-  }, 5000);
-}
-function bpStopBankPolling(){
-  billBankTopupPolling = false;
-  if(billBankTopupPollTimer){ clearInterval(billBankTopupPollTimer); billBankTopupPollTimer=null; }
-}
-
+// Re-reads the wallet balance from the server. A rise in balance means a
+// transfer was credited by the webhook since the last check.
 async function bpSyncPsaWallet(manual){
   if(billPsaSyncing) return;
   billPsaSyncing = true; if(manual) refreshMain();
   try{
-    const r = await callBigisub('sync_psa_wallet', {});
+    const before = Number(billWalletBalance || 0);
+    const r = await callBigisub('my_wallet_summary', {});
     billWalletBalance = r.wallet_balance;
-    if(r.synced > 0){
-      logAudit('bill_wallet_topup', `Funded bill wallet via dedicated account (${r.synced} transfer${r.synced>1?'s':''} synced)`);
-      if(manual) toast(`Synced ${r.synced} new transfer${r.synced>1?'s':''} ✅`);
+    if(r.topup_flat_fee != null) billTopupFlatFee = Number(r.topup_flat_fee);
+    const added = Number(r.wallet_balance || 0) - before;
+    if(added > 0){
+      logAudit('bill_wallet_topup', `Funded bill wallet with ${fmtMoney(added)} via dedicated account`);
+      toast(`${fmtMoney(added)} added to your wallet ✅`);
     } else if(manual){
-      toast('No new transfers found yet.');
+      toast('No new transfers yet.');
     }
   }catch(e){ if(manual) toast(e.message); }
   billPsaSyncing = false; refreshMain();
 }
 function bpStartPsaPolling(){
   bpStopPsaPolling(); // clear any previous timer first
-  bpSyncPsaWallet(false); // check immediately rather than waiting for the first 8s tick
   billPsaPollTimer = setInterval(()=>{
-    if(!billPsaAccountNumber || billScreen!=='topup' || billTopupMode!=='psa'){ bpStopPsaPolling(); return; }
+    if(!billPsaAccountNumber || billScreen!=='topup'){ bpStopPsaPolling(); return; }
     bpSyncPsaWallet(false);
   }, 8000);
 }

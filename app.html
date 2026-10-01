@@ -8736,7 +8736,7 @@ function screenBillTopup(){
   return `
     ${bpHeader('Add Money')}
     <div class="card">
-      <p class="subtle">Fund your Bill Wallet to start selling airtime, data and bills.</p>
+      <p class="subtle">Fund your Bill Wallet to buy airtime, data and pay bills.</p>
       ${screenBillTopupPsa()}
     </div>
   `;
@@ -8746,7 +8746,7 @@ function screenBillTopupPsa(){
   if(billPsaLoading) return `<p class="subtle">Setting up your dedicated account…</p>`;
   if(!billPsaAccountNumber){
     return `
-      <p class="subtle">Get one dedicated account number for your business — transfer to it anytime, any amount, and it always credits your Bill Wallet. No need to generate a new one each time.</p>
+      <p class="subtle">Get your own dedicated account number — transfer to it anytime, any amount, and it always credits your Bill Wallet. No need to generate a new one each time.</p>
       <p class="subtle" style="font-size:11px;">A fee of ${fmtMoney(billTopupFlatFee)} is deducted from each transfer before it's credited to your wallet.</p>
       <button class="btn btn-primary" id="bp-psa-setup">Set Up My Dedicated Account</button>
     `;
@@ -8830,7 +8830,7 @@ function screenBillAirtime(){
       </div>
       <div class="field"><label>Phone Number</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
       <div class="field"><label>Amount (₦)</label><input id="bp-amount" type="number" min="50" value="${escAttr(billForm.amount)}" placeholder="e.g. 500"></div>
-      ${cost>0 ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
+      ${cost>0 ? `<p class="subtle">You pay <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
       ${billPurchaseBtnHtml('bp-airtime-confirm', 'Buy Airtime')}
     </div>
   `;
@@ -8889,7 +8889,7 @@ function screenBillData(){
       <label style="display:flex;align-items:center;gap:8px;margin:8px 0;font-size:13px;">
         <input type="checkbox" id="bp-ported" ${billForm.ported?'checked':''}> This number was ported from another network
       </label>
-      ${chosen ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
+      ${chosen ? `<p class="subtle">You pay <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
       ${billPurchaseBtnHtml('bp-data-confirm', 'Buy Data')}
     </div>
   `;
@@ -8956,7 +8956,7 @@ function screenBillCable(){
         </select>
       </div>
       <div class="field"><label>Phone Number (for receipt)</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
-      ${chosen ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
+      ${chosen ? `<p class="subtle">You pay <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
       ${billPurchaseBtnHtml('bp-cable-confirm', 'Pay Subscription')}
       `}
     </div>
@@ -9040,7 +9040,7 @@ function screenBillElectricity(){
       <p class="subtle" style="color:var(--marigold-dark);">✓ Verified: <b>${escapeHtml(billForm.elecCustomerName)}</b> <a href="#" id="bp-elec-reverify" style="margin-left:8px;">change</a></p>
       <div class="field"><label>Phone Number (for receipt)</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
       <div class="field"><label>Amount (₦)</label><input id="bp-amount" type="number" min="500" value="${escAttr(billForm.amount)}" placeholder="e.g. 5000"></div>
-      ${amount>0 ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
+      ${amount>0 ? `<p class="subtle">You pay <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
       ${billPurchaseBtnHtml('bp-elec-confirm', 'Buy Token')}
       `}
     </div>
@@ -9117,7 +9117,7 @@ function screenBillBetting(){
       </div>
       <div class="field"><label>Customer/Betting ID</label><input id="bp-customer-id" value="${escAttr(billForm.customerId)}" placeholder="e.g. 123456"></div>
       <div class="field"><label>Amount (₦)</label><input id="bp-amount" type="number" min="100" value="${escAttr(billForm.amount)}" placeholder="e.g. 1000"></div>
-      ${amount>0 ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
+      ${amount>0 ? `<p class="subtle">You pay <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
       <p class="subtle" style="font-size:11px;">We'll confirm the account name right before funding — this platform expires that confirmation quickly, so there's no separate "verify" step here.</p>
       ${billPurchaseBtnHtml('bp-betting-confirm', 'Fund Wallet')}
     </div>
@@ -9183,7 +9183,7 @@ function screenBillResultChecker(){
         </select>
       </div>
       <div class="field"><label>Quantity</label><input id="bp-qty" type="number" min="1" value="${qty}"></div>
-      ${chosen ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b> (₦${unit} × ${qty}) — deducted from your Bill Wallet.</p>` : ''}
+      ${chosen ? `<p class="subtle">You pay <b>${fmtMoney(price)}</b> (₦${unit} × ${qty}) — deducted from your Bill Wallet.</p>` : ''}
       ${billPurchaseBtnHtml('bp-rc-confirm', 'Buy PIN(s)')}
     </div>
   `;
@@ -9260,7 +9260,7 @@ function screenBillIsp(){
       </div>
       <div class="field"><label>Phone Number</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
       ${isSmile ? `<div class="field"><label>Email</label><input id="bp-email" type="email" value="${escAttr(billForm.email)}" placeholder="customer@email.com"></div>` : `<div class="field"><label>Quantity</label><input id="bp-qty" type="number" min="1" value="${billForm.qty||1}"></div>`}
-      ${chosen ? `<p class="subtle">Customer pays <b>${fmtMoney(price)}</b>${ispQty>1?` (₦${unit} × ${ispQty})`:''} — deducted from your Bill Wallet.</p>` : ''}
+      ${chosen ? `<p class="subtle">You pay <b>${fmtMoney(price)}</b>${ispQty>1?` (₦${unit} × ${ispQty})`:''} — deducted from your Bill Wallet.</p>` : ''}
       ${billPurchaseBtnHtml('bp-isp-confirm', 'Buy Plan')}
       ` : ''}
     </div>

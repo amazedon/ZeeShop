@@ -65,17 +65,17 @@ const BIGISUB_PIN = Deno.env.get("BIGISUB_PIN") || ""; // the Bigisub ACCOUNT's 
 // FonPayEdge — wallet funding (permanent virtual account per business).
 // Subscriptions still use Flutterwave elsewhere (verify-payment /
 // flutterwave-webhook); nothing in THIS file uses Flutterwave anymore.
-// Set both as Supabase secrets (never in code or chat):
-//   FONPAYEDGE_SECRET_KEY, FONPAYEDGE_BUSINESS_ID
+// Secret (Supabase → Edge Functions → Secrets): FONPAYEDGE_SECRET_KEY
+// = your LIVE secret key (starts "sck_"). A test key (sck_test_…) only
+// makes pretend accounts that can't receive real money.
 const FONPAYEDGE_SECRET_KEY = Deno.env.get("FONPAYEDGE_SECRET_KEY") || "";
-const FONPAYEDGE_BUSINESS_ID = Deno.env.get("FONPAYEDGE_BUSINESS_ID") || "";
-const FONPAYEDGE_BASE = "https://fonpayedge.ng/api";
-// FonPayEdge's flat fee per transfer received. fonpayedge-webhook deducts
-// the same amount before crediting the wallet — keep both in sync (same
-// FONPAYEDGE_FLAT_FEE secret, default 50). Only used here to show the fee.
+const FONPAYEDGE_BASE = "https://dashboard.fonpayedge.ng/api/v1";
+// DISPLAY ONLY: the flat fee shown on the Add Money screen. The amount
+// actually credited comes from FonPayEdge's own record of each payment
+// (see fonpayedge-webhook), so this can't cause a wrong credit.
 const FONPAYEDGE_FLAT_FEE = Number(Deno.env.get("FONPAYEDGE_FLAT_FEE")) || 50;
-// Each business's virtual account is registered under this unique email;
-// fonpayedge-webhook reads the business id back out of it. Must match.
+// Each business's virtual account is registered under this unique email,
+// used by fonpayedge-webhook as a backup way to match a payment.
 const walletEmailFor = (businessId: string) => `${businessId}@wallet.zeeshop.app`;
 
 const EP = {
@@ -401,36 +401,82 @@ Deno.serve(async (req: Request) => {
 
     // ---------- wallet top-up: dedicated account (FonPayEdge) ----------
     // One permanent virtual account per business, created once and reused.
-    // Money sent to it is credited by the separate fonpayedge-webhook
-    // function (minus the flat fee) — NOT here. This action only creates
-    // the account and stores its number/bank on the business row.
-    // The business is identified on FonPayEdge's side by the unique email
-    // walletEmailFor(businessId) — the webhook matches payments back to
-    // the business through that email.
-    // (The old psa_account_reference column is no longer used; the
-    // psa_account_number / psa_bank_name / psa_status columns are reused.)
+    // The bank opens it with the person's BVN *or* NIN (exactly one), plus
+    // their first name, last name and phone. The ID number is passed
+    // straight through to FonPayEdge and is NEVER stored or logged here.
+    // Money sent to the account is credited by fonpayedge-webhook — not here.
+    // FonPayEdge charges any verification fee to OUR FonPayEdge wallet (and
+    // refunds it if the bank refuses), not to the business owner.
     if (action === "get_or_create_psa_account") {
       if (biz.psa_account_number && biz.psa_status === "active") {
         return json({ account_number: biz.psa_account_number, bank_name: biz.psa_bank_name, status: biz.psa_status }, 200);
       }
-      if (!FONPAYEDGE_SECRET_KEY || !FONPAYEDGE_BUSINESS_ID) {
-        return json({ error: "Dedicated accounts aren't configured yet (missing FonPayEdge keys)." }, 500);
+      if (!FONPAYEDGE_SECRET_KEY) {
+        return json({ error: "Dedicated accounts aren't configured yet." }, 500);
       }
 
-      const bizName = biz.name || "ZeeShop Business";
+      // ---- validate what the person typed on the form ----
+      const firstName = String(params.first_name ?? "").trim();
+      const lastName = String(params.last_name ?? "").trim();
+      const phone = String(params.phone ?? "").replace(/[\s-]/g, "");
+      const idType = String(params.id_type ?? "").toLowerCase();
+      const idNumber = String(params.id_number ?? "").replace(/\s/g, "");
+      if (!firstName || !lastName || firstName.length > 100 || lastName.length > 100) {
+        return json({ error: "Please enter your first name and last name." }, 400);
+      }
+      if (!/^\+?\d{7,15}$/.test(phone)) {
+        return json({ error: "Please enter a valid phone number." }, 400);
+      }
+      if (idType !== "bvn" && idType !== "nin") {
+        return json({ error: "Please choose BVN or NIN." }, 400);
+      }
+      if (!/^\d{11}$/.test(idNumber)) {
+        return json({ error: `Your ${idType.toUpperCase()} must be exactly 11 digits.` }, 400);
+      }
+
+      const fpHeaders = {
+        Authorization: `Bearer ${FONPAYEDGE_SECRET_KEY}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      };
+
+      // Turns FonPayEdge's error codes into messages a shop owner can act on.
+      const friendlyError = (fp: any): string => {
+        const code = fp?.code;
+        if (code === "identity_rejected") return "The bank couldn't verify these details. Check your names and your BVN/NIN, then try again.";
+        if (code === "validation_failed") {
+          const firstMsg = fp?.errors ? (Object.values(fp.errors as Record<string, string[]>)[0] || [])[0] : null;
+          return firstMsg || "Some of your details look wrong. Please check them and try again.";
+        }
+        if (code === "provider_unavailable") return "The bank couldn't be reached right now. Please try again shortly.";
+        if (code === "rate_limited") return "Too many tries. Please wait a minute and try again.";
+        // insufficient_funds, invalid/rolled key, business_not_approved, server_error…
+        // are OUR problem, not the customer's — log it for us, keep the message neutral.
+        console.error("FonPayEdge createVirtualAccount problem:", code, fp?.message, fp?.requestId);
+        return "Account setup is temporarily unavailable. Please try again later.";
+      };
+
+      const saveAccount = async (accountNumber: string, bankName: string) => {
+        const { error: saveErr } = await admin.from("businesses").update({
+          psa_account_number: accountNumber, psa_bank_name: bankName, psa_status: "active",
+        }).eq("id", businessId);
+        return saveErr;
+      };
+
+      const reference = String(businessId);
       let fpRes: Response;
       let fpData: any = null;
       try {
-        fpRes = await fetch(`${FONPAYEDGE_BASE}/createVirtualAccount/`, {
+        fpRes = await fetch(`${FONPAYEDGE_BASE}/virtual-accounts`, {
           method: "POST",
-          headers: { Token: FONPAYEDGE_SECRET_KEY, businessid: FONPAYEDGE_BUSINESS_ID, "Content-Type": "application/json" },
+          headers: fpHeaders,
           body: JSON.stringify({
-            accountName: bizName,
-            firstname: caller.first_name || "ZeeShop",
-            lastname: caller.last_name || bizName,
-            phone: caller.phone || "08000000000",
-            email: walletEmailFor(String(businessId)),
-            ref: String(businessId),
+            reference,
+            firstName,
+            lastName,
+            phone,
+            email: walletEmailFor(reference),
+            [idType]: idNumber, // sends exactly one of bvn / nin
           }),
         });
         try { fpData = await fpRes.json(); } catch (_e) { /* non-JSON response */ }
@@ -438,19 +484,41 @@ Deno.serve(async (req: Request) => {
         return json({ error: "Could not reach the payment provider. Please try again." }, 502);
       }
 
-      const acct = fpData?.data;
-      if (!fpRes.ok || fpData?.status !== "success" || !acct?.bankAccountNumber) {
-        const msg = (typeof fpData?.message === "string" && fpData.message) || "Could not set up a dedicated account.";
-        return json({ error: msg }, 502);
+      let acct = fpData?.data;
+
+      // The account was already created earlier (e.g. our save failed last
+      // time): FonPayEdge answers 409 duplicate_reference. Find it instead.
+      if (fpRes.status === 409 || fpData?.code === "duplicate_reference") {
+        acct = null;
+        for (let page = 1; page <= 10 && !acct; page++) {
+          try {
+            const lr = await fetch(`${FONPAYEDGE_BASE}/virtual-accounts?perPage=100&page=${page}`, { headers: fpHeaders });
+            const ld = await lr.json();
+            if (!lr.ok || !Array.isArray(ld?.data)) break;
+            acct = ld.data.find((a: any) => a?.reference === reference) || null;
+            if (page >= (ld?.meta?.lastPage || 1)) break;
+          } catch (_e) { break; }
+        }
+        if (!acct) return json({ error: "Account setup is temporarily unavailable. Please try again later." }, 502);
+      } else if (!fpRes.ok || fpData?.success !== true || !acct?.accountNumber) {
+        const status = fpRes.status >= 400 && fpRes.status < 500 ? 422 : 502;
+        return json({ error: friendlyError(fpData) }, status);
       }
 
-      const bankName = acct.walletBank || acct.bankName || "Bank";
-      const { error: saveErr } = await admin.from("businesses").update({
-        psa_account_number: String(acct.bankAccountNumber), psa_bank_name: bankName, psa_status: "active",
-      }).eq("id", businessId);
+      const accountNumber = String(acct.accountNumber);
+      const bankName = acct.bankName || "Bank";
+      const saveErr = await saveAccount(accountNumber, bankName);
       if (saveErr) return json({ error: saveErr.message }, 500);
 
-      return json({ account_number: String(acct.bankAccountNumber), bank_name: bankName, status: "active" }, 200);
+      // The name the bank/FonPayEdge has on record for this customer — the
+      // app uses it to correct the owner's profile if they typed it differently.
+      return json({
+        account_number: accountNumber,
+        bank_name: bankName,
+        status: "active",
+        verified_first_name: acct?.customer?.firstName ?? null,
+        verified_last_name: acct?.customer?.lastName ?? null,
+      }, 200);
     }
 
     // ---------- purchases (debit wallet, call Bigisub, log) ----------

@@ -104,7 +104,7 @@ Deno.serve(async (req: Request) => {
     let businessId: string | null = null;
     const acctNo = collection.accountNumber ? String(collection.accountNumber) : "";
     if (acctNo) {
-      const { data: biz } = await admin.from("businesses").select("id").eq("psa_account_number", acctNo).maybeSingle();
+      const { data: biz } = await admin.from("businesses").select("id").eq("fpe_account_number", acctNo).maybeSingle();
       if (biz) businessId = String(biz.id);
     }
     if (!businessId) {

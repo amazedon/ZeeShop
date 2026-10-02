@@ -8745,9 +8745,19 @@ function screenBillTopup(){
 function screenBillTopupPsa(){
   if(billPsaLoading) return `<p class="subtle">Setting up your dedicated account…</p>`;
   if(!billPsaAccountNumber){
+    const cu = currentUser() || {};
     return `
       <p class="subtle">Get your own dedicated account number — transfer to it anytime, any amount, and it always credits your Bill Wallet. No need to generate a new one each time.</p>
       <p class="subtle" style="font-size:11px;">A fee of ${fmtMoney(billTopupFlatFee)} is deducted from each transfer before it's credited to your wallet.</p>
+      <p class="subtle" style="font-size:12px;margin-top:10px;">To open your account, the bank needs to verify you. Use the names on your BVN or NIN.</p>
+      <div class="field"><label>First name</label><input id="bp-psa-fn" autocomplete="off" value="${escapeHtml(cu.firstName||'')}"></div>
+      <div class="field"><label>Last name</label><input id="bp-psa-ln" autocomplete="off" value="${escapeHtml(cu.lastName||'')}"></div>
+      <div class="field"><label>Phone number</label><input id="bp-psa-phone" type="tel" inputmode="tel" autocomplete="off" value="${escapeHtml(cu.phone||'')}"></div>
+      <div class="field"><label>Verify with</label>
+        <select id="bp-psa-idtype"><option value="bvn">BVN</option><option value="nin">NIN</option></select>
+      </div>
+      <div class="field"><label>BVN / NIN (11 digits)</label><input id="bp-psa-idnum" type="tel" inputmode="numeric" maxlength="11" autocomplete="off" placeholder="11 digits"></div>
+      <p class="subtle" style="font-size:11px;">Used only to open your account. We never save your BVN or NIN.</p>
       <button class="btn btn-primary" id="bp-psa-setup">Set Up My Dedicated Account</button>
     `;
   }
@@ -8769,11 +8779,22 @@ function bindBillTopupEvents(){
 
   const psaSetupBtn = document.getElementById('bp-psa-setup');
   if(psaSetupBtn) psaSetupBtn.addEventListener('click', async ()=>{
+    const fn = document.getElementById('bp-psa-fn').value.trim();
+    const ln = document.getElementById('bp-psa-ln').value.trim();
+    const phone = document.getElementById('bp-psa-phone').value.trim();
+    const idType = document.getElementById('bp-psa-idtype').value;
+    const idNum = document.getElementById('bp-psa-idnum').value.replace(/\s/g,'');
+    if(!fn || !ln) return toast('Please enter your first and last name.');
+    if(!/^\+?\d[\d\s-]{5,17}$/.test(phone)) return toast('Please enter a valid phone number.');
+    if(!/^\d{11}$/.test(idNum)) return toast(`Your ${idType.toUpperCase()} must be exactly 11 digits.`);
     billPsaLoading = true; refreshMain();
     try{
-      const r = await callBigisub('get_or_create_psa_account', {});
+      const r = await callBigisub('get_or_create_psa_account', {
+        first_name: fn, last_name: ln, phone, id_type: idType, id_number: idNum
+      });
       billPsaAccountNumber = r.account_number; billPsaBankName = r.bank_name;
       logAudit('bill_wallet_psa_setup', `Set up dedicated top-up account ${r.account_number}`);
+      bpApplyVerifiedName(fn, ln, r.verified_first_name, r.verified_last_name);
       bpStartPsaPolling();
     }catch(e){ toast(e.message); }
     billPsaLoading = false; refreshMain();
@@ -8785,6 +8806,29 @@ function bindBillTopupEvents(){
   });
   const psaSyncBtn = document.getElementById('bp-psa-sync');
   if(psaSyncBtn) psaSyncBtn.addEventListener('click', ()=>bpSyncPsaWallet(true));
+}
+
+// After the bank opens the account, FonPayEdge returns the name it has on
+// record for the customer. If that differs from what was typed, fix the
+// OWNER's own profile name so it matches their real BVN/NIN name.
+// Staff are skipped on purpose: their names change only through the
+// owner-approved name-change request, never automatically.
+function bpApplyVerifiedName(typedFirst, typedLast, vFirst, vLast){
+  try{
+    const u = currentUser();
+    if(!u || u.role!=='master') return;
+    const vf = String(vFirst||'').trim(), vl = String(vLast||'').trim();
+    if(!vf || !vl) return;
+    const same = (a,b)=>a.trim().toLowerCase()===b.trim().toLowerCase();
+    if(same(vf,typedFirst) && same(vl,typedLast)) return; // matches what they typed
+    const nice = x=>x.toLowerCase().replace(/(^|[\s'-])([a-z])/g,(m,p,c)=>p+c.toUpperCase());
+    const oldName = `${u.firstName} ${u.lastName||''}`.trim();
+    u.firstName = nice(vf); u.lastName = nice(vl);
+    save();
+    enqueueSync('app_users','update', { id: u.id, first_name: u.firstName, last_name: u.lastName });
+    logAudit('name_corrected_from_id', `Name updated from "${oldName}" to "${u.firstName} ${u.lastName}" to match BVN/NIN record`);
+    toast(`Your name was updated to ${u.firstName} ${u.lastName} to match your BVN/NIN record.`);
+  }catch(_e){ /* never block account setup over a name tidy-up */ }
 }
 
 // Re-reads the wallet balance from the server. A rise in balance means a

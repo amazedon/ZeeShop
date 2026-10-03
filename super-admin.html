@@ -249,7 +249,7 @@
         <p class="subtle">Latest 30 across the whole platform. Pending or failed ones can be manually re-checked with Bigisub.</p>
         <div class="table-wrap">
           <table class="stack">
-            <thead><tr><th>Business</th><th>Service</th><th>Recipient</th><th>Amount</th><th>Status</th><th>When</th><th></th></tr></thead>
+            <thead><tr><th>Business</th><th>Service</th><th>Recipient</th><th>Paid</th><th>Bigisub cost</th><th>Margin</th><th>Status</th><th>When</th><th></th></tr></thead>
             <tbody id="bp-recent-tbody"></tbody>
           </table>
         </div>
@@ -269,71 +269,32 @@
       <div class="card">
         <h2>Your margin, per service</h2>
         <p class="subtle">
-          Applied to Bigisub's real cost on every purchase, platform-wide — invisible to businesses; they're simply
-          charged the final amount. There is no reseller/markup pricing on the business side at all, so this is the
-          <b>only</b> margin the platform earns. A single blanket percentage doesn't work for every service — funding
-          a ₦50,000 betting wallet at 2% would add ₦1,000, which isn't how a betting funding fee should work — so
-          each service below has its own rule, in whichever unit actually fits it: a <b>percentage</b> for services
-          with variable cost (data, airtime, cable, etc.), or a <b>flat ₦ fee</b> for pass-through services where the
-          exact amount matters (betting funding, electricity tokens).
+          Applied to Bigisub's real cost on every purchase, platform-wide. Businesses never see a fee: they are
+          simply shown, and charged, one final price. This is the <b>only</b> margin the platform earns.
+          <b>Airtime and Betting</b> are always face value: no markup and no fee.
         </p>
         <div id="pp-status"></div>
 
         <div class="price-rule-row">
           <div class="pr-info">
             <div class="pr-name">Data Bundles<span class="pricing-type-tag pricing-type-pct">%</span></div>
-            <div class="pr-hint">Applied to Bigisub's cost for every data bundle purchase.</div>
+            <div class="pr-hint">Percentage added to Bigisub's cost for every data plan.</div>
           </div>
           <div class="pr-control"><input id="pp-data" type="number" min="0" step="0.1" placeholder="0"><span class="pr-unit">%</span></div>
         </div>
         <div class="price-rule-row">
           <div class="pr-info">
-            <div class="pr-name">Airtime<span class="pricing-type-tag pricing-type-pct">%</span></div>
-            <div class="pr-hint">Applied to the airtime amount purchased.</div>
+            <div class="pr-name">Bills &amp; utilities<span class="pricing-type-tag pricing-type-flat">₦ flat</span></div>
+            <div class="pr-hint">One flat amount added silently to Cable TV, Electricity, Internet (Smile and Spectranet) and Result Checker. Not shown to businesses as a fee.</div>
           </div>
-          <div class="pr-control"><input id="pp-airtime" type="number" min="0" step="0.1" placeholder="0"><span class="pr-unit">%</span></div>
+          <div class="pr-control"><span class="pr-unit">₦</span><input id="pp-utility" type="number" min="0" step="1" placeholder="50"></div>
         </div>
         <div class="price-rule-row">
           <div class="pr-info">
-            <div class="pr-name">Cable TV<span class="pricing-type-tag pricing-type-pct">%</span></div>
-            <div class="pr-hint">Applied to the cable subscription plan cost.</div>
+            <div class="pr-name">Airtime &amp; Betting<span class="pricing-type-tag pricing-type-flat">fixed</span></div>
+            <div class="pr-hint">Face value, no markup, no fee. Not adjustable.</div>
           </div>
-          <div class="pr-control"><input id="pp-cable" type="number" min="0" step="0.1" placeholder="0"><span class="pr-unit">%</span></div>
-        </div>
-        <div class="price-rule-row">
-          <div class="pr-info">
-            <div class="pr-name">Result Checker<span class="pricing-type-tag pricing-type-pct">%</span></div>
-            <div class="pr-hint">Applied per PIN, before quantity is multiplied in.</div>
-          </div>
-          <div class="pr-control"><input id="pp-result-checker" type="number" min="0" step="0.1" placeholder="0"><span class="pr-unit">%</span></div>
-        </div>
-        <div class="price-rule-row">
-          <div class="pr-info">
-            <div class="pr-name">Internet (ISP)<span class="pricing-type-tag pricing-type-pct">%</span></div>
-            <div class="pr-hint">Smile and Spectranet plans, same rule for both.</div>
-          </div>
-          <div class="pr-control"><input id="pp-isp" type="number" min="0" step="0.1" placeholder="0"><span class="pr-unit">%</span></div>
-        </div>
-        <div class="price-rule-row">
-          <div class="pr-info">
-            <div class="pr-name">Betting Funding<span class="pricing-type-tag pricing-type-flat">₦ flat</span></div>
-            <div class="pr-hint">A fixed fee added on top, regardless of amount funded — a percentage would overcharge on large fundings.</div>
-          </div>
-          <div class="pr-control"><span class="pr-unit">₦</span><input id="pp-betting" type="number" min="0" step="1" placeholder="0"></div>
-        </div>
-        <div class="price-rule-row">
-          <div class="pr-info">
-            <div class="pr-name">Electricity<span class="pricing-type-tag pricing-type-flat">₦ flat</span></div>
-            <div class="pr-hint">A "convenience fee" added on top of the token amount — the standard way DISCO vending apps charge, not a percentage.</div>
-          </div>
-          <div class="pr-control"><span class="pr-unit">₦</span><input id="pp-electricity" type="number" min="0" step="1" placeholder="0"></div>
-        </div>
-        <div class="price-rule-row">
-          <div class="pr-info">
-            <div class="pr-name">Default (fallback)<span class="pricing-type-tag pricing-type-pct">%</span></div>
-            <div class="pr-hint">Used only for a percentage-based service above with nothing entered — a safety net, not meant to be your main lever.</div>
-          </div>
-          <div class="pr-control"><input id="pp-default" type="number" min="0" step="0.1" placeholder="0"><span class="pr-unit">%</span></div>
+          <div class="pr-control"><span class="pr-unit">₦0</span></div>
         </div>
 
         <button class="btn btn-primary" id="pp-save-btn" style="margin-top:16px;">Save Pricing</button>
@@ -622,7 +583,9 @@
             <td data-label="Business">${escapeHtml(t.business_name)}</td>
             <td data-label="Service">${escapeHtml(t.service_label || '—')}</td>
             <td data-label="Recipient">${escapeHtml(t.recipient || '—')}</td>
-            <td data-label="Amount">${fmtNaira(t.sale_price)}</td>
+            <td data-label="Paid">${fmtNaira(t.sale_price)}</td>
+            <td data-label="Bigisub cost">${t.status==='failed' ? '—' : fmtNaira(t.cost_price)}</td>
+            <td data-label="Margin" style="${(t.status!=='failed' && Number(t.sale_price)-Number(t.cost_price) < 0) ? 'color:#B3261E;font-weight:700;' : ''}">${t.status==='failed' ? '—' : fmtNaira(Number(t.sale_price||0)-Number(t.cost_price||0))}</td>
             <td data-label="Status"><span class="bp-badge bp-${t.status==='success'?'success':t.status==='failed'?'failed':'pending'}">${escapeHtml(t.status)}</span></td>
             <td data-label="When">${new Date(t.created_at).toLocaleString()}</td>
             <td>${t.status!=='success' ? `<button class="btn-outline-sm" data-bp-retry="${t.id}">Retry</button>` : ''}</td>
@@ -744,19 +707,10 @@
     }
   }
 
-  // Percentage-based services map to a "*_markup_percent" field; the two
-  // flat-fee services map to a "*_flat_fee" field. Kept as one list so
-  // load/save/validate all walk the same source of truth instead of
-  // duplicating field names three times.
+  // Two live controls: the data percentage and the flat utilities amount.
   const PRICING_FIELDS = [
     { input: 'pp-data', key: 'data_markup_percent', kind: 'pct' },
-    { input: 'pp-airtime', key: 'airtime_markup_percent', kind: 'pct' },
-    { input: 'pp-cable', key: 'cable_markup_percent', kind: 'pct' },
-    { input: 'pp-result-checker', key: 'result_checker_markup_percent', kind: 'pct' },
-    { input: 'pp-isp', key: 'isp_markup_percent', kind: 'pct' },
-    { input: 'pp-betting', key: 'betting_flat_fee', kind: 'flat' },
-    { input: 'pp-electricity', key: 'electricity_flat_fee', kind: 'flat' },
-    { input: 'pp-default', key: 'default_markup_percent', kind: 'pct' },
+    { input: 'pp-utility', key: 'utility_flat_fee', kind: 'flat' },
   ];
 
   async function loadPlatformPricing(){
@@ -764,7 +718,7 @@
     try{
       const r = await callAdminApi('get_platform_pricing', {});
       PRICING_FIELDS.forEach(f=>{ document.getElementById(f.input).value = r[f.key] ?? 0; });
-      document.getElementById('ov-markup').textContent = (r.default_markup_percent ?? 0) + '%';
+      document.getElementById('ov-markup').textContent = (r.data_markup_percent ?? 0) + '% · ₦' + (r.utility_flat_fee ?? 0);
       statusBox.innerHTML = '';
     }catch(e){
       statusBox.innerHTML = `<div class="err">Could not load platform pricing: ${escapeHtml(e.message)}</div>`;
@@ -786,7 +740,7 @@
     try{
       await callAdminApi('set_platform_pricing', payload);
       statusBox.innerHTML = `<div class="ok">Saved ✅ — now applied to every new purchase across the platform.</div>`;
-      document.getElementById('ov-markup').textContent = payload.default_markup_percent + '%';
+      document.getElementById('ov-markup').textContent = payload.data_markup_percent + '% · ₦' + payload.utility_flat_fee;
     }catch(e){
       showError(statusBox, 'Could not save: ' + e.message);
     }

@@ -140,29 +140,47 @@ async function bigisub(method: "GET" | "POST", path: string, body?: Record<strin
   return data;
 }
 
-// Bigisub's exact purchase-response shape wasn't part of what was shared
-// (only request shapes were confirmed), so cost/id extraction checks
-// several plausible field names rather than assuming one. Tighten this
-// once you've inspected a real response in your Supabase function logs.
-function extractCost(data: any, fallback: number): number {
-  if (!data) return fallback;
-  if (typeof data.amount_charged === "number") return data.amount_charged;
-  if (typeof data.plan_amount === "number") return data.plan_amount;
-  if (typeof data.amount === "number") return data.amount;
-  if (data.balance_before != null && data.balance_after != null) {
-    const diff = Number(data.balance_before) - Number(data.balance_after);
+// Bigisub wraps every reply as { success, data: {...}, message }. The real
+// fields (status, amount, transaction_id, token, pins …) live INSIDE `data`.
+// These helpers read that inner object; they used to read the top level,
+// where none of those fields exist — so every purchase looked "successful"
+// and the real cost and Bigisub reference were never recorded.
+function inner(body: any): any {
+  return body && typeof body.data === "object" && body.data !== null && !Array.isArray(body.data) ? body.data : (body || {});
+}
+// What Bigisub actually took from our Bigisub wallet for this purchase.
+// total_amount / pay_amount include any provider charge; plain `amount`
+// is the fallback. Never plan_amount first — that's the retail list price.
+function extractCost(body: any, fallback: number): number {
+  const d = inner(body);
+  for (const k of ["total_amount", "pay_amount", "amount_charged", "amount"]) {
+    const n = Number(d?.[k]);
+    if (d?.[k] !== undefined && d?.[k] !== null && Number.isFinite(n) && n > 0) return n;
+  }
+  if (d.balance_before != null && d.balance_after != null) {
+    const diff = Number(d.balance_before) - Number(d.balance_after);
     if (!Number.isNaN(diff) && diff > 0) return diff;
   }
   return fallback;
 }
-function extractTranxId(data: any): string | null {
-  if (!data) return null;
-  return data.tran_id || data.tranx_id || data.transaction_id || data.id?.toString?.() || null;
+function extractTranxId(body: any): string | null {
+  const d = inner(body);
+  return d.transaction_id || d.tranx_id || d.tran_id || d.reference || body?.transaction_id || null;
 }
-function extractStatus(data: any): string {
-  const s = (data?.Status || data?.status || "successful").toString().toLowerCase();
-  return s.includes("success") ? "success" : (s.includes("fail") ? "failed" : "pending");
+// Bigisub's documented status values:
+//   success: successful, completed
+//   pending: processing, submitted, pending, in_progress
+//   failed:  failed, cancelled, refunded, partial
+function extractStatus(body: any): string {
+  if (body && body.success === false) return "failed";
+  const d = inner(body);
+  const raw = (d?.status ?? d?.Status ?? body?.status ?? "").toString().toLowerCase().trim();
+  if (!raw) return "pending"; // no status given: never assume it worked
+  if (raw === "successful" || raw === "completed" || raw === "success") return "success";
+  if (["failed", "cancelled", "canceled", "refunded", "partial", "error"].includes(raw)) return "failed";
+  return "pending"; // processing, submitted, pending, in_progress, anything unknown
 }
+
 // Bigisub's verify responses aren't consistent about key casing or
 // nesting (e.g. {customer_name} vs {data:{Customer_Name}} vs {details:{name}}),
 // and the old flat-only lookup returned "" for anything nested — which the
@@ -274,6 +292,8 @@ Deno.serve(async (req: Request) => {
         psa_account_number: biz.psa_account_number || null, psa_bank_name: biz.psa_bank_name || null, psa_status: biz.psa_status || null,
         fpe_account_number: biz.fpe_account_number || null, fpe_bank_name: biz.fpe_bank_name || null, fpe_status: biz.fpe_status || null,
         upgrade_fee: PSA_UPGRADE_FEE,
+        // Added to electricity amounts so the screen can show ONE final total (never labelled as a fee).
+        bill_surcharge: (await loadPricing(admin)).utility_flat_fee,
         bill_pin_set: !!biz.bill_payments_pin_hash,
       }, 200);
     }
@@ -284,21 +304,23 @@ Deno.serve(async (req: Request) => {
     // catch-all's generic 500. The message is unchanged either way (the
     // client already reads and displays it correctly regardless of status
     // code) — this is about correct HTTP semantics, not new behavior.
-    const fetchListAction = async (path: string, key: string, responseKey: string) => {
+    const fetchListAction = async (path: string, key: string, responseKey: string, pricingService?: string) => {
       try {
         const data = await bigisub("GET", path);
-        return json({ [responseKey]: normalizeList(data, key) }, 200);
+        let list = normalizeList(data, key);
+        if (pricingService) list = withDisplayPrice(list, pricingService, await loadPricing(admin));
+        return json({ [responseKey]: list }, 200);
       } catch (e) {
         return json({ error: e instanceof Error ? e.message : "Could not reach Bigisub." }, 502);
       }
     };
-    if (action === "data_plans") return await fetchListAction(EP.DATA_PLANS, "plans", "plans");
-    if (action === "cable_plans") return await fetchListAction(EP.CABLE_PLANS, "plans", "plans");
+    if (action === "data_plans") return await fetchListAction(EP.DATA_PLANS, "plans", "plans", "data");
+    if (action === "cable_plans") return await fetchListAction(EP.CABLE_PLANS, "plans", "plans", "cable");
     if (action === "electricity_providers") return await fetchListAction(EP.ELECTRICITY_PROVIDERS, "providers", "providers");
-    if (action === "result_checker_prices") return await fetchListAction(EP.RESULT_CHECKER_PRICES, "prices", "prices");
+    if (action === "result_checker_prices") return await fetchListAction(EP.RESULT_CHECKER_PRICES, "prices", "prices", "result_checker");
     if (action === "betting_billers") return await fetchListAction(EP.BETTING_BILLERS, "billers", "billers");
-    if (action === "isp_smile_plans") return await fetchListAction(EP.ISP_SMILE_PLANS, "plans", "plans");
-    if (action === "isp_spectranet_plans") return await fetchListAction(EP.ISP_SPECTRANET_PLANS, "plans", "plans");
+    if (action === "isp_smile_plans") return await fetchListAction(EP.ISP_SMILE_PLANS, "plans", "plans", "isp_smile");
+    if (action === "isp_spectranet_plans") return await fetchListAction(EP.ISP_SPECTRANET_PLANS, "plans", "plans", "isp_spectranet");
 
     // ---------- verify-before-charge steps ----------
     if (action === "cable_verify") {
@@ -355,7 +377,18 @@ Deno.serve(async (req: Request) => {
         ? await bigisub("GET", `${EP.BETTING_REQUERY}?reference=${encodeURIComponent(bigisubId)}`)
         : await bigisub("POST", path as string);
       const newStatus = extractStatus(data);
-      await admin.from("bill_transactions").update({ status: newStatus, bigisub_response: data }).eq("id", txId);
+      if (newStatus === "failed" && txRow.status === "pending") {
+        // Bigisub refunded itself; give the business its money back — once.
+        // The status guard means a double-tap can't refund twice.
+        const { data: flipped } = await admin.from("bill_transactions")
+          .update({ status: "failed", bigisub_response: data }).eq("id", txId).eq("status", "pending").select("id, sale_price");
+        if (flipped && flipped.length > 0 && Number(flipped[0].sale_price) > 0) {
+          const { error: refundErr } = await admin.rpc("increment_bill_wallet", { p_business_id: String(businessId), p_amount: Number(flipped[0].sale_price) });
+          if (refundErr) console.error("REFUND FAILED for transaction", txId, refundErr.message);
+        }
+      } else if (newStatus !== "pending") {
+        await admin.from("bill_transactions").update({ status: newStatus, bigisub_response: data }).eq("id", txId);
+      }
       return json({ status: newStatus, raw: data }, 200);
     }
 
@@ -688,19 +721,7 @@ Deno.serve(async (req: Request) => {
           return json({ error: "Incorrect Bill Payments PIN." }, 403);
         }
       }
-      const { data: platformSettings } = await admin.from("platform_settings")
-        .select("default_markup_percent, data_markup_percent, airtime_markup_percent, cable_markup_percent, result_checker_markup_percent, isp_markup_percent, betting_flat_fee, electricity_flat_fee")
-        .eq("id", 1).maybeSingle();
-      const pricing: PlatformPricing = {
-        default_markup_percent: Number(platformSettings?.default_markup_percent || 0),
-        data_markup_percent: Number(platformSettings?.data_markup_percent || 0),
-        airtime_markup_percent: Number(platformSettings?.airtime_markup_percent || 0),
-        cable_markup_percent: Number(platformSettings?.cable_markup_percent || 0),
-        result_checker_markup_percent: Number(platformSettings?.result_checker_markup_percent || 0),
-        isp_markup_percent: Number(platformSettings?.isp_markup_percent || 0),
-        betting_flat_fee: Number(platformSettings?.betting_flat_fee || 0),
-        electricity_flat_fee: Number(platformSettings?.electricity_flat_fee || 0),
-      };
+      const pricing = await loadPricing(admin);
       return await handlePurchase(admin, action, params, businessId, biz, pricing, caller.id);
     }
 
@@ -717,7 +738,7 @@ Deno.serve(async (req: Request) => {
 // balance above zero." Returns null if the plan can't be found or the
 // list call fails — callers treat that as "can't verify, don't proceed"
 // rather than silently allowing an unchecked purchase.
-async function lookupPlanAmount(path: string, preferredKey: string, matchValue: unknown, matchKeys: string[]): Promise<number | null> {
+async function lookupPlanAmount(path: string, preferredKey: string, matchValue: unknown, matchKeys: string[], addCharges = false): Promise<number | null> {
   try {
     const raw = await bigisub("GET", path);
     const list = normalizeList(raw, preferredKey);
@@ -727,57 +748,62 @@ async function lookupPlanAmount(path: string, preferredKey: string, matchValue: 
       item.amount ?? item.price ?? item.plan_amount ?? item.plan_price ?? item.selling_price ??
       item.cost ?? item.cost_price ?? item.api_price ?? item.user_price ?? item.reseller_price
     );
-    return Number.isFinite(amt) ? amt : null;
+    if (!Number.isFinite(amt)) return null;
+    // Spectranet plans carry their own `charges`, part of what Bigisub takes.
+    return addCharges ? amt + (Number(item.charges) || 0) : amt;
   } catch (_e) {
     return null;
   }
 }
 
-// Per-service pricing rules, loaded once per request from the
-// platform_settings table (see the header comment for the SQL). This is
-// the only margin the platform earns anywhere in this system — there is
-// no business-side markup, flat fee, or price override at all.
+// Platform pricing — the ONLY margin the platform earns (no business-side
+// markup or overrides). Managed from the super admin's Platform Pricing tab
+// (platform_settings row id=1):
+//   - Data: percentage markup on Bigisub's cost (data_markup_percent).
+//   - Cable TV, Electricity, ISP (Smile, Spectranet), Result Checker:
+//     a flat naira fee added silently (utility_flat_fee, default ₦50). The
+//     person only ever sees ONE final total — never the fee itself.
+//   - Airtime and Betting: face value, no markup and no fee.
 type PlatformPricing = {
-  default_markup_percent: number;
   data_markup_percent: number;
-  airtime_markup_percent: number;
-  cable_markup_percent: number;
-  result_checker_markup_percent: number;
-  isp_markup_percent: number;
-  betting_flat_fee: number;
-  electricity_flat_fee: number;
+  utility_flat_fee: number;
 };
 
-// Decides the actual sale price for a given service. A single blanket
-// percentage doesn't work for every service — funding a ₦50,000 betting
-// wallet at 2% would add ₦1,000, which isn't how a betting funding fee
-// should work — so each service uses whichever unit actually fits it:
-//   - percentage, for services with genuinely variable cost (data,
-//     airtime, cable, result checker, ISP) — falls back to
-//     default_markup_percent if that service's own field is 0/unset.
-//   - flat ₦ fee, for the two pass-through services where the exact
-//     amount matters (betting funding, electricity tokens).
-// Called twice per purchase: once for the pre-check (against the
-// estimated cost) and once for the real charge (against Bigisub's actual
-// reported cost) — see handlePurchase.
-function computeSalePrice(pricingService: string, costPrice: number, pricing: PlatformPricing): number {
-  if (pricingService === "betting") {
-    return Math.round((costPrice + (pricing.betting_flat_fee || 0)) * 100) / 100;
-  }
-  if (pricingService === "electricity") {
-    return Math.round((costPrice + (pricing.electricity_flat_fee || 0)) * 100) / 100;
-  }
-  const pctByService: Record<string, number | undefined> = {
-    data: pricing.data_markup_percent,
-    airtime: pricing.airtime_markup_percent,
-    cable: pricing.cable_markup_percent,
-    result_checker: pricing.result_checker_markup_percent,
-    isp_smile: pricing.isp_markup_percent,
-    isp_spectranet: pricing.isp_markup_percent,
+async function loadPricing(admin: ReturnType<typeof createClient>): Promise<PlatformPricing> {
+  const { data } = await admin.from("platform_settings")
+    .select("data_markup_percent, utility_flat_fee").eq("id", 1).maybeSingle();
+  const flat = data?.utility_flat_fee;
+  return {
+    data_markup_percent: Number(data?.data_markup_percent || 0),
+    // Missing column/row → the agreed default of ₦50, not zero.
+    utility_flat_fee: flat === undefined || flat === null ? 50 : Number(flat),
   };
-  const pct = pctByService[pricingService] || pricing.default_markup_percent || 0;
-  return Math.round(costPrice * (1 + pct / 100) * 100) / 100;
 }
+
+// `quantity` matters for Result Checker and Spectranet, where the flat amount is per unit
+// (so the per-unit display_price × quantity always equals the real charge).
+function computeSalePrice(pricingService: string, costPrice: number, pricing: PlatformPricing, quantity = 1): number {
+  if (pricingService === "airtime" || pricingService === "betting") return Math.round(costPrice * 100) / 100;
+  if (pricingService === "data") return Math.round(costPrice * (1 + (pricing.data_markup_percent || 0) / 100) * 100) / 100;
+  // cable, electricity, isp_smile, isp_spectranet, result_checker
+  const units = (pricingService === "result_checker" || pricingService === "isp_spectranet") ? Math.max(1, quantity) : 1;
+  return Math.round((costPrice + (pricing.utility_flat_fee || 0) * units) * 100) / 100;
+}
+
+// Adds `display_price` (the single final total the person pays) to each item
+// of a plan list, so the app never shows Bigisub's raw cost while the wallet
+// is charged more. Spectranet's own `charges` are part of its cost.
+function withDisplayPrice(items: any[], pricingService: string, pricing: PlatformPricing): any[] {
+  return items.map((it) => {
+    const base = Number(it?.amount ?? it?.price ?? it?.plan_price ?? it?.plan_amount);
+    if (!Number.isFinite(base)) return it;
+    const charges = pricingService === "isp_spectranet" ? (Number(it?.charges) || 0) : 0;
+    return { ...it, display_price: computeSalePrice(pricingService, base + charges, pricing) };
+  });
+}
+
+// Smallest amount each service accepts (Bigisub's documented minimums).
+const MIN_AMOUNT: Record<string, number> = { airtime: 25, electricity: 1000, betting: 100 };
 
 async function handlePurchase(
   admin: ReturnType<typeof createClient>,
@@ -799,6 +825,7 @@ async function handlePurchase(
   if (action === "airtime_purchase") {
     const { network, phone_number, amount } = params as { network: number; phone_number: string; amount: number };
     if (!network || !phone_number || !amount) return json({ error: "Missing network, phone_number, or amount." }, 400);
+    if (Number(amount) < MIN_AMOUNT.airtime) return json({ error: `The minimum airtime purchase is ₦${MIN_AMOUNT.airtime}.` }, 400);
     serviceLabel = "Airtime"; recipient = String(phone_number); estimatedCost = Number(amount); pricingService = "airtime";
     bigisubCall = () => bigisub("POST", EP.AIRTIME_PURCHASE, { network, phone_number, amount: String(amount), airtime_type: "vtu", pin: BIGISUB_PIN });
 
@@ -818,18 +845,28 @@ async function handlePurchase(
     const { cable_type, card_no, phone_number, amount, customer_name, plan_id } = params as { cable_type: string; card_no: string; phone_number: string; amount: number; customer_name: string; plan_id?: string | number };
     if (!cable_type || !card_no || !phone_number || !amount || !customer_name) return json({ error: "Missing cable_type, card_no, phone_number, amount, or customer_name (verify the card first)." }, 400);
     serviceLabel = "Cable TV"; recipient = String(card_no); estimatedCost = Number(amount); pricingService = "cable";
-    planKey = plan_id != null ? String(plan_id) : null; // older clients without plan_id just fall back to the markup — no override lookup possible without it
-    bigisubCall = () => bigisub("POST", EP.CABLE_PURCHASE, { cable_type, card_no, phone_number, amount: Number(amount), Customer: customer_name, pin: BIGISUB_PIN });
+    planKey = plan_id != null ? String(plan_id) : null;
+    // With a plan id, the price comes from Bigisub's own list — never from the client.
+    let cableAmount = Number(amount);
+    if (plan_id != null) {
+      const catalogPrice = await lookupPlanAmount(EP.CABLE_PLANS, "plans", plan_id, ["id"]);
+      if (catalogPrice === null) return json({ error: "Could not verify this plan's price right now — please try again in a moment." }, 502);
+      cableAmount = catalogPrice;
+    }
+    estimatedCost = cableAmount;
+    bigisubCall = () => bigisub("POST", EP.CABLE_PURCHASE, { cable_type: String(cable_type).toLowerCase(), card_no, phone_number, amount: cableAmount, Customer: customer_name, pin: BIGISUB_PIN });
 
   } else if (action === "electricity_pay") {
     const { company, meter_no, meter_type, phone_number, amount, customer_name } = params as { company: string; meter_no: string; meter_type: string; phone_number: string; amount: number; customer_name: string };
     if (!company || !meter_no || !meter_type || !phone_number || !amount || !customer_name) return json({ error: "Missing company, meter_no, meter_type, phone_number, amount, or customer_name (verify the meter first)." }, 400);
+    if (Number(amount) < MIN_AMOUNT.electricity) return json({ error: `The minimum electricity purchase is ₦${MIN_AMOUNT.electricity.toLocaleString()}.` }, 400);
     serviceLabel = "Electricity"; recipient = String(meter_no); estimatedCost = Number(amount); pricingService = "electricity";
     bigisubCall = () => bigisub("POST", EP.ELECTRICITY_PAY, { company, meter_no, meter_type, phone_number, amount: Number(amount), Customer_name: customer_name, pin: BIGISUB_PIN });
 
   } else if (action === "betting_fund") {
     const { biller_code, customer_id, customer_name, amount, validation_reference } = params as { biller_code: string; customer_id: string; customer_name: string; amount: number; validation_reference: string };
     if (!biller_code || !customer_id || !customer_name || !amount || !validation_reference) return json({ error: "Missing biller_code, customer_id, customer_name, amount, or validation_reference (validate first — and don't delay before funding, the reference is short-lived)." }, 400);
+    if (Number(amount) < MIN_AMOUNT.betting) return json({ error: `The minimum betting funding is ₦${MIN_AMOUNT.betting}.` }, 400);
     serviceLabel = "Betting Wallet"; recipient = String(customer_id); estimatedCost = Number(amount); pricingService = "betting";
     bigisubCall = () => bigisub("POST", EP.BETTING_FUND, { biller_code, customer_id, customer_name, amount: Number(amount), validation_reference, pin_code: BIGISUB_PIN });
 
@@ -855,14 +892,14 @@ async function handlePurchase(
     const { plan, phone_number, spectranet_number, quantity: qty } = params as { plan: number; phone_number: string; spectranet_number: string; quantity: number };
     if (!plan || !phone_number || !spectranet_number || !qty) return json({ error: "Missing plan, phone_number, spectranet_number, or quantity." }, 400);
     serviceLabel = "ISP — Spectranet"; recipient = String(spectranet_number); pricingService = "isp_spectranet"; planKey = String(plan); quantity = Number(qty);
-    const unitPrice = await lookupPlanAmount(EP.ISP_SPECTRANET_PLANS, "plans", plan, ["id"]);
+    const unitPrice = await lookupPlanAmount(EP.ISP_SPECTRANET_PLANS, "plans", plan, ["id"], true); // price + Spectranet's own charges
     if (unitPrice === null) return json({ error: "Could not verify this plan's price right now — please try again in a moment." }, 502);
     estimatedCost = unitPrice * quantity;
     bigisubCall = () => bigisub("POST", EP.ISP_SPECTRANET_TOPUP, { plan, phone_number, spectranet_number, quantity, pin: BIGISUB_PIN });
   }
 
   const preCheckBalance = Number(biz.bill_wallet_balance || 0);
-  const estimatedSale = computeSalePrice(pricingService, estimatedCost, pricing);
+  const estimatedSale = computeSalePrice(pricingService, estimatedCost, pricing, quantity);
   if (preCheckBalance < estimatedSale) return json({ error: "Insufficient Bill Wallet balance. Please top up." }, 400);
 
   // ---- Idempotency: reserve a row BEFORE calling Bigisub, keyed on the
@@ -914,29 +951,42 @@ async function handlePurchase(
   }
 
   const costPrice = extractCost(bigisubResponse, estimatedCost);
-  // Recomputed against Bigisub's ACTUAL reported cost, not just the
-  // pre-check estimate — for flat-fee services this can differ slightly
-  // if Bigisub's real charge isn't exactly what was estimated; for
-  // override-priced plans it's identical to estimatedSale either way,
-  // since a fixed sell price doesn't depend on the underlying cost at all.
-  const salePrice = computeSalePrice(pricingService, costPrice, pricing);
   const bigisubTranxId = extractTranxId(bigisubResponse);
   const status = extractStatus(bigisubResponse);
+  const payload = inner(bigisubResponse);
 
-  // Best-effort balance debit: a business with two staff transacting in
-  // the same split-second could theoretically race this read-then-write.
-  // Acceptable for low-volume single-shop usage; revisit with a Postgres
-  // RPC (atomic decrement) if you scale to high concurrency.
-  const newBalance = Math.max(0, preCheckBalance - salePrice);
-  await admin.from("businesses").update({ bill_wallet_balance: newBalance }).eq("id", businessId);
+  // Bigisub refunds its own wallet when a purchase fails, so the business
+  // is NOT charged either — record the failure and say why.
+  if (status === "failed") {
+    const failFields = { cost_price: 0, sale_price: 0, status: "failed", bigisub_tranx_id: bigisubTranxId, bigisub_response: bigisubResponse };
+    if (clientRef) await admin.from("bill_transactions").update(failFields).eq("id", txId);
+    else await admin.from("bill_transactions").insert({ id: txId, business_id: businessId, user_id: userId, service: serviceKey, service_label: serviceLabel, recipient, ...failFields });
+    const why = (bigisubResponse?.message || payload?.message || payload?.status_detail || "The purchase didn't go through.").toString();
+    return json({ error: `${why} You were not charged.`, status: "failed" }, 502);
+  }
+
+  // The person is charged exactly the single total they were shown (the
+  // pre-check price); the real cost is recorded separately for the admin.
+  const salePrice = estimatedSale;
+
+  // Atomic debit (never overwrites a wallet credit that landed meanwhile).
+  // The purchase already happened, so this must never refuse: it floors at 0.
+  let newBalance = Math.max(0, preCheckBalance - salePrice);
+  const { data: debited, error: debitErr } = await admin.rpc("debit_bill_wallet_floor", { p_business_id: String(businessId), p_amount: salePrice });
+  if (!debitErr && debited !== null && debited !== undefined) {
+    newBalance = Number(debited);
+  } else {
+    console.warn("debit_bill_wallet_floor unavailable, using fallback:", debitErr?.message);
+    await admin.from("businesses").update({ bill_wallet_balance: newBalance }).eq("id", businessId);
+  }
 
   const finalFields = { cost_price: costPrice, sale_price: salePrice, status, bigisub_tranx_id: bigisubTranxId, bigisub_response: bigisubResponse };
   if (clientRef) await admin.from("bill_transactions").update(finalFields).eq("id", txId);
   else await admin.from("bill_transactions").insert({ id: txId, business_id: businessId, user_id: userId, service: serviceKey, service_label: serviceLabel, recipient, ...finalFields });
 
   return json({
-    ok: true, wallet_balance: newBalance, status, token: bigisubResponse?.token || null,
-    pins: bigisubResponse?.pins || null, bigisub_response: bigisubResponse,
+    ok: true, wallet_balance: newBalance, status, token: payload?.token || null,
+    pins: payload?.pins || null, bigisub_response: bigisubResponse,
   }, 200);
 }
 

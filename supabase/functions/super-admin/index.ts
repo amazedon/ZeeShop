@@ -161,16 +161,17 @@ Deno.serve(async (req: Request) => {
     // file header for the table this needs and why it's per-service, not
     // one blanket percentage). No isMaster/business check here since this
     // whole function is already gated to super admins only, at the top.
-    const PRICING_FIELDS = [
-      "default_markup_percent", "data_markup_percent", "airtime_markup_percent",
-      "cable_markup_percent", "result_checker_markup_percent", "isp_markup_percent",
-      "betting_flat_fee", "electricity_flat_fee",
-    ];
+    // Two live controls: the data percentage and the flat amount added to
+    // bills & utilities (Cable TV, Electricity, ISP, Result Checker).
+    // Airtime and Betting are always face value.
+    const PRICING_FIELDS = ["data_markup_percent", "utility_flat_fee"];
     if (action === "get_platform_pricing") {
       const { data, error } = await admin.from("platform_settings").select(PRICING_FIELDS.join(",")).eq("id", 1).maybeSingle();
       if (error) return json({ error: "Could not load platform pricing — has the platform_settings table been created with the new per-service columns? (see file header) " + error.message }, 500);
       const out: Record<string, number> = {};
       for (const f of PRICING_FIELDS) out[f] = Number((data as Record<string, unknown> | null)?.[f] || 0);
+      // A missing/empty utility fee means the agreed default of ₦50 (same as bigisub-proxy).
+      if ((data as Record<string, unknown> | null)?.utility_flat_fee === undefined || (data as Record<string, unknown> | null)?.utility_flat_fee === null) out.utility_flat_fee = 50;
       return json(out, 200);
     }
     if (action === "set_platform_pricing") {
@@ -428,9 +429,9 @@ Deno.serve(async (req: Request) => {
 
       const { data: recent, error: recentErr } = await admin
         .from("bill_transactions")
-        .select("id, business_id, service_label, recipient, sale_price, status, created_at, bigisub_tranx_id")
+        .select("id, business_id, service, service_label, recipient, cost_price, sale_price, status, created_at, bigisub_tranx_id")
         .order("created_at", { ascending: false })
-        .limit(30);
+        .limit(100);
       if (recentErr) return json({ error: recentErr.message }, 500);
       const recentWithNames = (recent || []).map((t: any) => ({ ...t, business_name: bizNameById[t.business_id] || "(deleted business)" }));
 
@@ -514,9 +515,25 @@ Deno.serve(async (req: Request) => {
       const data = tx.service === "betting"
         ? await bigisub("GET", `/api/v2/betting/requery/?reference=${encodeURIComponent(tx.bigisub_tranx_id)}`)
         : await bigisub("POST", `/api/v2/anubis/transactions/${tx.bigisub_tranx_id}/requery/`);
-      const statusStr = (data?.Status || data?.status || "").toString().toLowerCase();
-      const newStatus = statusStr.includes("success") ? "success" : statusStr.includes("fail") ? "failed" : tx.status;
-      await admin.from("bill_transactions").update({ status: newStatus, bigisub_response: data }).eq("id", transactionId);
+      // Bigisub wraps replies as { success, data: {...} } — read the inner
+      // status, using its documented values.
+      const inner = (data && typeof data.data === "object" && data.data !== null) ? data.data : (data || {});
+      const statusStr = (inner?.status ?? inner?.Status ?? data?.status ?? "").toString().toLowerCase().trim();
+      const newStatus = ["successful", "completed", "success"].includes(statusStr) ? "success"
+        : ["failed", "cancelled", "canceled", "refunded", "partial", "error"].includes(statusStr) ? "failed"
+        : tx.status;
+      if (newStatus === "failed" && tx.status === "pending") {
+        // Bigisub refunded itself, so give the business its money back —
+        // once (the status guard stops a double click refunding twice).
+        const { data: flipped } = await admin.from("bill_transactions")
+          .update({ status: "failed", bigisub_response: data }).eq("id", transactionId).eq("status", "pending").select("id, sale_price, business_id");
+        if (flipped && flipped.length > 0 && Number(flipped[0].sale_price) > 0) {
+          const { error: refundErr } = await admin.rpc("increment_bill_wallet", { p_business_id: String(flipped[0].business_id), p_amount: Number(flipped[0].sale_price) });
+          if (refundErr) console.error("REFUND FAILED for transaction", transactionId, refundErr.message);
+        }
+      } else {
+        await admin.from("bill_transactions").update({ status: newStatus, bigisub_response: data }).eq("id", transactionId);
+      }
 
       await admin.from("audit_log_platform").insert({
         actor_auth_user_id: callerData.user.id,

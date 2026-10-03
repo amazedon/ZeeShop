@@ -3604,7 +3604,7 @@ function bindDashboardEvents(){
   const fundBtn = document.querySelector('[data-wallet-fund]');
   if(fundBtn) fundBtn.addEventListener('click', (e)=>{
     e.stopPropagation();
-    route = 'billpayments'; billScreen = 'topup'; render();
+    route = 'billpayments'; billScreen = 'topup'; bpResetUpgradeForm(); render();
   });
   const historyBtn = document.querySelector('[data-wallet-history]');
   if(historyBtn) historyBtn.addEventListener('click', (e)=>{
@@ -8493,8 +8493,18 @@ async function callBigisub(action, params){
 // than deleted outright and every call site rewired, purely to keep this
 // change small and low-risk — the server (computeSalePrice) is the only
 // place that actually decides the real charge either way.
+// One final total per purchase. Plan lists arrive from the server with
+// `display_price` already holding that total, so nothing is added here —
+// EXCEPT electricity, where the person types the amount: the server's flat
+// amount (billSurcharge, from the wallet summary) is folded into the single
+// total shown, never labelled or itemised.
+let billSurcharge = 0;
+function billPreviewPrice(pricingService, planKey, quantity, costPrice){
+  return pricingService === 'electricity' && costPrice > 0 ? costPrice + billSurcharge : costPrice;
+}
 function billCustomerPrice(costPrice){ return costPrice; }
-function billPreviewPrice(pricingService, planKey, quantity, costPrice){ return costPrice; }
+// Smallest amount each typed-amount service accepts.
+const BILL_MIN = { airtime: 25, electricity: 1000, betting: 100 };
 
 /* ---------------- Bigisub response parsing helpers ----------------
    Bigisub's plan and verification payloads don't use one consistent set
@@ -8518,8 +8528,43 @@ function bigisubFirst(obj, keys){
   }
   return null;
 }
+// Data plans: build "1.5GB SME — 30 days". Bigisub's `size` sometimes
+// arrives as a bare number ("20") with the real unit only in `plan_volume`
+// ("20MB"); convert big MB figures to GB for readability.
+function bigisubDataSize(p){
+  const hasUnit = v => v != null && /[a-z]/i.test(String(v));
+  const size = bigisubFirst(p, ['size','plan_size','data_size']);
+  const vol = bigisubFirst(p, ['plan_volume','volume','data_volume']);
+  if(hasUnit(size)) return String(size).trim().replace(/\s+/g,'').toUpperCase();
+  if(hasUnit(vol)){
+    const m = String(vol).trim().match(/^([\d.]+)\s*(KB|MB|GB|TB)$/i);
+    if(m){
+      let n = parseFloat(m[1]); let u = m[2].toUpperCase();
+      if(u==='MB' && n>=1024){ n = n/1024; u='GB'; }
+      return (Math.round(n*100)/100) + u;
+    }
+    return String(vol).trim();
+  }
+  // Neither field carries a unit. Last resort: MB plans cost about ₦1-2 per
+  // MB, GB plans several hundred ₦ per GB — so a low price-per-unit means MB.
+  const n = parseFloat(size != null ? size : vol);
+  if(!Number.isFinite(n) || n<=0) return '';
+  const price = bigisubPlanPrice(p);
+  return n + ((price>0 && price/n < 20) ? 'MB' : 'GB');
+}
+function bigisubPlanDisabled(p){
+  const v = p && p.plan_disabled;
+  return v === true || v === 1 || String(v).toLowerCase() === 'true' || String(v) === '1';
+}
 function bigisubPlanLabel(p){
   if(!p) return '';
+  if(p.plantype != null || p.plan_volume != null){ // a data plan
+    const size = bigisubDataSize(p);
+    const type = p.plantype ? String(p.plantype).toUpperCase() : '';
+    const validity = bigisubFirst(p, ['validity','plan_validity','duration']);
+    const head = [size, type].filter(Boolean).join(' ');
+    if(head) return validity ? `${head} — ${validity}` : head;
+  }
   const idStr = p.id != null ? String(p.id) : null;
   const meaningful = v => v != null && String(v).trim() !== '' && String(v).trim() !== idStr;
   let direct = bigisubFirst(p, ['name','plan_name','planname','plan','title','package','package_name','bundle_name','plan_title','description','desc','label','data_plan','dataplan']);
@@ -8544,12 +8589,31 @@ function bigisubPlanLabel(p){
   return 'Plan ' + (p.id != null ? p.id : '?');
 }
 function bigisubPlanPrice(p){
-  const v = bigisubFirst(p, ['amount','price','plan_amount','plan_price','selling_price','cost','cost_price','api_price','user_price','reseller_price']);
+  const v = bigisubFirst(p, ['display_price','amount','price','plan_amount','plan_price','selling_price','cost','cost_price','api_price','user_price','reseller_price']);
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 }
+// Bigisub lists the same provider under several spellings ("dstv" and
+// "DSTV"). Everything is keyed on the lowercase form so they merge.
 function bigisubCableProvider(p){
-  return bigisubFirst(p, ['provider','cable_type','cable_name','cablename','cable','provider_name','biller','company']);
+  const v = bigisubFirst(p, ['provider','cable_type','cable_name','cablename','cable','provider_name','biller','company']);
+  return v == null ? v : String(v).trim().toLowerCase();
+}
+function bigisubCableName(key){
+  const names = { dstv:'DStv', gotv:'GOtv', startimes:'StarTimes', showmax:'Showmax' };
+  const k = String(key||'').toLowerCase();
+  return names[k] || (k.charAt(0).toUpperCase()+k.slice(1));
+}
+// Each cable plan once: same provider + same product code (or name) + same price.
+function bigisubDedupeCablePlans(plans){
+  const seen = new Set(), out = [];
+  for(const p of (plans||[])){
+    if(bigisubPlanDisabled(p)) continue;
+    const key = [bigisubCableProvider(p), String(p.variation_code || p.product_name || p.name || p.id).toLowerCase(), bigisubPlanPrice(p)].join('|');
+    if(seen.has(key)) continue;
+    seen.add(key); out.push(p);
+  }
+  return out;
 }
 // Verification responses: prefer the flat customer_name the server sends,
 // but fall back to searching the raw upstream payload at any depth.
@@ -8651,6 +8715,7 @@ async function bpLoadWallet(){
     billWalletBalance = r.wallet_balance; billCurrency = r.currency || 'NGN';
     billPinSet = !!r.bill_pin_set; billPinStatusLoaded = true;
     if(r.upgrade_fee != null) billUpgradeFee = Number(r.upgrade_fee);
+    if(r.bill_surcharge != null) billSurcharge = Number(r.bill_surcharge);
     if(r.psa_account_number){ billPsaAccountNumber = r.psa_account_number; billPsaBankName = r.psa_bank_name; }
     if(r.fpe_account_number){ billFpeAccountNumber = r.fpe_account_number; billFpeBankName = r.fpe_bank_name; }
   }catch(e){ billWalletError = e.message || 'Something went wrong.'; }
@@ -8705,7 +8770,7 @@ function bindBillPaymentsEvents(){
     const goHist = document.querySelector('[data-bp-goto="history"]');
     if(goHist) goHist.addEventListener('click', ()=>{ billScreen='history'; billHistory=[]; billHistoryLoaded=false; billHistoryError=null; refreshMain(); });
     const topupBtn = document.getElementById('bp-topup-btn');
-    if(topupBtn) topupBtn.addEventListener('click', ()=>{ billScreen='topup'; refreshMain(); });
+    if(topupBtn) topupBtn.addEventListener('click', ()=>{ billScreen='topup'; bpResetUpgradeForm(); refreshMain(); });
     const historyBtn = document.getElementById('bp-history-btn');
     if(historyBtn) historyBtn.addEventListener('click', ()=>{ billScreen='history'; billHistory=[]; billHistoryLoaded=false; billHistoryError=null; refreshMain(); });
     return;
@@ -8738,6 +8803,12 @@ let billPsaLoading = false;
 let billFpeAccountNumber = null; // upgraded dedicated account (card 2)
 let billFpeBankName = null;
 let billFpeLoading = false;
+let billFpeFormOpen = false; // the upgrade form stays closed until the user taps "Upgrade My Account"
+// Typed-so-far values, kept in memory only while the form is open so the
+// timed balance refresh can't wipe what the person has typed. Cleared on
+// cancel / success. (Nothing here is ever saved or sent anywhere else.)
+let billFpeDraft = { fn:null, ln:null, phone:null, idType:'bvn', idNum:'' };
+function bpResetUpgradeForm(){ billFpeFormOpen = false; billFpeDraft = { fn:null, ln:null, phone:null, idType:'bvn', idNum:'' }; }
 let billPsaSyncing = false;
 let billPsaPollTimer = null;
 
@@ -8801,6 +8872,22 @@ function bpUpgradeCardHtml(){
   const canPay = isOwner && balance >= billUpgradeFee;
   const blocked = !isOwner ? 'Only the business owner can upgrade.' : (!canPay ? `Add at least ${fmtMoney(billUpgradeFee)} to your wallet first.` : '');
   if(billFpeLoading) return `<p class="subtle">Upgrading your account…</p>`;
+  const d = billFpeDraft;
+  const val = (draftVal, profileVal)=> escapeHtml(draftVal !== null ? draftVal : (profileVal||''));
+  const form = (billFpeFormOpen && canPay) ? `
+    <div style="margin-top:12px;border-top:1px solid #E5E7EB;padding-top:12px;">
+      <p class="subtle" style="font-size:12px;">Use the names on your BVN or NIN.</p>
+      <div class="field"><label>First name</label><input id="bp-fpe-fn" autocomplete="off" value="${val(d.fn, cu.firstName)}"></div>
+      <div class="field"><label>Last name</label><input id="bp-fpe-ln" autocomplete="off" value="${val(d.ln, cu.lastName)}"></div>
+      <div class="field"><label>Phone number</label><input id="bp-fpe-phone" type="tel" inputmode="tel" autocomplete="off" value="${val(d.phone, cu.phone)}"></div>
+      <div class="field"><label>Verify with</label>
+        <select id="bp-fpe-idtype"><option value="bvn" ${d.idType==='bvn'?'selected':''}>BVN</option><option value="nin" ${d.idType==='nin'?'selected':''}>NIN</option></select>
+      </div>
+      <div class="field"><label>BVN / NIN (11 digits)</label><input id="bp-fpe-idnum" type="tel" inputmode="numeric" maxlength="11" autocomplete="off" placeholder="11 digits" value="${escapeHtml(d.idNum)}"></div>
+      <button class="btn btn-primary" id="bp-fpe-upgrade">Confirm Upgrade</button>
+      <button class="btn btn-outline" id="bp-fpe-cancel" style="margin-top:8px;">Cancel</button>
+    </div>
+  ` : '';
   return `
     <h3 style="margin:0 0 6px;font-size:16px;">Upgrade to your own permanent account</h3>
     <p class="subtle">Get a dedicated account number that's yours for good. Transfer to it anytime, from any bank, and your wallet is credited automatically. Fees are usually lower: 1% per transfer, or a flat ₦12 under ₦1,000.</p>
@@ -8808,17 +8895,9 @@ function bpUpgradeCardHtml(){
       <div>• Needs your BVN or NIN. We never save it.</div>
       <div>• One-time setup fee: ${fmtMoney(billUpgradeFee)}, taken from your wallet and refunded if the bank can't verify you.</div>
     </div>
-    ${isOwner ? `
-      <div class="field"><label>First name</label><input id="bp-fpe-fn" autocomplete="off" value="${escapeHtml(cu.firstName||'')}"></div>
-      <div class="field"><label>Last name</label><input id="bp-fpe-ln" autocomplete="off" value="${escapeHtml(cu.lastName||'')}"></div>
-      <div class="field"><label>Phone number</label><input id="bp-fpe-phone" type="tel" inputmode="tel" autocomplete="off" value="${escapeHtml(cu.phone||'')}"></div>
-      <div class="field"><label>Verify with</label>
-        <select id="bp-fpe-idtype"><option value="bvn">BVN</option><option value="nin">NIN</option></select>
-      </div>
-      <div class="field"><label>BVN / NIN (11 digits)</label><input id="bp-fpe-idnum" type="tel" inputmode="numeric" maxlength="11" autocomplete="off" placeholder="11 digits"></div>
-    ` : ''}
-    <button class="btn btn-primary" id="bp-fpe-upgrade" ${canPay?'':'disabled style="opacity:0.5;"'}>Upgrade My Account</button>
+    ${(billFpeFormOpen && canPay) ? '' : `<button class="btn btn-primary" id="bp-fpe-open" ${canPay?'':'disabled style="opacity:0.5;"'}>Upgrade My Account</button>`}
     ${blocked ? `<p class="subtle" style="font-size:12px;margin-top:8px;">${blocked}</p>` : ''}
+    ${form}
   `;
 }
 
@@ -8849,9 +8928,26 @@ function bindBillTopupEvents(){
     if(navigator.clipboard) navigator.clipboard.writeText(billFpeAccountNumber);
     toast('Account number copied');
   });
+  // Tapping "Upgrade My Account" opens the form.
+  const openBtn = document.getElementById('bp-fpe-open');
+  if(openBtn) openBtn.addEventListener('click', ()=>{
+    if(openBtn.disabled) return;
+    billFpeFormOpen = true; refreshMain();
+  });
+  // Keep what's been typed, so a balance refresh can't wipe it.
+  const trackDraft = (id, key)=>{
+    const el = document.getElementById(id);
+    if(el) el.addEventListener('input', ()=>{ billFpeDraft[key] = el.value; });
+    if(el) el.addEventListener('change', ()=>{ billFpeDraft[key] = el.value; });
+  };
+  trackDraft('bp-fpe-fn','fn'); trackDraft('bp-fpe-ln','ln'); trackDraft('bp-fpe-phone','phone');
+  trackDraft('bp-fpe-idtype','idType'); trackDraft('bp-fpe-idnum','idNum');
+
+  const cancelBtn = document.getElementById('bp-fpe-cancel');
+  if(cancelBtn) cancelBtn.addEventListener('click', ()=>{ bpResetUpgradeForm(); refreshMain(); });
+
   const upgradeBtn = document.getElementById('bp-fpe-upgrade');
   if(upgradeBtn) upgradeBtn.addEventListener('click', async ()=>{
-    if(upgradeBtn.disabled) return;
     const fn = document.getElementById('bp-fpe-fn').value.trim();
     const ln = document.getElementById('bp-fpe-ln').value.trim();
     const phone = document.getElementById('bp-fpe-phone').value.trim();
@@ -8867,12 +8963,13 @@ function bindBillTopupEvents(){
       });
       billFpeAccountNumber = r.account_number; billFpeBankName = r.bank_name;
       if(r.wallet_balance != null) billWalletBalance = r.wallet_balance;
+      bpResetUpgradeForm(); // done — clear the form and anything typed
       logAudit('bill_wallet_upgrade', `Upgraded to a dedicated top-up account ${r.account_number}`);
       bpApplyVerifiedName(fn, ln, r.verified_first_name, r.verified_last_name);
       toast('Your permanent account is ready ✅');
       bpStartPsaPolling();
     }catch(e){
-      toast(e.message);
+      toast(e.message); // the form stays open with what they typed, so they can fix it
       bpLoadWallet(); // the fee may have been taken and returned — show the true balance
     }
     billFpeLoading = false; refreshMain();
@@ -8943,7 +9040,7 @@ function screenBillAirtime(){
         <select id="bp-network">${BIGISUB_NETWORKS.map(n=>`<option value="${n.id}" ${billForm.network==n.id?'selected':''}>${n.name}</option>`).join('')}</select>
       </div>
       <div class="field"><label>Phone Number</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
-      <div class="field"><label>Amount (₦)</label><input id="bp-amount" type="number" min="50" value="${escAttr(billForm.amount)}" placeholder="e.g. 500"></div>
+      <div class="field"><label>Amount (₦)</label><input id="bp-amount" type="number" min="25" value="${escAttr(billForm.amount)}" placeholder="e.g. 500"></div>
       ${cost>0 ? `<p class="subtle">You pay <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
       ${billPurchaseBtnHtml('bp-airtime-confirm', 'Buy Airtime')}
     </div>
@@ -8957,7 +9054,7 @@ function bindBillAirtimeEvents(){
   if(btn) btn.addEventListener('click', async ()=>{
     if(billPurchaseInFlight) return;
     const amount = Number(billForm.amount||0);
-    if(!billForm.phone.trim() || amount<50){ toast('Enter a valid phone number and amount (min ₦50).'); return; }
+    if(!billForm.phone.trim() || amount<BILL_MIN.airtime){ toast(`Enter a valid phone number and an amount of at least ₦${BILL_MIN.airtime}.`); return; }
     const price = billCustomerPrice(amount);
     if(!confirm(`Buy ₦${amount} airtime for ${billForm.phone}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
@@ -8978,7 +9075,7 @@ async function bpLoadDataPlans(){
   if(billCache.dataPlans){ refreshMain(); return; }
   if(billLoading) return; // an identical load is already in flight — don't fire a duplicate request
   billLoading = true; refreshMain();
-  try{ billCache.dataPlans = (await callBigisub('data_plans', {})).plans || []; }
+  try{ billCache.dataPlans = ((await callBigisub('data_plans', {})).plans || []).filter(p=>!bigisubPlanDisabled(p)); }
   catch(e){ toast(e.message); billCache.dataPlans = []; }
   billLoading = false; refreshMain();
 }
@@ -9040,7 +9137,7 @@ async function bpLoadCablePlans(){
   if(billCache.cablePlans){ refreshMain(); return; }
   if(billLoading) return; // an identical load is already in flight — don't fire a duplicate request
   billLoading = true; refreshMain();
-  try{ billCache.cablePlans = (await callBigisub('cable_plans', {})).plans || []; }
+  try{ billCache.cablePlans = bigisubDedupeCablePlans((await callBigisub('cable_plans', {})).plans || []); }
   catch(e){ toast(e.message); billCache.cablePlans = []; }
   billLoading = false; refreshMain();
 }
@@ -9057,7 +9154,7 @@ function screenBillCable(){
       <div class="field"><label>Provider</label>
         <select id="bp-cable-provider" ${billLoading||verified?'disabled':''}>
           <option value="">${billLoading?'Loading…':'Select provider'}</option>
-          ${providers.map(p=>`<option value="${escAttr(p)}" ${billForm.cableType===p?'selected':''}>${escapeHtml(p)}</option>`).join('')}
+          ${providers.map(p=>`<option value="${escAttr(p)}" ${billForm.cableType===p?'selected':''}>${escapeHtml(bigisubCableName(p))}</option>`).join('')}
         </select>
       </div>
       <div class="field"><label>Smart Card / IUC Number</label><input id="bp-cardno" value="${escAttr(billForm.cardNo)}" placeholder="e.g. 1234567890" ${verified?'disabled':''}></div>
@@ -9153,7 +9250,7 @@ function screenBillElectricity(){
       ${!verified ? `<button class="btn btn-outline" id="bp-elec-verify" ${billForm.elecVerifying?'disabled':''}>${billForm.elecVerifying?'Verifying…':'Verify Meter'}</button>${billForm.elecVerifyError ? `<p class="subtle" style="color:var(--red);margin-top:8px;">${escapeHtml(billForm.elecVerifyError)}</p>` : ''}` : `
       <p class="subtle" style="color:var(--marigold-dark);">✓ Verified: <b>${escapeHtml(billForm.elecCustomerName)}</b> <a href="#" id="bp-elec-reverify" style="margin-left:8px;">change</a></p>
       <div class="field"><label>Phone Number (for receipt)</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
-      <div class="field"><label>Amount (₦)</label><input id="bp-amount" type="number" min="500" value="${escAttr(billForm.amount)}" placeholder="e.g. 5000"></div>
+      <div class="field"><label>Amount (₦)</label><input id="bp-amount" type="number" min="1000" value="${escAttr(billForm.amount)}" placeholder="e.g. 5000"></div>
       ${amount>0 ? `<p class="subtle">You pay <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
       ${billPurchaseBtnHtml('bp-elec-confirm', 'Buy Token')}
       `}
@@ -9189,8 +9286,8 @@ function bindBillElectricityEvents(){
   if(btn) btn.addEventListener('click', async ()=>{
     if(billPurchaseInFlight) return;
     const amount = Number(billForm.amount||0);
-    if(!billForm.phone.trim() || amount<500){ toast('Enter a phone number and an amount of at least ₦500.'); return; }
-    const price = billCustomerPrice(amount);
+    if(!billForm.phone.trim() || amount<BILL_MIN.electricity){ toast(`Enter a phone number and an amount of at least ₦${BILL_MIN.electricity.toLocaleString()}.`); return; }
+    const price = billPreviewPrice('electricity', null, 1, amount);
     if(!confirm(`Buy ₦${amount} token for ${billForm.elecCustomerName}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
@@ -9246,7 +9343,7 @@ function bindBillBettingEvents(){
   if(btn) btn.addEventListener('click', async ()=>{
     if(billPurchaseInFlight) return;
     const amount = Number(billForm.amount||0);
-    if(!billForm.billerCode || !billForm.customerId.trim() || amount<100){ toast('Select a platform, enter the customer ID, and an amount of at least ₦100.'); return; }
+    if(!billForm.billerCode || !billForm.customerId.trim() || amount<BILL_MIN.betting){ toast(`Select a platform, enter the customer ID, and an amount of at least ₦${BILL_MIN.betting}.`); return; }
     billPurchaseInFlight = true; billPurchaseStage = 'Validating…'; refreshMain();
     let validation;
     try{

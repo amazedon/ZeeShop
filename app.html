@@ -3386,8 +3386,6 @@ function screenDashboard(){
     ${handoverNoteBanner()}
     <p class="subtle" style="margin-bottom:14px;">${currentShop()?.name} · ${fmtDate(todayISO())}</p>
 
-    ${pushPromptCard()}
-
     ${dailyDigestBlock()}
 
     ${(alerts.expiring>0 || alerts.dueSoon>0 || alerts.overdue>0 || alerts.lowStock>0 || outStock.length>0) ? `
@@ -3632,6 +3630,9 @@ function bindHomeExtras(){
   if(pushDeviceState === null) ensurePushOn();
   const row = document.querySelector('[data-open-messages]');
   if(row) row.addEventListener('click', openMessagesList);
+  bindPushCardEvents();
+}
+function bindPushCardEvents(){
   const on = document.getElementById('push-turn-on');
   if(on) on.addEventListener('click', async ()=>{
     const ok = await enablePushNotifications();   // this tap lets the browser show its permission prompt
@@ -5451,6 +5452,7 @@ function screenMore(){
   ].filter(i=>i.show);
   return `
     <h2 class="screen-title">${t('more_title')}</h2>
+    ${pushPromptCard()}
     ${items.map(i=>`
       <div class="list-row" data-goto="${i.id}" style="cursor:pointer;">
         <div class="thumb">${i.ic}</div><div class="info"><div class="t1">${i.label}</div></div>
@@ -5470,6 +5472,8 @@ function screenMore(){
   `;
 }
 function bindMoreEvents(){
+  bindPushCardEvents();
+  if(pushDeviceState === null) ensurePushOn();
   const shareAppBtn = document.getElementById('do-share-app');
   if(shareAppBtn) shareAppBtn.addEventListener('click', async ()=>{
     const shareData = {
@@ -8742,20 +8746,9 @@ function billPreviewPrice(pricingService, planKey, quantity, costPrice){
 }
 function billCustomerPrice(costPrice){ return costPrice; }
 // Smallest amount each typed-amount service accepts.
-const BILL_MIN = { airtime: 25, electricity: 1000, betting: 100 };
+const BILL_MIN = { airtime: 50, electricity: 500, betting: 1 };
 
-/* ---------------- Bigisub response parsing helpers ----------------
-   Bigisub's plan and verification payloads don't use one consistent set
-   of key names (or nesting depth), so nothing below assumes a single
-   shape — every lookup tries a list of plausible names, case- and
-   punctuation-insensitively, and verification lookups search nested
-   objects too. Without this, a plan with no "name" key rendered as
-   "Plan 135", and a verify call that succeeded upstream but nested the
-   customer's name one level down looked to the app like a failed
-   verification ("Could not verify this meter"). */
 function bigisubNormKey(k){ return String(k).toLowerCase().replace(/[^a-z0-9]/g,''); }
-// First non-empty value among `keys`, matched against obj's own keys
-// ignoring case, underscores, spaces and hyphens.
 function bigisubFirst(obj, keys){
   if(!obj || typeof obj !== 'object') return null;
   const byNorm = {};
@@ -8766,65 +8759,9 @@ function bigisubFirst(obj, keys){
   }
   return null;
 }
-// Data plans: build "1.5GB SME — 30 days". Bigisub's `size` sometimes
-// arrives as a bare number ("20") with the real unit only in `plan_volume`
-// ("20MB"); convert big MB figures to GB for readability.
-function bigisubDataSize(p){
-  const hasUnit = v => v != null && /[a-z]/i.test(String(v));
-  const size = bigisubFirst(p, ['size','plan_size','data_size']);
-  const vol = bigisubFirst(p, ['plan_volume','volume','data_volume']);
-  if(hasUnit(size)) return String(size).trim().replace(/\s+/g,'').toUpperCase();
-  if(hasUnit(vol)){
-    const m = String(vol).trim().match(/^([\d.]+)\s*(KB|MB|GB|TB)$/i);
-    if(m){
-      let n = parseFloat(m[1]); let u = m[2].toUpperCase();
-      if(u==='MB' && n>=1024){ n = n/1024; u='GB'; }
-      return (Math.round(n*100)/100) + u;
-    }
-    return String(vol).trim();
-  }
-  // Neither field carries a unit. Last resort: MB plans cost about ₦1-2 per
-  // MB, GB plans several hundred ₦ per GB — so a low price-per-unit means MB.
-  const n = parseFloat(size != null ? size : vol);
-  if(!Number.isFinite(n) || n<=0) return '';
-  const price = bigisubPlanPrice(p);
-  return n + ((price>0 && price/n < 20) ? 'MB' : 'GB');
-}
 function bigisubPlanDisabled(p){
   const v = p && p.plan_disabled;
   return v === true || v === 1 || String(v).toLowerCase() === 'true' || String(v) === '1';
-}
-function bigisubPlanLabel(p){
-  if(!p) return '';
-  if(p.plantype != null || p.plan_volume != null){ // a data plan
-    const size = bigisubDataSize(p);
-    const type = p.plantype ? String(p.plantype).toUpperCase() : '';
-    const validity = bigisubFirst(p, ['validity','plan_validity','duration']);
-    const head = [size, type].filter(Boolean).join(' ');
-    if(head) return validity ? `${head} — ${validity}` : head;
-  }
-  const idStr = p.id != null ? String(p.id) : null;
-  const meaningful = v => v != null && String(v).trim() !== '' && String(v).trim() !== idStr;
-  let direct = bigisubFirst(p, ['name','plan_name','planname','plan','title','package','package_name','bundle_name','plan_title','description','desc','label','data_plan','dataplan']);
-  if(!meaningful(direct)) direct = null;
-  let size = bigisubFirst(p, ['data','data_size','size','plan_size','volume','data_volume','bundle','allowance','data_amount','data_value']);
-  const unit = bigisubFirst(p, ['unit','data_unit','size_unit','plan_unit']);
-  if(size != null && unit != null && /^[\d.]+$/.test(String(size).trim())) size = String(size).trim() + ' ' + unit;
-  let validity = bigisubFirst(p, ['validity','plan_validity','duration','days','period','expiry','expires','validity_period']);
-  if(validity != null && /^\d+$/.test(String(validity).trim())) validity = validity + ' days';
-  const has = (hay, needle) => needle != null && String(hay).toLowerCase().includes(String(needle).toLowerCase());
-  const parts = [];
-  if(direct) parts.push(String(direct));
-  if(size != null && !(direct && has(direct, size))) parts.push(String(size));
-  if(validity != null && !(parts.length && has(parts.join(' '), validity))) parts.push(String(validity));
-  if(parts.length) return parts.join(' — ');
-  // Last resort before giving up: scan EVERY string field for something
-  // that reads like a data size (e.g. "1.5GB", "500 MB") — catches plans
-  // whose size is stored under a key we haven't listed.
-  for(const v of Object.values(p)){
-    if(typeof v === 'string' && /\b\d+(\.\d+)?\s*(KB|MB|GB|TB)\b/i.test(v)) return v.trim();
-  }
-  return 'Plan ' + (p.id != null ? p.id : '?');
 }
 function bigisubPlanPrice(p){
   const v = bigisubFirst(p, ['display_price','amount','price','plan_amount','plan_price','selling_price','cost','cost_price','api_price','user_price','reseller_price']);
@@ -8889,6 +8826,7 @@ function screenBillPayments(){
   if(billScreen==='betting') return screenBillBetting();
   if(billScreen==='resultchecker') return screenBillResultChecker();
   if(billScreen==='isp') return screenBillIsp();
+  if(billScreen==='success') return screenBillSuccess();
   const tiles = [
     {id:'airtime', label:'Airtime', hint:'All networks', icon:'📱'},
     {id:'data', label:'Data Bundles', hint:'MTN, Glo, Airtel, 9mobile', icon:'📶'},
@@ -9024,6 +8962,7 @@ function bindBillPaymentsEvents(){
   if(billScreen==='resultchecker') bindBillResultCheckerEvents();
   if(billScreen==='isp') bindBillIspEvents();
   if(billScreen==='history') bindBillHistoryEvents();
+  if(billScreen==='success') bindBillSuccessEvents();
 }
 
 /* ---------------- TOP UP ----------------
@@ -9267,33 +9206,370 @@ function bpStopPsaPolling(){
   if(billPsaPollTimer){ clearInterval(billPsaPollTimer); billPsaPollTimer=null; }
 }
 
+(function(){
+  const st = document.createElement('style');
+  st.textContent = `
+  .bps-overlay{position:fixed;inset:0;z-index:9000;background:rgba(6,5,20,.62);display:flex;align-items:flex-end;justify-content:center;}
+  .bps-sheet{width:100%;max-width:560px;height:94vh;background:#1E1B3A;color:#fff;border-radius:28px 28px 0 0;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 -10px 40px rgba(0,0,0,.4);}
+  .bps-head{display:flex;align-items:center;gap:14px;padding:22px 22px 16px;border-bottom:1px solid #2D2B52;flex-shrink:0;}
+  .bps-hicon{width:52px;height:52px;border-radius:15px;background:#3A2F2F;color:#F59E0B;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  .bps-hicon svg{width:26px;height:26px;}
+  .bps-htext{flex:1;min-width:0;}
+  .bps-title{font-size:22px;font-weight:800;line-height:1.15;}
+  .bps-sub{font-size:13.5px;color:#9C9AC0;margin-top:3px;}
+  .bps-x{width:44px;height:44px;border-radius:50%;border:none;background:#2D2B52;color:#C9C7E8;font-size:18px;cursor:pointer;flex-shrink:0;}
+  .bps-body{flex:1;overflow-y:auto;padding:18px 22px 24px;-webkit-overflow-scrolling:touch;}
+  .bps-foot{padding:12px 22px calc(16px + env(safe-area-inset-bottom,0px));border-top:1px solid #2D2B52;flex-shrink:0;background:#1E1B3A;}
+  .bps-label{font-size:13px;font-weight:700;letter-spacing:.09em;color:#A3A1C6;text-transform:uppercase;margin:16px 0 10px;}
+  .bps-label:first-child{margin-top:2px;}
+  .bps-tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+  .bps-tile{position:relative;display:flex;flex-direction:column;align-items:center;gap:8px;padding:14px 4px 12px;border-radius:18px;background:#27254A;border:2px solid transparent;color:#B9B7DC;font-size:11.5px;font-weight:800;letter-spacing:.04em;cursor:pointer;font-family:inherit;}
+  .bps-tile.on{border-color:#F59E0B;background:#2B2744;color:#fff;}
+  .bps-tile.on.net{border-color:#FFD21F;}
+  .bps-logo{width:52px;height:52px;border-radius:15px;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:900;}
+  .bps-tick{position:absolute;top:-7px;right:-5px;width:22px;height:22px;border-radius:50%;background:#F59E0B;color:#1b1b1b;font-style:normal;font-size:13px;font-weight:900;display:flex;align-items:center;justify-content:center;}
+  .bps-grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+  .bps-bet{position:relative;display:flex;flex-direction:column;align-items:center;gap:8px;padding:14px 6px;border-radius:18px;background:#27254A;border:2px solid transparent;color:#B9B7DC;font-size:12.5px;font-weight:800;cursor:pointer;font-family:inherit;min-height:112px;}
+  .bps-bet .bps-logo{width:48px;height:48px;border-radius:14px;font-size:20px;}
+  .bps-bet span.nm{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .bps-chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin-bottom:12px;-webkit-overflow-scrolling:touch;}
+  .bps-chips.wrap{flex-wrap:wrap;overflow:visible;}
+  .bps-chip{flex-shrink:0;padding:11px 18px;border-radius:999px;border:1.5px solid #34325A;background:#232043;color:#C9C7E8;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;}
+  .bps-chip.on{border-color:#F59E0B;background:#3A2F2F;color:#F59E0B;}
+  .bps-plans{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+  .bps-plan{display:flex;flex-direction:column;align-items:flex-start;gap:6px;text-align:left;padding:14px 12px;border-radius:16px;background:#27254A;border:2px solid #34325A;color:#fff;cursor:pointer;font-family:inherit;min-height:128px;}
+  .bps-plan b{font-size:19px;font-weight:900;}
+  .bps-plan .vl{display:flex;gap:5px;font-size:12.5px;color:#9C9AC0;line-height:1.3;}
+  .bps-plan .pr{font-size:17px;font-weight:900;margin-top:auto;}
+  .bps-badge{display:inline-block;padding:4px 9px;border-radius:7px;font-size:10.5px;font-weight:900;letter-spacing:.05em;word-break:break-all;}
+  .bps-rows{display:flex;flex-direction:column;gap:10px;}
+  .bps-rowbtn{display:flex;align-items:center;justify-content:space-between;gap:12px;text-align:left;padding:18px 18px;border-radius:16px;background:#27254A;border:2px solid #34325A;color:#fff;font-size:15.5px;cursor:pointer;font-family:inherit;}
+  .bps-rowbtn.on{border-color:#F59E0B;}
+  .bps-rowbtn .rp{font-weight:900;white-space:nowrap;}
+  .bps-rowbtn .rs{display:block;color:#9C9AC0;font-size:13px;margin-top:2px;}
+  .bps-sel{display:flex;align-items:center;gap:14px;padding:16px;border-radius:18px;background:#27254A;border:2px solid #34325A;margin-bottom:6px;}
+  .bps-sel .si{width:52px;height:52px;border-radius:14px;background:#3A2F2F;color:#F59E0B;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  .bps-sel .si svg{width:24px;height:24px;}
+  .bps-sel .st{flex:1;min-width:0;}
+  .bps-sel .st b{display:block;font-size:17px;font-weight:800;line-height:1.25;}
+  .bps-sel .st span{display:block;color:#9C9AC0;font-size:14px;margin-top:3px;}
+  .bps-change{background:none;border:none;color:#F59E0B;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;}
+  .bps-input{display:flex;align-items:center;gap:12px;padding:0 16px;border-radius:16px;background:#27254A;border:2px solid #34325A;min-height:58px;}
+  .bps-input:focus-within{border-color:#F59E0B;}
+  .bps-input .bps-ic{color:#F59E0B;display:flex;}
+  .bps-input .bps-ic svg{width:22px;height:22px;}
+  .bps-input input,.bps-input select{flex:1;min-width:0;background:none;border:none;outline:none;color:#fff;font-size:16.5px;padding:16px 0;font-family:inherit;}
+  .bps-input input::placeholder{color:#6F6D96;}
+  .bps-link{display:inline-flex;align-items:center;gap:8px;margin-top:12px;color:#F59E0B;font-size:15.5px;font-weight:700;text-decoration:none;}
+  .bps-status{font-size:13.5px;margin-top:8px;min-height:18px;}
+  .bps-ok{color:#35D08A;font-weight:700;}
+  .bps-err{color:#FF7B7B;}
+  .bps-muted{color:#9C9AC0;}
+  .bps-seg{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .bps-segbtn{padding:20px 10px;border-radius:16px;background:#27254A;border:2px solid #34325A;color:#C9C7E8;font-size:17px;font-weight:800;cursor:pointer;font-family:inherit;}
+  .bps-segbtn.on{border-color:#F59E0B;background:#2E2735;color:#fff;}
+  .bps-total{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:20px;border-radius:18px;background:#382F35;border:1.5px solid #4A3E3B;margin-top:22px;}
+  .bps-total .tl{font-size:17px;color:#D9D6F2;}
+  .bps-total .tl small{display:block;font-size:13px;color:#9C9AC0;margin-top:4px;}
+  .bps-total .ta{font-size:30px;font-weight:900;color:#F59E0B;white-space:nowrap;}
+  .bps-sum{padding:18px;border-radius:18px;background:#2B2640;border:1.5px solid #3E3753;margin-top:18px;}
+  .bps-sum div{display:flex;justify-content:space-between;padding:7px 0;font-size:15.5px;color:#A3A1C6;}
+  .bps-sum div b{color:#fff;}
+  .bps-sum .tot{border-top:1px solid #4A4466;margin-top:8px;padding-top:14px;font-size:19px;color:#fff;font-weight:800;}
+  .bps-sum .tot b{color:#F59E0B;font-size:26px;}
+  .bps-cta{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:19px;border:none;border-radius:20px;background:linear-gradient(135deg,#F7A108,#D97706);color:#1b1206;font-size:19px;font-weight:900;cursor:pointer;font-family:inherit;box-shadow:0 8px 24px rgba(245,158,11,.28);}
+  .bps-cta:disabled{opacity:.6;}
+  .bps-exam{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;padding:18px;background:#27254A;border:2px solid #34325A;border-radius:16px;color:#fff;font-size:16.5px;font-weight:700;cursor:pointer;font-family:inherit;text-align:left;}
+  .bps-exam.on{border-color:#F59E0B;}
+  .bps-dot{width:20px;height:20px;border-radius:50%;flex-shrink:0;display:inline-block;margin-right:12px;vertical-align:middle;}
+  .bps-qty{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+  .bps-ben-overlay{position:fixed;inset:0;z-index:9100;background:rgba(6,5,20,.7);display:flex;align-items:flex-end;justify-content:center;}
+  .bps-ben-box{width:100%;max-width:560px;max-height:70vh;overflow:auto;background:#1E1B3A;color:#fff;border-radius:24px 24px 0 0;padding:20px 22px calc(22px + env(safe-area-inset-bottom,0px));}
+  .bps-ben-item{display:flex;align-items:center;gap:10px;padding:14px 0;border-bottom:1px solid #2D2B52;}
+  .bps-ben-item button.pick{flex:1;text-align:left;background:none;border:none;color:#fff;font-size:16px;font-weight:700;cursor:pointer;font-family:inherit;}
+  .bps-ben-item button.rm{background:none;border:none;color:#FF7B7B;font-size:20px;cursor:pointer;}
+  .bps-empty{color:#9C9AC0;text-align:center;padding:30px 10px;font-size:15px;}
+  .bps-loading{color:#9C9AC0;text-align:center;padding:40px 10px;}
+  /* success / receipt */
+  .bps-receipt{padding:26px 22px 8px;text-align:center;overflow-y:auto;flex:1;}
+  .bps-brand{display:flex;align-items:center;justify-content:center;gap:10px;font-size:26px;font-weight:900;letter-spacing:.02em;margin-bottom:22px;}
+  .bps-brand i{font-style:normal;width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#F7A108,#D97706);color:#1b1206;display:flex;align-items:center;justify-content:center;font-size:24px;}
+  .bps-check{width:84px;height:84px;border-radius:50%;margin:0 auto 12px;display:flex;align-items:center;justify-content:center;font-size:44px;font-weight:900;color:#fff;}
+  .bps-check.ok{background:#12A56B;} .bps-check.wait{background:#D98A06;}
+  .bps-state{font-size:19px;font-weight:800;margin-bottom:12px;}
+  .bps-state.ok{color:#2FD08A;} .bps-state.wait{color:#F5B63D;}
+  .bps-bigamt{font-size:44px;font-weight:900;line-height:1.1;}
+  .bps-what{font-size:16px;color:#A3A1C6;margin:6px 0 20px;}
+  .bps-dcard{text-align:left;background:#27254A;border:1.5px solid #34325A;border-radius:18px;padding:6px 18px;margin-bottom:14px;}
+  .bps-drow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 0;border-bottom:1px solid #34325A;font-size:15px;}
+  .bps-drow:last-child{border-bottom:none;}
+  .bps-drow span{color:#A3A1C6;flex-shrink:0;}
+  .bps-drow b{font-weight:700;text-align:right;word-break:break-all;min-width:0;}
+  .bps-copy{background:#34325A;border:none;color:#D9D6F2;width:34px;height:34px;border-radius:9px;cursor:pointer;flex-shrink:0;font-size:15px;}
+  .bps-resp{text-align:left;background:#27254A;border-left:3px solid #4B4980;border-radius:12px;padding:14px 16px;margin-bottom:14px;}
+  .bps-resp small{display:block;font-size:11.5px;letter-spacing:.08em;color:#9C9AC0;margin-bottom:5px;}
+  .bps-token{text-align:left;background:#26324A;border:1.5px solid #35557F;border-radius:14px;padding:14px 16px;margin-bottom:14px;}
+  .bps-token small{display:block;font-size:11.5px;letter-spacing:.08em;color:#9CB5D8;margin-bottom:6px;}
+  .bps-token .tk{font-size:20px;font-weight:900;letter-spacing:.06em;word-break:break-all;}
+  .bps-thanks{color:#8280AA;font-size:14px;margin:18px 0 4px;}
+  .bps-actions{display:flex;gap:10px;padding:12px 22px calc(16px + env(safe-area-inset-bottom,0px));border-top:1px solid #2D2B52;flex-shrink:0;}
+  .bps-actions button{flex:1;padding:17px;border-radius:16px;font-size:17px;font-weight:800;cursor:pointer;font-family:inherit;border:1.5px solid #34325A;background:#27254A;color:#fff;}
+  .bps-actions button.main{background:linear-gradient(135deg,#F7A108,#D97706);color:#1b1206;border:none;}
+  @media(min-width:760px){.bps-sheet{height:90vh;border-radius:28px;margin-bottom:5vh;}.bps-overlay{align-items:center;}}
+  `;
+  document.head.appendChild(st);
+})();
+
+/* =====================================================================
+   Bill Payments — Bigisub-style dark bottom sheets
+   Same purchase logic as before (callBigisub, PIN, confirm); new screens.
+   Every price shown is a WHOLE naira (rounded up) and already includes
+   the platform's margin — the person only ever sees one final total.
+   ===================================================================== */
+const BP_ICONS = {
+  phone:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"/></svg>',
+  wifi:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5 5 0 0 1 7 0"/><path d="M2 9a14.5 14.5 0 0 1 20 0"/><path d="M12 19.5h.01"/></svg>',
+  tv:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M17 2l-5 5-5-5"/></svg>',
+  bolt:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h8l-1 8 10-12h-8z"/></svg>',
+  trophy:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3"/></svg>',
+  cap:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10L12 5 2 10l10 5 10-5z"/><path d="M6 12v5c3 2 9 2 12 0v-5"/></svg>',
+  card:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>',
+  naira:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4v16M18 4v16M6 4l12 16M4 10h16M4 14h16"/></svg>',
+  clock:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+  mail:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>',
+  hash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 9h14M5 15h14M10 3L8 21M16 3l-2 18"/></svg>',
+};
+const BP_NET_STYLE = {
+  MTN:{l:'M',bg:'linear-gradient(135deg,#FFD84D,#E8B800)',fg:'#1b1b1b'},
+  GLO:{l:'G',bg:'linear-gradient(135deg,#0FD66B,#08994A)',fg:'#d6ffe9'},
+  AIRTEL:{l:'A',bg:'linear-gradient(135deg,#FF3030,#C90000)',fg:'#ffd6d6'},
+  '9MOBILE':{l:'9M',bg:'linear-gradient(135deg,#0B8F52,#06603A)',fg:'#c9f5e0'},
+};
+const BP_CABLE_STYLE = {
+  dstv:{n:'DSTV',l:'D',bg:'linear-gradient(135deg,#0A5CC9,#023E8A)',fg:'#9CC4FF'},
+  gotv:{n:'GOtv',l:'G',bg:'linear-gradient(135deg,#FFA928,#E07B00)',fg:'#1b1206'},
+  startimes:{n:'Startimes',l:'S',bg:'linear-gradient(135deg,#FF3040,#C4001A)',fg:'#FFC9CF'},
+  showmax:{n:'Showmax',l:'S',bg:'linear-gradient(135deg,#FF1F78,#E00058)',fg:'#FFD0E3'},
+};
+const BP_TYPE_COLORS = {
+  GIFTING:{bg:'#33307A',fg:'#A9A6FF'}, CGIFTING:{bg:'#4B2A6B',fg:'#E0A8FF'}, SME:{bg:'#47381B',fg:'#F2C14E'},
+  DATATRANSFER:{bg:'#1B4443',fg:'#3EE0B8'}, COUPON:{bg:'#4A2A2A',fg:'#FF9C9C'},
+};
+const bpN = (n)=> '₦' + Math.ceil(Number(n)||0).toLocaleString('en-NG');
+const bpPrice = (p)=> Math.ceil(bigisubPlanPrice(p));
+
+function bpSheet(icon, title, sub, body, foot){
+  return `<div class="bps-overlay"><div class="bps-sheet">
+    <div class="bps-head">
+      <div class="bps-hicon">${icon}</div>
+      <div class="bps-htext"><div class="bps-title">${title}</div><div class="bps-sub">${sub}</div></div>
+      <button class="bps-x" id="bp-back" aria-label="Close">✕</button>
+    </div>
+    <div class="bps-body">${body}</div>
+    ${foot ? `<div class="bps-foot">${foot}</div>` : ''}
+  </div></div>`;
+}
+function bpCta(id, label){
+  return `<button class="bps-cta" id="${id}" ${billPurchaseInFlight?'disabled':''}>${billPurchaseInFlight ? (billPurchaseStage||'Processing…') : `${label} <span>→</span>`}</button>`;
+}
+function bpField(id, icon, placeholder, value, attrs){
+  return `<div class="bps-input"><span class="bps-ic">${icon}</span><input id="${id}" value="${escAttr(value||'')}" placeholder="${escAttr(placeholder)}" autocomplete="off" ${attrs||''}></div>`;
+}
+function bpQuick(list){
+  return `<div class="bps-chips wrap">${list.map(a=>`<button class="bps-chip" data-quick="${a}">₦${a.toLocaleString('en-NG')}</button>`).join('')}</div>`;
+}
+function bpTotal(label, sub, amount){
+  return `<div class="bps-total"><div class="tl">${label}${sub?`<small>${escapeHtml(sub)}</small>`:''}</div><div class="ta">${bpN(amount)}</div></div>`;
+}
+function bpSelected(iconSvg, title, sub, changeId){
+  return `<div class="bps-sel"><div class="si">${iconSvg}</div><div class="st"><b>${escapeHtml(title)}</b><span>${escapeHtml(sub)}</span></div><button class="bps-change" id="${changeId}">Change ⌄</button></div>`;
+}
+function bpNetTiles(){
+  return `<div class="bps-label">Select network</div><div class="bps-tiles">${BIGISUB_NETWORKS.map(n=>{
+    const s = BP_NET_STYLE[n.name]; const on = n.id==billForm.network;
+    return `<button class="bps-tile net ${on?'on':''}" data-net="${n.id}"><span class="bps-logo" style="background:${s.bg};color:${s.fg}">${s.l}</span><span>${n.name}</span>${on?'<i class="bps-tick">✓</i>':''}</button>`;
+  }).join('')}</div>`;
+}
+function bpBindNetTiles(onChange){
+  document.querySelectorAll('[data-net]').forEach(b=>b.addEventListener('click', ()=>{ billForm.network = Number(b.dataset.net); onChange(); }));
+}
+function bpBindQuick(onPick){
+  document.querySelectorAll('[data-quick]').forEach(b=>b.addEventListener('click', ()=>{ billForm.amount = String(b.dataset.quick); onPick(); }));
+}
+function bpStatusHtml(verifying, name, err){
+  if(verifying) return '<span class="bps-muted">Verifying…</span>';
+  if(name) return `<span class="bps-ok">✓ ${escapeHtml(name)}</span>`;
+  if(err) return `<span class="bps-err">${escapeHtml(err)}</span>`;
+  return '';
+}
+function bpSetStatus(id, html){ const el = document.getElementById(id); if(el) el.innerHTML = html; }
+// Calls run() ~0.6s after the person stops typing, once ready() says there's enough to verify.
+function bpAutoVerify(inputId, ready, run){
+  const el = document.getElementById(inputId); if(!el) return;
+  let t; el.addEventListener('input', ()=>{ clearTimeout(t); if(ready()) t = setTimeout(run, 650); });
+}
+
+/* ---- Beneficiaries: numbers/IDs used before, saved on this device per business ---- */
+function bpBenKey(type){ return 'zeeshop_ben_' + ((business() && business().id) || 'x') + '_' + type; }
+function bpBenList(type){ try{ return JSON.parse(localStorage.getItem(bpBenKey(type)) || '[]'); }catch(_e){ return []; } }
+function bpBenSave(type, value, label){
+  value = String(value||'').trim(); if(!value) return;
+  const list = bpBenList(type).filter(b=>b.value !== value);
+  list.unshift({ value, label: label || '' });
+  try{ localStorage.setItem(bpBenKey(type), JSON.stringify(list.slice(0, 12))); }catch(_e){}
+}
+function bpBenRemove(type, value){
+  try{ localStorage.setItem(bpBenKey(type), JSON.stringify(bpBenList(type).filter(b=>b.value !== value))); }catch(_e){}
+}
+function bpBenLink(type){ return `<a href="#" class="bps-link" data-ben="${type}">🔖 Pick from Beneficiary</a>`; }
+function bpBindBen(type, inputId, onPick){
+  const link = document.querySelector(`[data-ben="${type}"]`); if(!link) return;
+  link.addEventListener('click', (e)=>{
+    e.preventDefault();
+    const draw = ()=>{
+      const list = bpBenList(type);
+      const box = document.getElementById('bps-ben'); if(box) box.remove();
+      const ov = document.createElement('div'); ov.className = 'bps-ben-overlay'; ov.id = 'bps-ben';
+      ov.innerHTML = `<div class="bps-ben-box"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><b style="font-size:19px;">Saved beneficiaries</b><button class="bps-x" id="bps-ben-close">✕</button></div>
+        ${list.length ? list.map(b=>`<div class="bps-ben-item"><button class="pick" data-pick="${escAttr(b.value)}">${escapeHtml(b.value)}${b.label?`<span style="display:block;color:#9C9AC0;font-size:13px;font-weight:600;">${escapeHtml(b.label)}</span>`:''}</button><button class="rm" data-rm="${escAttr(b.value)}" aria-label="Remove">🗑</button></div>`).join('') : '<div class="bps-empty">Nothing saved yet. Numbers you buy for are saved here automatically.</div>'}
+      </div>`;
+      document.body.appendChild(ov);
+      ov.addEventListener('click', (ev)=>{ if(ev.target === ov) ov.remove(); });
+      document.getElementById('bps-ben-close').addEventListener('click', ()=>ov.remove());
+      ov.querySelectorAll('[data-pick]').forEach(btn=>btn.addEventListener('click', ()=>{
+        const input = document.getElementById(inputId);
+        if(input){ input.value = btn.dataset.pick; input.dispatchEvent(new Event('input', { bubbles:true })); }
+        ov.remove(); if(onPick) onPick(btn.dataset.pick);
+      }));
+      ov.querySelectorAll('[data-rm]').forEach(btn=>btn.addEventListener('click', ()=>{ bpBenRemove(type, btn.dataset.rm); draw(); }));
+    };
+    draw();
+  });
+}
+
+/* ---- Success / receipt screen (ZeeShop-branded) ---- */
+let billSuccess = null;
+function bpSuccessInfo(r, label, recipientLabel, recipient, fallbackAmount, typeLabel){
+  const body = (r && r.bigisub_response) || {};
+  const d = (body.data && typeof body.data === 'object') ? body.data : body;
+  return {
+    label, recipientLabel, recipient, typeLabel: typeLabel || label,
+    amount: (r && r.charged != null) ? r.charged : fallbackAmount,
+    tid: d.transaction_id || d.tranx_id || '', ref: d.reference || '',
+    status: (r && r.status) || 'success',
+    message: body.message || d.status_detail || '',
+    token: (r && r.token) || d.token || '', units: d.units || '',
+    pins: (r && r.pins) || d.pins || null,
+    at: new Date(),
+  };
+}
+function bpShowSuccess(info){ billSuccess = info; billScreen = 'success'; refreshMain(); }
+function screenBillSuccess(){
+  const s = billSuccess || {};
+  const wait = s.status === 'pending';
+  const copy = (v)=> v ? `<button class="bps-copy" data-copy="${escAttr(v)}" aria-label="Copy">⧉</button>` : '';
+  const row = (k, v, c)=> v ? `<div class="bps-drow"><span>${k}</span><b>${escapeHtml(String(v))}</b>${c?copy(v):''}</div>` : '';
+  const pins = Array.isArray(s.pins) ? s.pins : (s.pins ? [s.pins] : []);
+  return `<div class="bps-overlay"><div class="bps-sheet">
+    <div class="bps-receipt">
+      <div class="bps-brand"><i>Z</i>ZeeShop</div>
+      <div class="bps-check ${wait?'wait':'ok'}">${wait?'…':'✓'}</div>
+      <div class="bps-state ${wait?'wait':'ok'}">${wait?'Processing':'Successful'}</div>
+      <div class="bps-bigamt">${bpN(s.amount)}</div>
+      <div class="bps-what">${escapeHtml(s.label||'')}</div>
+      ${s.token ? `<div class="bps-token"><small>TOKEN</small><div style="display:flex;align-items:center;gap:10px;justify-content:space-between;"><div class="tk">${escapeHtml(s.token)}</div>${copy(s.token)}</div>${s.units?`<div style="margin-top:6px;color:#9CB5D8;font-size:13px;">${escapeHtml(s.units)}</div>`:''}</div>` : ''}
+      ${pins.length ? `<div class="bps-token"><small>${pins.length>1?'PINS':'PIN'}</small>${pins.map(p=>`<div style="display:flex;align-items:center;gap:10px;justify-content:space-between;margin-top:4px;"><div class="tk">${escapeHtml(String(p))}</div>${copy(String(p))}</div>`).join('')}</div>` : ''}
+      <div class="bps-dcard">
+        ${row('Type', s.typeLabel)}
+        ${row('Transaction ID', s.tid, true)}
+        ${row('Reference', s.ref, true)}
+        ${row(s.recipientLabel||'Recipient', s.recipient, true)}
+        ${row('Amount Paid', bpN(s.amount))}
+        ${row('Date & Time', s.at ? new Date(s.at).toLocaleString('en-NG',{dateStyle:'medium',timeStyle:'short'}) : '')}
+      </div>
+      <div class="bps-resp"><small>RESPONSE</small>${escapeHtml((wait ? 'Your request is being processed. Check History in a moment for the final result.' : (s.message || 'Transaction successful')).toString().toUpperCase())}</div>
+      <div class="bps-thanks">Thank you for using ZeeShop</div>
+    </div>
+    <div class="bps-actions"><button id="bp-succ-hist">History</button><button class="main" id="bp-succ-done">Done</button></div>
+  </div></div>`;
+}
+function bindBillSuccessEvents(){
+  document.querySelectorAll('[data-copy]').forEach(b=>b.addEventListener('click', ()=>{
+    const v = b.dataset.copy;
+    try{ navigator.clipboard.writeText(v); toast('Copied'); }catch(_e){ toast(v); }
+  }));
+  const done = document.getElementById('bp-succ-done');
+  if(done) done.addEventListener('click', ()=>{ billScreen = 'hub'; billResetForm(); refreshMain(); });
+  const hist = document.getElementById('bp-succ-hist');
+  if(hist) hist.addEventListener('click', ()=>{ billScreen = 'history'; billHistory = []; billHistoryLoaded = false; billHistoryError = null; billResetForm(); refreshMain(); });
+}
+
+/* ---------------- Plan helpers (live Bigisub data) ---------------- */
+// Finds a data size like "20MB" / "1.5GB" whichever way Bigisub splits it:
+// all in one field, number and unit in separate fields, or inside the plan name.
+function bigisubDataSize(p){
+  const full = /(\d+(?:\.\d+)?)\s*(KB|MB|GB|TB)\b/i;
+  const keys = ['size','plan_size','data_size','plan_volume','volume','data_volume','plan_name','name','plan','data','datasize','product_name'];
+  const vals = keys.map(k=>p && p[k]).filter(v=>v!==undefined && v!==null && String(v).trim()!=='').map(v=>String(v).trim());
+  for(const v of vals){ const m = v.match(full); if(m) return fmtDataAmount(parseFloat(m[1]), m[2].toUpperCase()); }
+  const num = vals.map(v=>v.match(/^(\d+(?:\.\d+)?)$/)).find(Boolean);
+  const unit = vals.map(v=>v.match(/^(KB|MB|GB|TB)$/i)).find(Boolean);
+  if(num && unit) return fmtDataAmount(parseFloat(num[1]), unit[1].toUpperCase());
+  if(num){ // number only: low price per unit means MB, otherwise GB
+    const n = parseFloat(num[1]); const price = bigisubPlanPrice(p);
+    return n + ((price>0 && price/n < 20) ? 'MB' : 'GB');
+  }
+  return '';
+}
+function fmtDataAmount(n, u){
+  if(u==='MB' && n>=1024){ n = n/1024; u='GB'; }
+  return (Math.round(n*100)/100) + u;
+}
+function bigisubPlanLabel(p){
+  if(!p) return '';
+  if(p.plantype != null || p.plan_volume != null || p.size != null){
+    const size = bigisubDataSize(p); const validity = bigisubFirst(p, ['validity','plan_validity','duration']);
+    if(size) return validity ? `${size} - ${validity}` : size;
+  }
+  const direct = bigisubFirst(p, ['product_name','name','plan_name','variation_name','plan','title','label','description']);
+  if(direct) return String(direct);
+  const code = bigisubFirst(p, ['variation_code','code']);
+  if(code) return String(code).replace(/[-_]/g,' ');
+  return 'Plan ' + (p.id!==undefined ? p.id : '');
+}
+function bpNetName(){ const n = BIGISUB_NETWORKS.find(x=>x.id==billForm.network); return n ? n.name : ''; }
+function bpEnsure(key, loader){ if(!billCache[key] && !billLoading) loader(); }
+function bpBackBind(){ /* the ✕ button (#bp-back) is wired once in bindBillPaymentsEvents */ }
+function bpMinAmt(x){ return Math.max(1, Number(x)||1); }
+
 /* ---------------- AIRTIME ---------------- */
 function screenBillAirtime(){
-  const cost = Number(billForm.amount||0);
-  const price = cost>0 ? billPreviewPrice('airtime', null, 1, cost) : 0;
-  return `
-    ${bpHeader('Airtime')}
-    <div class="card">
-      <div class="field"><label>Network</label>
-        <select id="bp-network">${BIGISUB_NETWORKS.map(n=>`<option value="${n.id}" ${billForm.network==n.id?'selected':''}>${n.name}</option>`).join('')}</select>
-      </div>
-      <div class="field"><label>Phone Number</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
-      <div class="field"><label>Amount (₦)</label><input id="bp-amount" type="number" min="25" value="${escAttr(billForm.amount)}" placeholder="e.g. 500"></div>
-      ${cost>0 ? `<p class="subtle">You pay <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
-      ${billPurchaseBtnHtml('bp-airtime-confirm', 'Buy Airtime')}
-    </div>
-  `;
+  const amount = Number(billForm.amount||0);
+  const body = `
+    ${bpNetTiles()}
+    <div class="bps-label">Amount</div>
+    <div class="bps-input"><span class="bps-ic">${BP_ICONS.naira}</span><input id="bp-amount" type="number" inputmode="numeric" value="${escAttr(billForm.amount)}" placeholder="Enter amount (₦${BILL_MIN.airtime} - ₦50,000)"></div>
+    ${bpQuick([50,100,200,500,1000,2000,5000])}
+    <div class="bps-label">Phone number</div>
+    ${bpField('bp-phone', BP_ICONS.phone, 'e.g. 08012345678', billForm.phone, 'type="tel" inputmode="tel"')}
+    ${bpBenLink('phone')}
+    ${amount>=BILL_MIN.airtime ? bpTotal('Total Amount', `${bpNetName()} airtime`, billPreviewPrice('airtime', null, 1, amount)) : ''}`;
+  return bpSheet(BP_ICONS.phone, 'Buy Airtime', 'Quick and secure airtime top-up', body, bpCta('bp-airtime-confirm','Continue to Payment'));
 }
 function bindBillAirtimeEvents(){
-  const net = document.getElementById('bp-network'); if(net) net.addEventListener('change', e=>{ billForm.network=e.target.value; });
+  bpBackBind();
+  bpBindNetTiles(()=>refreshMain());
   const phone = document.getElementById('bp-phone'); if(phone) phone.addEventListener('input', e=>{ billForm.phone=e.target.value; });
-  const amt = document.getElementById('bp-amount'); if(amt) amt.addEventListener('input', e=>{ billForm.amount=e.target.value; refreshMain(); });
+  const amt = document.getElementById('bp-amount'); if(amt) amt.addEventListener('change', e=>{ billForm.amount=e.target.value; refreshMain(); });
+  if(amt) amt.addEventListener('input', e=>{ billForm.amount=e.target.value; });
+  bpBindQuick(()=>refreshMain());
+  bpBindBen('phone','bp-phone');
   const btn = document.getElementById('bp-airtime-confirm');
   if(btn) btn.addEventListener('click', async ()=>{
     if(billPurchaseInFlight) return;
     const amount = Number(billForm.amount||0);
     if(!billForm.phone.trim() || amount<BILL_MIN.airtime){ toast(`Enter a valid phone number and an amount of at least ₦${BILL_MIN.airtime}.`); return; }
-    const price = billCustomerPrice(amount);
+    const price = billPreviewPrice('airtime', null, 1, amount);
     if(!confirm(`Buy ₦${amount} airtime for ${billForm.phone}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
@@ -9301,8 +9577,10 @@ function bindBillAirtimeEvents(){
       const r = await callBigisub('airtime_purchase', { network: Number(billForm.network), phone_number: billForm.phone.trim(), amount, client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
       billRecordTxAttribution(billGetClientRef());
-      logAudit('bill_airtime', `Sold ₦${amount} ${BIGISUB_NETWORKS.find(n=>n.id==billForm.network).name} airtime to ${billForm.phone}`);
-      toast('Airtime sent ✅'); billScreen='hub';
+      bpBenSave('phone', billForm.phone);
+      logAudit('bill_airtime', `Sold ₦${amount} ${bpNetName()} airtime to ${billForm.phone}`);
+      const info = bpSuccessInfo(r, `${bpNetName()} Airtime`, 'Phone Number', billForm.phone.trim(), price, 'VTU');
+      billPurchaseInFlight = false; billPurchaseStage = ''; bpShowSuccess(info); return;
     }catch(e){ toast(e.message); }
     billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
   });
@@ -9311,220 +9589,226 @@ function bindBillAirtimeEvents(){
 /* ---------------- DATA ---------------- */
 async function bpLoadDataPlans(){
   if(billCache.dataPlans){ refreshMain(); return; }
-  if(billLoading) return; // an identical load is already in flight — don't fire a duplicate request
+  if(billLoading) return;
   billLoading = true; refreshMain();
   try{ billCache.dataPlans = ((await callBigisub('data_plans', {})).plans || []).filter(p=>!bigisubPlanDisabled(p)); }
   catch(e){ toast(e.message); billCache.dataPlans = []; }
   billLoading = false; refreshMain();
 }
+function bpDataBadge(type){
+  const t = String(type||'').toUpperCase(); const c = BP_TYPE_COLORS[t] || { bg:'#33307A', fg:'#A9A6FF' };
+  return t ? `<span class="bps-badge" style="background:${c.bg};color:${c.fg}">${escapeHtml(t)}</span>` : '';
+}
 function screenBillData(){
-  const plans = (billCache.dataPlans||[]).filter(p=>String(p.network)===String(billForm.network));
+  const plans = (billCache.dataPlans||[]).filter(p=>String(p.network)===String(billForm.network)).sort((a,b)=>bpPrice(a)-bpPrice(b));
   const chosen = plans.find(p=>String(p.id)===String(billForm.planId));
-  const cost = chosen ? bigisubPlanPrice(chosen) : 0;
-  const price = chosen ? billPreviewPrice('data', chosen.id, 1, cost) : 0;
-  return `
-    ${bpHeader('Data Bundles')}
-    <div class="card">
-      <div class="field"><label>Network</label>
-        <select id="bp-network">${BIGISUB_NETWORKS.map(n=>`<option value="${n.id}" ${billForm.network==n.id?'selected':''}>${n.name}</option>`).join('')}</select>
-      </div>
-      <div class="field"><label>Phone Number</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
-      <div class="field"><label>Plan</label>
-        <select id="bp-plan" ${billLoading?'disabled':''}>
-          <option value="">${billLoading?'Loading plans…':'Select a plan'}</option>
-          ${plans.map(p=>`<option value="${p.id}" ${billForm.planId==p.id?'selected':''}>${escapeHtml(bigisubPlanLabel(p))} — ₦${bigisubPlanPrice(p)}</option>`).join('')}
-        </select>
-      </div>
-      <label style="display:flex;align-items:center;gap:8px;margin:8px 0;font-size:13px;">
-        <input type="checkbox" id="bp-ported" ${billForm.ported?'checked':''}> This number was ported from another network
-      </label>
-      ${chosen ? `<p class="subtle">You pay <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
-      ${billPurchaseBtnHtml('bp-data-confirm', 'Buy Data')}
-    </div>
-  `;
+  const types = [...new Set(plans.map(p=>p.plantype).filter(Boolean))];
+  const filter = billForm.dataType || '';
+  const shown = filter ? plans.filter(p=>String(p.plantype)===filter) : plans;
+  let body = bpNetTiles();
+  if(billLoading && !billCache.dataPlans){
+    body += '<div class="bps-loading">Loading plans…</div>';
+  } else if(!chosen){
+    body += `<div class="bps-label">Data plan</div>
+      <div class="bps-chips"><button class="bps-chip ${!filter?'on':''}" data-dtype="">All Plans</button>${types.map(t=>`<button class="bps-chip ${filter===t?'on':''}" data-dtype="${escAttr(t)}">${escapeHtml(t)}</button>`).join('')}</div>
+      ${shown.length ? `<div class="bps-plans">${shown.map(p=>`
+        <button class="bps-plan" data-plan="${escAttr(p.id)}"><b>${escapeHtml(bigisubDataSize(p) || bigisubPlanLabel(p))}</b>
+          <div class="vl">${BP_ICONS.clock}<span>${escapeHtml(bigisubFirst(p,['validity','plan_validity','duration'])||'')}</span></div>
+          <div class="pr">${bpN(bpPrice(p))}</div>${bpDataBadge(p.plantype)}</button>`).join('')}</div>`
+        : '<div class="bps-empty">No plans available for this network right now.</div>'}`;
+  } else {
+    const price = bpPrice(chosen); const lbl = bigisubPlanLabel(chosen);
+    body += bpSelected(BP_ICONS.wifi, lbl, `${bpN(price)} · ${String(chosen.plantype||'').toUpperCase()}`, 'bp-plan-change') +
+      `<div class="bps-label">Phone number</div>${bpField('bp-phone', BP_ICONS.phone, '08012345678', billForm.phone, 'type="tel" inputmode="tel"')}${bpBenLink('phone')}
+       <label style="display:flex;align-items:center;gap:10px;margin:18px 0 0;font-size:14.5px;color:#C9C7E8;"><input type="checkbox" id="bp-ported" ${billForm.ported?'checked':''} style="width:20px;height:20px;"> This number was ported from another network</label>
+       ${bpTotal('Total Amount', `${bpNetName()} ${lbl}`, price)}`;
+  }
+  return bpSheet(BP_ICONS.wifi, 'Buy Data', 'Quick and secure data purchase', body, chosen ? bpCta('bp-data-confirm','Continue to Payment') : '');
 }
 function bindBillDataEvents(){
-  if(!billCache.dataPlans && !billLoading) bpLoadDataPlans();
-  const net = document.getElementById('bp-network'); if(net) net.addEventListener('change', e=>{ billForm.network=e.target.value; billForm.planId=''; refreshMain(); });
+  bpBackBind(); bpEnsure('dataPlans', bpLoadDataPlans);
+  bpBindNetTiles(()=>{ billForm.planId=''; billForm.dataType=''; refreshMain(); });
+  document.querySelectorAll('[data-dtype]').forEach(b=>b.addEventListener('click', ()=>{ billForm.dataType=b.dataset.dtype; refreshMain(); }));
+  document.querySelectorAll('[data-plan]').forEach(b=>b.addEventListener('click', ()=>{ billForm.planId=b.dataset.plan; refreshMain(); }));
+  const ch = document.getElementById('bp-plan-change'); if(ch) ch.addEventListener('click', ()=>{ billForm.planId=''; refreshMain(); });
   const phone = document.getElementById('bp-phone'); if(phone) phone.addEventListener('input', e=>{ billForm.phone=e.target.value; });
-  const plan = document.getElementById('bp-plan'); if(plan) plan.addEventListener('change', e=>{ billForm.planId=e.target.value; refreshMain(); });
   const ported = document.getElementById('bp-ported'); if(ported) ported.addEventListener('change', e=>{ billForm.ported=e.target.checked; });
+  bpBindBen('phone','bp-phone');
   const btn = document.getElementById('bp-data-confirm');
   if(btn) btn.addEventListener('click', async ()=>{
     if(billPurchaseInFlight) return;
-    const plans = (billCache.dataPlans||[]);
-    const chosen = plans.find(p=>String(p.id)===String(billForm.planId));
+    const chosen = (billCache.dataPlans||[]).find(p=>String(p.id)===String(billForm.planId));
     if(!billForm.phone.trim() || !chosen){ toast('Enter a phone number and select a plan.'); return; }
-    const price = billCustomerPrice(bigisubPlanPrice(chosen));
-    if(!confirm(`Buy ${bigisubPlanLabel(chosen)} for ${billForm.phone}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
+    const price = bpPrice(chosen); const lbl = bigisubPlanLabel(chosen);
+    if(!confirm(`Buy ${bpNetName()} ${lbl} for ${billForm.phone}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
     try{
       const r = await callBigisub('data_purchase', { network: Number(billForm.network), phone_number: billForm.phone.trim(), plan: chosen.id, ported_number: !!billForm.ported, client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
       billRecordTxAttribution(billGetClientRef());
-      logAudit('bill_data', `Sold ${bigisubPlanLabel(chosen)} data to ${billForm.phone}`);
-      toast('Data sent ✅'); billScreen='hub';
+      bpBenSave('phone', billForm.phone);
+      logAudit('bill_data', `Sold ${lbl} data to ${billForm.phone}`);
+      const info = bpSuccessInfo(r, `${bpNetName()} ${lbl}`, 'Phone Number', billForm.phone.trim(), price, 'Data');
+      billPurchaseInFlight = false; billPurchaseStage = ''; bpShowSuccess(info); return;
     }catch(e){ toast(e.message); }
     billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
   });
 }
 
-/* ---------------- CABLE TV (verify → purchase) ---------------- */
+/* ---------------- CABLE TV ---------------- */
 async function bpLoadCablePlans(){
   if(billCache.cablePlans){ refreshMain(); return; }
-  if(billLoading) return; // an identical load is already in flight — don't fire a duplicate request
+  if(billLoading) return;
   billLoading = true; refreshMain();
   try{ billCache.cablePlans = bigisubDedupeCablePlans((await callBigisub('cable_plans', {})).plans || []); }
   catch(e){ toast(e.message); billCache.cablePlans = []; }
   billLoading = false; refreshMain();
 }
 function screenBillCable(){
-  const providers = [...new Set((billCache.cablePlans||[]).map(p=>bigisubCableProvider(p)))].filter(Boolean);
-  const plans = (billCache.cablePlans||[]).filter(p=>(bigisubCableProvider(p))===billForm.cableType);
+  const all = billCache.cablePlans || [];
+  const providers = [...new Set(all.map(p=>bigisubCableProvider(p)))].filter(Boolean);
+  const plans = all.filter(p=>bigisubCableProvider(p)===billForm.cableType).sort((a,b)=>bpPrice(a)-bpPrice(b));
   const chosen = plans.find(p=>String(p.id)===String(billForm.planId));
-  const cost = chosen ? bigisubPlanPrice(chosen) : 0;
-  const price = chosen ? billPreviewPrice('cable', chosen.id, 1, cost) : 0;
   const verified = !!billForm.cableCustomerName;
-  return `
-    ${bpHeader('Cable TV')}
-    <div class="card">
-      <div class="field"><label>Provider</label>
-        <select id="bp-cable-provider" ${billLoading||verified?'disabled':''}>
-          <option value="">${billLoading?'Loading…':'Select provider'}</option>
-          ${providers.map(p=>`<option value="${escAttr(p)}" ${billForm.cableType===p?'selected':''}>${escapeHtml(bigisubCableName(p))}</option>`).join('')}
-        </select>
-      </div>
-      <div class="field"><label>Smart Card / IUC Number</label><input id="bp-cardno" value="${escAttr(billForm.cardNo)}" placeholder="e.g. 1234567890" ${verified?'disabled':''}></div>
-      ${!verified ? `<button class="btn btn-outline" id="bp-cable-verify" ${billForm.cableVerifying?'disabled':''}>${billForm.cableVerifying?'Verifying…':'Verify Card'}</button>${billForm.cableVerifyError ? `<p class="subtle" style="color:var(--red);margin-top:8px;">${escapeHtml(billForm.cableVerifyError)}</p>` : ''}` : `
-      <p class="subtle" style="color:var(--marigold-dark);">✓ Verified: <b>${escapeHtml(billForm.cableCustomerName)}</b> <a href="#" id="bp-cable-reverify" style="margin-left:8px;">change</a></p>
-      <div class="field"><label>Plan</label>
-        <select id="bp-plan">
-          <option value="">Select a plan</option>
-          ${plans.map(p=>`<option value="${p.id}" ${billForm.planId==p.id?'selected':''}>${escapeHtml(bigisubPlanLabel(p))} — ₦${bigisubPlanPrice(p)}</option>`).join('')}
-        </select>
-      </div>
-      <div class="field"><label>Phone Number (for receipt)</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
-      ${chosen ? `<p class="subtle">You pay <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
-      ${billPurchaseBtnHtml('bp-cable-confirm', 'Pay Subscription')}
-      `}
-    </div>
-  `;
+  let body = '';
+  if(billLoading && !all.length) body = '<div class="bps-loading">Loading…</div>';
+  else {
+    body += `<div class="bps-label">Select provider</div><div class="bps-tiles">${providers.map(k=>{
+      const s = BP_CABLE_STYLE[k] || { n:bigisubCableName(k), l:String(k).charAt(0).toUpperCase(), bg:'linear-gradient(135deg,#6B63FF,#3D36C4)', fg:'#E0DEFF' };
+      const on = billForm.cableType===k;
+      return `<button class="bps-tile ${on?'on':''}" data-cprov="${escAttr(k)}"><span class="bps-logo" style="background:${s.bg};color:${s.fg}">${s.l}</span><span>${escapeHtml(s.n)}</span>${on?'<i class="bps-tick">✓</i>':''}</button>`;
+    }).join('')}</div>`;
+    if(billForm.cableType && !chosen){
+      body += `<div class="bps-label">Select plan</div><div class="bps-rows">${plans.map(p=>`
+        <button class="bps-rowbtn" data-cplan="${escAttr(p.id)}"><span>${escapeHtml(bigisubPlanLabel(p))}</span><span class="rp">${bpN(bpPrice(p))}</span></button>`).join('') || '<div class="bps-empty">No plans for this provider right now.</div>'}</div>`;
+    } else if(chosen){
+      body += bpSelected(BP_ICONS.tv, bigisubPlanLabel(chosen), bpN(bpPrice(chosen)), 'bp-plan-change') +
+        `<div class="bps-label">Smartcard / IUC number</div>
+         ${bpField('bp-cardno', BP_ICONS.card, 'Enter smartcard number (auto-verifies)', billForm.cardNo, 'inputmode="numeric"')}
+         <div class="bps-status" id="bp-cable-status">${bpStatusHtml(billForm.cableVerifying, billForm.cableCustomerName, billForm.cableVerifyError)}</div>
+         ${bpBenLink('card')}
+         <div class="bps-label">Phone number</div>${bpField('bp-phone', BP_ICONS.phone, 'e.g. 08012345678', billForm.phone, 'type="tel" inputmode="tel"')}
+         ${bpTotal('Total Amount', `${bigisubCableName(billForm.cableType)} - ${bigisubPlanLabel(chosen)}`, bpPrice(chosen))}`;
+    }
+  }
+  return bpSheet(BP_ICONS.tv, 'Cable TV', 'Subscribe to your favourite TV', body, chosen ? bpCta('bp-cable-confirm','Pay Subscription') : '');
+}
+async function bpVerifyCable(){
+  if(billForm.cableVerifying || !billForm.cableType || billForm.cardNo.trim().length < 6) return;
+  billForm.cableVerifying = true; billForm.cableVerifyError = ''; billForm.cableCustomerName = ''; bpSetStatus('bp-cable-status', bpStatusHtml(true));
+  try{
+    const r = await callBigisub('cable_verify', { cable_name: billForm.cableType, card_no: billForm.cardNo.trim() });
+    const name = bigisubNameFromResponse(r);
+    if(name) billForm.cableCustomerName = name;
+    else billForm.cableVerifyError = bigisubUpstreamMessage(r && r.raw) || "Couldn't verify this card — check the number and the provider.";
+  }catch(e){ billForm.cableVerifyError = e.message || 'Verification failed.'; }
+  billForm.cableVerifying = false; bpSetStatus('bp-cable-status', bpStatusHtml(false, billForm.cableCustomerName, billForm.cableVerifyError));
 }
 function bindBillCableEvents(){
-  if(!billCache.cablePlans && !billLoading) bpLoadCablePlans();
-  const prov = document.getElementById('bp-cable-provider'); if(prov) prov.addEventListener('change', e=>{ billForm.cableType=e.target.value; billForm.planId=''; refreshMain(); });
-  const card = document.getElementById('bp-cardno'); if(card) card.addEventListener('input', e=>{ billForm.cardNo=e.target.value; });
-  const plan = document.getElementById('bp-plan'); if(plan) plan.addEventListener('change', e=>{ billForm.planId=e.target.value; refreshMain(); });
+  bpBackBind(); bpEnsure('cablePlans', bpLoadCablePlans);
+  document.querySelectorAll('[data-cprov]').forEach(b=>b.addEventListener('click', ()=>{ billForm.cableType=b.dataset.cprov; billForm.planId=''; billForm.cableCustomerName=''; billForm.cableVerifyError=''; refreshMain(); }));
+  document.querySelectorAll('[data-cplan]').forEach(b=>b.addEventListener('click', ()=>{ billForm.planId=b.dataset.cplan; refreshMain(); }));
+  const ch = document.getElementById('bp-plan-change'); if(ch) ch.addEventListener('click', ()=>{ billForm.planId=''; refreshMain(); });
+  const card = document.getElementById('bp-cardno');
+  if(card){ card.addEventListener('input', e=>{ billForm.cardNo=e.target.value; billForm.cableCustomerName=''; billForm.cableVerifyError=''; bpSetStatus('bp-cable-status',''); }); }
+  bpAutoVerify('bp-cardno', ()=>billForm.cardNo.trim().length>=10, bpVerifyCable);
+  if(card && billForm.cardNo.trim().length>=10 && !billForm.cableCustomerName && !billForm.cableVerifying && !billForm.cableVerifyError) bpVerifyCable();
   const phone = document.getElementById('bp-phone'); if(phone) phone.addEventListener('input', e=>{ billForm.phone=e.target.value; });
-  const reverify = document.getElementById('bp-cable-reverify');
-  if(reverify) reverify.addEventListener('click', e=>{ e.preventDefault(); billForm.cableCustomerName=''; billForm.cableVerifyError=''; billForm.planId=''; refreshMain(); });
-  const verifyBtn = document.getElementById('bp-cable-verify');
-  if(verifyBtn) verifyBtn.addEventListener('click', async ()=>{
-    if(billForm.cableVerifying) return;
-    if(!billForm.cableType || !billForm.cardNo.trim()){ billForm.cableVerifyError = 'Select a provider and enter the smart card / IUC number.'; refreshMain(); return; }
-    billForm.cableVerifying = true; billForm.cableVerifyError = ''; refreshMain();
-    try{
-      const r = await callBigisub('cable_verify', { cable_name: billForm.cableType, card_no: billForm.cardNo.trim() });
-      const name = bigisubNameFromResponse(r);
-      if(!name){
-        billForm.cableVerifyError = bigisubUpstreamMessage(r && r.raw) || "Couldn't verify this card — check the number and that the provider is right.";
-      } else {
-        billForm.cableCustomerName = name;
-      }
-    }catch(e){ billForm.cableVerifyError = e.message || 'Verification failed.'; }
-    billForm.cableVerifying = false; refreshMain();
-  });
+  bpBindBen('card','bp-cardno', ()=>bpVerifyCable()); 
   const btn = document.getElementById('bp-cable-confirm');
   if(btn) btn.addEventListener('click', async ()=>{
     if(billPurchaseInFlight) return;
     const chosen = (billCache.cablePlans||[]).find(p=>String(p.id)===String(billForm.planId));
-    if(!billForm.phone.trim() || !chosen){ toast('Enter a phone number and select a plan.'); return; }
-    const price = billCustomerPrice(bigisubPlanPrice(chosen));
+    if(!chosen){ toast('Select a plan.'); return; }
+    if(!billForm.cardNo.trim()){ toast('Enter the smartcard / IUC number.'); return; }
+    if(!billForm.cableCustomerName){ await bpVerifyCable(); if(!billForm.cableCustomerName){ toast(billForm.cableVerifyError || 'Verify the card first.'); return; } }
+    if(!billForm.phone.trim()){ toast('Enter a phone number.'); return; }
+    const price = bpPrice(chosen);
     if(!confirm(`Pay ${bigisubPlanLabel(chosen)} for ${billForm.cableCustomerName}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
     try{
-      const r = await callBigisub('cable_purchase', { cable_type: billForm.cableType, card_no: billForm.cardNo.trim(), phone_number: billForm.phone.trim(), amount: bigisubPlanPrice(chosen), plan_id: chosen.id, customer_name: billForm.cableCustomerName, client_ref: billGetClientRef(), bill_pin: pin });
+      const r = await callBigisub('cable_purchase', { cable_type: billForm.cableType, card_no: billForm.cardNo.trim(), phone_number: billForm.phone.trim(), amount: chosen.amount!==undefined?chosen.amount:bigisubPlanPrice(chosen), plan_id: chosen.id, customer_name: billForm.cableCustomerName, client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
       billRecordTxAttribution(billGetClientRef());
+      bpBenSave('card', billForm.cardNo, billForm.cableCustomerName);
       logAudit('bill_cable', `Paid ${bigisubPlanLabel(chosen)} for card ${billForm.cardNo} (${billForm.cableCustomerName})`);
-      toast('Subscription paid ✅'); billScreen='hub';
+      const info = bpSuccessInfo(r, `${bigisubCableName(billForm.cableType)} ${bigisubPlanLabel(chosen)}`, 'Smartcard', billForm.cardNo.trim(), price, 'Cable TV');
+      billPurchaseInFlight = false; billPurchaseStage = ''; bpShowSuccess(info); return;
     }catch(e){ toast(e.message); }
     billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
   });
 }
 
-/* ---------------- ELECTRICITY (verify → pay) ---------------- */
+/* ---------------- ELECTRICITY ---------------- */
 async function bpLoadElectricityProviders(){
   if(billCache.electricityProviders){ refreshMain(); return; }
-  if(billLoading) return; // an identical load is already in flight — don't fire a duplicate request
+  if(billLoading) return;
   billLoading = true; refreshMain();
   try{ billCache.electricityProviders = (await callBigisub('electricity_providers', {})).providers || []; }
   catch(e){ toast(e.message); billCache.electricityProviders = []; }
   billLoading = false; refreshMain();
 }
+const bpElecId = (p)=> p.id || p.code || p.company;
 function screenBillElectricity(){
-  const providers = billCache.electricityProviders || [];
+  const list = billCache.electricityProviders || [];
+  const chosen = list.find(p=>String(bpElecId(p))===String(billForm.company));
   const amount = Number(billForm.amount||0);
-  const price = amount>0 ? billPreviewPrice('electricity', null, 1, amount) : 0;
-  const verified = !!billForm.elecCustomerName;
-  return `
-    ${bpHeader('Electricity')}
-    <div class="card">
-      <div class="field"><label>Disco</label>
-        <select id="bp-elec-provider" ${billLoading||verified?'disabled':''}>
-          <option value="">${billLoading?'Loading…':'Select provider'}</option>
-          ${providers.map(p=>`<option value="${p.id||p.code||p.company}" ${billForm.company==(p.id||p.code||p.company)?'selected':''}>${escapeHtml(p.name||p.provider||p.company)}</option>`).join('')}
-        </select>
-      </div>
-      <div class="field"><label>Meter Type</label>
-        <select id="bp-meter-type" ${verified?'disabled':''}>
-          <option value="prepaid" ${billForm.meterType==='prepaid'?'selected':''}>Prepaid</option>
-          <option value="postpaid" ${billForm.meterType==='postpaid'?'selected':''}>Postpaid</option>
-        </select>
-      </div>
-      <div class="field"><label>Meter Number</label><input id="bp-meter-no" value="${escAttr(billForm.meterNo)}" placeholder="e.g. 04123456789" ${verified?'disabled':''}></div>
-      ${!verified ? `<button class="btn btn-outline" id="bp-elec-verify" ${billForm.elecVerifying?'disabled':''}>${billForm.elecVerifying?'Verifying…':'Verify Meter'}</button>${billForm.elecVerifyError ? `<p class="subtle" style="color:var(--red);margin-top:8px;">${escapeHtml(billForm.elecVerifyError)}</p>` : ''}` : `
-      <p class="subtle" style="color:var(--marigold-dark);">✓ Verified: <b>${escapeHtml(billForm.elecCustomerName)}</b> <a href="#" id="bp-elec-reverify" style="margin-left:8px;">change</a></p>
-      <div class="field"><label>Phone Number (for receipt)</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
-      <div class="field"><label>Amount (₦)</label><input id="bp-amount" type="number" min="1000" value="${escAttr(billForm.amount)}" placeholder="e.g. 5000"></div>
-      ${amount>0 ? `<p class="subtle">You pay <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
-      ${billPurchaseBtnHtml('bp-elec-confirm', 'Buy Token')}
-      `}
-    </div>
-  `;
+  const min = chosen ? bpMinAmt(chosen.min_amount) : BILL_MIN.electricity;
+  let body = '';
+  if(billLoading && !list.length) body = '<div class="bps-loading">Loading…</div>';
+  else if(!chosen){
+    body = `<div class="bps-label">Select company</div><div class="bps-rows">${list.map(p=>`
+      <button class="bps-rowbtn" data-disco="${escAttr(bpElecId(p))}"><span><b>${escapeHtml(String(p.name||p.provider||p.company).split(/[ (-]/)[0].toUpperCase())}</b><span class="rs">${escapeHtml(p.name||p.provider||p.company)}</span></span></button>`).join('') || '<div class="bps-empty">No companies available right now.</div>'}</div>`;
+  } else {
+    const nm = chosen.name||chosen.provider||chosen.company; const short = String(nm).split(/[ (-]/)[0].toUpperCase();
+    body = bpSelected(BP_ICONS.bolt, short, nm, 'bp-disco-change') +
+      `<div class="bps-label">Meter type</div><div class="bps-seg"><button class="bps-segbtn ${billForm.meterType==='prepaid'?'on':''}" data-mtype="prepaid">Prepaid</button><button class="bps-segbtn ${billForm.meterType==='postpaid'?'on':''}" data-mtype="postpaid">Postpaid</button></div>
+       <div class="bps-label">Meter number</div>${bpField('bp-meter-no', BP_ICONS.bolt, 'Enter meter number (auto-verifies)', billForm.meterNo, 'inputmode="numeric"')}
+       <div class="bps-status" id="bp-elec-status">${bpStatusHtml(billForm.elecVerifying, billForm.elecCustomerName, billForm.elecVerifyError)}</div>
+       ${bpBenLink('meter')}
+       <div class="bps-label">Amount</div>
+       <div class="bps-input"><span class="bps-ic">${BP_ICONS.naira}</span><input id="bp-amount" type="number" inputmode="numeric" value="${escAttr(billForm.amount)}" placeholder="₦${min.toLocaleString('en-NG')} - ₦100,000"></div>
+       ${bpQuick([500,1000,2000,5000,10000,20000])}
+       <div class="bps-label">Phone number</div>${bpField('bp-phone', BP_ICONS.phone, 'e.g. 08012345678', billForm.phone, 'type="tel" inputmode="tel"')}
+       ${amount>=min ? bpTotal('Total Amount', `${short} ${billForm.meterType} token`, billPreviewPrice('electricity', null, 1, amount)) : ''}`;
+  }
+  return bpSheet(BP_ICONS.bolt, 'Electricity', 'Pay your electricity bill', body, chosen ? bpCta('bp-elec-confirm','Buy Token') : '');
+}
+async function bpVerifyMeter(){
+  if(billForm.elecVerifying || !billForm.company || billForm.meterNo.trim().length < 6) return;
+  billForm.elecVerifying = true; billForm.elecVerifyError = ''; billForm.elecCustomerName = ''; bpSetStatus('bp-elec-status', bpStatusHtml(true));
+  try{
+    const r = await callBigisub('electricity_verify', { company: billForm.company, meter_no: billForm.meterNo.trim(), meter_type: billForm.meterType });
+    const name = bigisubNameFromResponse(r);
+    if(name) billForm.elecCustomerName = name;
+    else billForm.elecVerifyError = bigisubUpstreamMessage(r && r.raw) || "Couldn't verify this meter — check the number, the company, and prepaid/postpaid.";
+  }catch(e){ billForm.elecVerifyError = e.message || 'Verification failed.'; }
+  billForm.elecVerifying = false; bpSetStatus('bp-elec-status', bpStatusHtml(false, billForm.elecCustomerName, billForm.elecVerifyError));
 }
 function bindBillElectricityEvents(){
-  if(!billCache.electricityProviders && !billLoading) bpLoadElectricityProviders();
-  const prov = document.getElementById('bp-elec-provider'); if(prov) prov.addEventListener('change', e=>{ billForm.company=e.target.value; });
-  const mtype = document.getElementById('bp-meter-type'); if(mtype) mtype.addEventListener('change', e=>{ billForm.meterType=e.target.value; });
-  const mno = document.getElementById('bp-meter-no'); if(mno) mno.addEventListener('input', e=>{ billForm.meterNo=e.target.value; });
+  bpBackBind(); bpEnsure('electricityProviders', bpLoadElectricityProviders);
+  document.querySelectorAll('[data-disco]').forEach(b=>b.addEventListener('click', ()=>{ billForm.company=b.dataset.disco; billForm.elecCustomerName=''; billForm.elecVerifyError=''; refreshMain(); }));
+  const ch = document.getElementById('bp-disco-change'); if(ch) ch.addEventListener('click', ()=>{ billForm.company=''; billForm.elecCustomerName=''; refreshMain(); });
+  document.querySelectorAll('[data-mtype]').forEach(b=>b.addEventListener('click', ()=>{ billForm.meterType=b.dataset.mtype; billForm.elecCustomerName=''; billForm.elecVerifyError=''; refreshMain(); }));
+  const mno = document.getElementById('bp-meter-no');
+  if(mno) mno.addEventListener('input', e=>{ billForm.meterNo=e.target.value; billForm.elecCustomerName=''; billForm.elecVerifyError=''; bpSetStatus('bp-elec-status',''); });
+  bpAutoVerify('bp-meter-no', ()=>billForm.meterNo.trim().length>=10, bpVerifyMeter);
+  if(mno && billForm.meterNo.trim().length>=10 && !billForm.elecCustomerName && !billForm.elecVerifying && !billForm.elecVerifyError) bpVerifyMeter();
   const phone = document.getElementById('bp-phone'); if(phone) phone.addEventListener('input', e=>{ billForm.phone=e.target.value; });
-  const amt = document.getElementById('bp-amount'); if(amt) amt.addEventListener('input', e=>{ billForm.amount=e.target.value; refreshMain(); });
-  const reverify = document.getElementById('bp-elec-reverify');
-  if(reverify) reverify.addEventListener('click', e=>{ e.preventDefault(); billForm.elecCustomerName=''; billForm.elecVerifyError=''; refreshMain(); });
-  const verifyBtn = document.getElementById('bp-elec-verify');
-  if(verifyBtn) verifyBtn.addEventListener('click', async ()=>{
-    if(billForm.elecVerifying) return;
-    if(!billForm.company || !billForm.meterNo.trim()){ billForm.elecVerifyError = 'Select a disco and enter the meter number.'; refreshMain(); return; }
-    billForm.elecVerifying = true; billForm.elecVerifyError = ''; refreshMain();
-    try{
-      const r = await callBigisub('electricity_verify', { company: billForm.company, meter_no: billForm.meterNo.trim(), meter_type: billForm.meterType });
-      const name = bigisubNameFromResponse(r);
-      if(!name){
-        billForm.elecVerifyError = bigisubUpstreamMessage(r && r.raw) || "Couldn't verify this meter — check the number, the disco, and prepaid/postpaid.";
-      } else {
-        billForm.elecCustomerName = name;
-      }
-    }catch(e){ billForm.elecVerifyError = e.message || 'Verification failed.'; }
-    billForm.elecVerifying = false; refreshMain();
-  });
+  const amt = document.getElementById('bp-amount'); if(amt){ amt.addEventListener('input', e=>{ billForm.amount=e.target.value; }); amt.addEventListener('change', ()=>refreshMain()); }
+  bpBindQuick(()=>refreshMain());
+  bpBindBen('meter','bp-meter-no', ()=>bpVerifyMeter());
   const btn = document.getElementById('bp-elec-confirm');
   if(btn) btn.addEventListener('click', async ()=>{
     if(billPurchaseInFlight) return;
+    const chosen = (billCache.electricityProviders||[]).find(p=>String(bpElecId(p))===String(billForm.company));
+    const min = chosen ? bpMinAmt(chosen.min_amount) : BILL_MIN.electricity;
     const amount = Number(billForm.amount||0);
-    if(!billForm.phone.trim() || amount<BILL_MIN.electricity){ toast(`Enter a phone number and an amount of at least ₦${BILL_MIN.electricity.toLocaleString()}.`); return; }
+    if(!billForm.meterNo.trim()){ toast('Enter the meter number.'); return; }
+    if(!billForm.elecCustomerName){ await bpVerifyMeter(); if(!billForm.elecCustomerName){ toast(billForm.elecVerifyError || 'Verify the meter first.'); return; } }
+    if(!billForm.phone.trim() || amount<min){ toast(`Enter a phone number and an amount of at least ₦${min.toLocaleString('en-NG')}.`); return; }
     const price = billPreviewPrice('electricity', null, 1, amount);
     if(!confirm(`Buy ₦${amount} token for ${billForm.elecCustomerName}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
@@ -9532,66 +9816,72 @@ function bindBillElectricityEvents(){
     try{
       const r = await callBigisub('electricity_pay', { company: billForm.company, meter_no: billForm.meterNo.trim(), meter_type: billForm.meterType, phone_number: billForm.phone.trim(), amount, customer_name: billForm.elecCustomerName, client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
-      const token = r.token || (r.bigisub_response && r.bigisub_response.token);
       billRecordTxAttribution(billGetClientRef());
+      bpBenSave('meter', billForm.meterNo, billForm.elecCustomerName);
       logAudit('bill_electricity', `Sold ₦${amount} token for meter ${billForm.meterNo} (${billForm.elecCustomerName})`);
-      toast(token ? `Token: ${token}` : 'Token purchased ✅');
-      billScreen='hub';
+      const info = bpSuccessInfo(r, `Electricity ${billForm.meterType}`, 'Meter Number', billForm.meterNo.trim(), price, 'Electricity');
+      billPurchaseInFlight = false; billPurchaseStage = ''; bpShowSuccess(info); return;
     }catch(e){ toast(e.message); }
     billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
   });
 }
 
-/* ---------------- BETTING (validate → fund, immediately) ---------------- */
+/* ---------------- BETTING ---------------- */
 async function bpLoadBettingBillers(){
   if(billCache.bettingBillers){ refreshMain(); return; }
-  if(billLoading) return; // an identical load is already in flight — don't fire a duplicate request
+  if(billLoading) return;
   billLoading = true; refreshMain();
   try{ billCache.bettingBillers = (await callBigisub('betting_billers', {})).billers || []; }
   catch(e){ toast(e.message); billCache.bettingBillers = []; }
   billLoading = false; refreshMain();
 }
+const bpBetId = (b)=> b.id || b.code || b.biller_code;
+function bpBetColor(name){ let h=0; for(const c of String(name)) h=(h*31+c.charCodeAt(0))%360; return `linear-gradient(135deg,hsl(${h},62%,46%),hsl(${(h+30)%360},65%,34%))`; }
+function bpBetInitials(name){ const w = String(name).replace(/[^A-Za-z0-9 ]/g,' ').trim().split(/\s+/); return (w.length>1 ? w[0][0]+w[1][0] : String(name).slice(0,2)).toUpperCase(); }
 function screenBillBetting(){
-  const billers = billCache.bettingBillers || [];
+  const list = billCache.bettingBillers || [];
+  const chosen = list.find(b=>String(bpBetId(b))===String(billForm.billerCode));
   const amount = Number(billForm.amount||0);
-  const price = amount>0 ? billPreviewPrice('betting', null, 1, amount) : 0;
-  return `
-    ${bpHeader('Fund Betting Wallet')}
-    <div class="card">
-      <div class="field"><label>Platform</label>
-        <select id="bp-biller" ${billLoading?'disabled':''}>
-          <option value="">${billLoading?'Loading…':'Select platform'}</option>
-          ${billers.map(b=>`<option value="${b.id||b.code||b.biller_code}" ${billForm.billerCode==(b.id||b.code||b.biller_code)?'selected':''}>${escapeHtml(b.name)}</option>`).join('')}
-        </select>
-      </div>
-      <div class="field"><label>Customer/Betting ID</label><input id="bp-customer-id" value="${escAttr(billForm.customerId)}" placeholder="e.g. 123456"></div>
-      <div class="field"><label>Amount (₦)</label><input id="bp-amount" type="number" min="100" value="${escAttr(billForm.amount)}" placeholder="e.g. 1000"></div>
-      ${amount>0 ? `<p class="subtle">You pay <b>${fmtMoney(price)}</b> — deducted from your Bill Wallet.</p>` : ''}
-      <p class="subtle" style="font-size:11px;">We'll confirm the account name right before funding — this platform expires that confirmation quickly, so there's no separate "verify" step here.</p>
-      ${billPurchaseBtnHtml('bp-betting-confirm', 'Fund Wallet')}
-    </div>
-  `;
+  const min = chosen ? bpMinAmt(chosen.min_amount) : BILL_MIN.betting;
+  let body = '';
+  if(billLoading && !list.length) body = '<div class="bps-loading">Loading…</div>';
+  else if(!chosen){
+    body = `<div class="bps-label">Select platform</div><div class="bps-grid3">${list.map(b=>`
+      <button class="bps-bet" data-biller="${escAttr(bpBetId(b))}"><span class="bps-logo" style="background:${bpBetColor(b.name)};color:#fff">${escapeHtml(bpBetInitials(b.name))}</span><span class="nm">${escapeHtml(b.name)}</span></button>`).join('') || '<div class="bps-empty">No platforms available right now.</div>'}</div>`;
+  } else {
+    body = bpSelected(BP_ICONS.trophy, chosen.name, `Min ${bpN(min)}`, 'bp-biller-change') +
+      `<div class="bps-label">Customer ID</div>${bpField('bp-customer-id', BP_ICONS.trophy, 'Enter your customer/user ID', billForm.customerId, 'inputmode="text"')}
+       ${bpBenLink('bet')}
+       <div class="bps-label">Amount</div>
+       <div class="bps-input"><span class="bps-ic">${BP_ICONS.naira}</span><input id="bp-amount" type="number" inputmode="numeric" value="${escAttr(billForm.amount)}" placeholder="${bpN(min)} minimum"></div>
+       ${bpQuick([100,200,500,1000,2000,5000])}
+       ${amount>=min ? bpTotal('Total Amount', `${chosen.name} wallet`, billPreviewPrice('betting', null, 1, amount)) : ''}
+       <p class="bps-muted" style="font-size:12.5px;margin-top:14px;">We confirm the account name right before funding.</p>`;
+  }
+  return bpSheet(BP_ICONS.trophy, 'Fund Betting', 'Fund your betting wallet', body, chosen ? bpCta('bp-betting-confirm','Fund Wallet') : '');
 }
 function bindBillBettingEvents(){
-  if(!billCache.bettingBillers && !billLoading) bpLoadBettingBillers();
-  const biller = document.getElementById('bp-biller'); if(biller) biller.addEventListener('change', e=>{ billForm.billerCode=e.target.value; });
+  bpBackBind(); bpEnsure('bettingBillers', bpLoadBettingBillers);
+  document.querySelectorAll('[data-biller]').forEach(b=>b.addEventListener('click', ()=>{ billForm.billerCode=b.dataset.biller; refreshMain(); }));
+  const ch = document.getElementById('bp-biller-change'); if(ch) ch.addEventListener('click', ()=>{ billForm.billerCode=''; refreshMain(); });
   const cid = document.getElementById('bp-customer-id'); if(cid) cid.addEventListener('input', e=>{ billForm.customerId=e.target.value; });
-  const amt = document.getElementById('bp-amount'); if(amt) amt.addEventListener('input', e=>{ billForm.amount=e.target.value; refreshMain(); });
+  const amt = document.getElementById('bp-amount'); if(amt){ amt.addEventListener('input', e=>{ billForm.amount=e.target.value; }); amt.addEventListener('change', ()=>refreshMain()); }
+  bpBindQuick(()=>refreshMain());
+  bpBindBen('bet','bp-customer-id');
   const btn = document.getElementById('bp-betting-confirm');
   if(btn) btn.addEventListener('click', async ()=>{
     if(billPurchaseInFlight) return;
+    const chosen = (billCache.bettingBillers||[]).find(b=>String(bpBetId(b))===String(billForm.billerCode));
+    const min = chosen ? bpMinAmt(chosen.min_amount) : BILL_MIN.betting;
     const amount = Number(billForm.amount||0);
-    if(!billForm.billerCode || !billForm.customerId.trim() || amount<BILL_MIN.betting){ toast(`Select a platform, enter the customer ID, and an amount of at least ₦${BILL_MIN.betting}.`); return; }
+    if(!billForm.billerCode || !billForm.customerId.trim() || amount<min){ toast(`Select a platform, enter the customer ID, and an amount of at least ₦${min}.`); return; }
     billPurchaseInFlight = true; billPurchaseStage = 'Validating…'; refreshMain();
     let validation;
-    try{
-      validation = await callBigisub('betting_validate', { biller_code: billForm.billerCode, customer_id: billForm.customerId.trim() });
-    }catch(e){ toast(e.message); billPurchaseInFlight=false; billPurchaseStage=''; refreshMain(); return; }
+    try{ validation = await callBigisub('betting_validate', { biller_code: billForm.billerCode, customer_id: billForm.customerId.trim() }); }
+    catch(e){ toast(e.message); billPurchaseInFlight=false; billPurchaseStage=''; refreshMain(); return; }
     const bettingName = bigisubNameFromResponse(validation) || billForm.customerId;
-    const price = billCustomerPrice(amount);
-    if(!confirm(`Fund ${bettingName} with ₦${amount}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)){
-      billPurchaseInFlight=false; billPurchaseStage=''; refreshMain(); return;
-    }
+    const price = billPreviewPrice('betting', null, 1, amount);
+    if(!confirm(`Fund ${bettingName} with ₦${amount}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)){ billPurchaseInFlight=false; billPurchaseStage=''; refreshMain(); return; }
     const pin = billPromptPin();
     if(pin===null){ billPurchaseInFlight=false; billPurchaseStage=''; refreshMain(); return; }
     billPurchaseStage = 'Funding…'; refreshMain();
@@ -9599,77 +9889,79 @@ function bindBillBettingEvents(){
       const r = await callBigisub('betting_fund', { biller_code: billForm.billerCode, customer_id: billForm.customerId.trim(), customer_name: bettingName, amount, validation_reference: validation.validation_reference, client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
       billRecordTxAttribution(billGetClientRef());
+      bpBenSave('bet', billForm.customerId, bettingName);
       logAudit('bill_betting', `Funded ${billForm.customerId} (${bettingName}) with ₦${amount}`);
-      toast('Wallet funded ✅'); billScreen='hub';
+      const info = bpSuccessInfo(r, `${chosen ? chosen.name : 'Betting'} Wallet`, 'Customer ID', billForm.customerId.trim(), price, 'Betting');
+      billPurchaseInFlight = false; billPurchaseStage = ''; bpShowSuccess(info); return;
     }catch(e){ toast(e.message + ' — if this was a timeout on the validation reference, please try again.'); }
     billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
   });
 }
 
-/* ---------------- RESULT CHECKER (Education) ---------------- */
+/* ---------------- RESULT CHECKER ---------------- */
 async function bpLoadResultCheckerPrices(){
   if(billCache.resultCheckerPrices){ refreshMain(); return; }
-  if(billLoading) return; // an identical load is already in flight — don't fire a duplicate request
+  if(billLoading) return;
   billLoading = true; refreshMain();
   try{ billCache.resultCheckerPrices = (await callBigisub('result_checker_prices', {})).prices || []; }
   catch(e){ toast(e.message); billCache.resultCheckerPrices = []; }
   billLoading = false; refreshMain();
 }
+const bpExamKey = (x)=> x.exam||x.exam_type||x.name;
+const BP_EXAM_DOT = { WAEC:'#46C25A', NECO:'#3B82F6', NABTEB:'#F59E0B', JAMB:'#EF4444' };
 function screenBillResultChecker(){
   const exams = billCache.resultCheckerPrices || [];
-  const chosen = exams.find(x=>String(x.exam||x.exam_type||x.name)===String(billForm.examName));
-  const qty = Math.max(1, Number(billForm.qty||1));
-  const unit = chosen ? bigisubPlanPrice(chosen) : 0;
-  const examKey = chosen ? (chosen.exam||chosen.exam_type||chosen.name) : null;
-  const price = chosen ? billPreviewPrice('result_checker', examKey, qty, unit*qty) : 0;
-  return `
-    ${bpHeader('Result Checker PINs')}
-    <div class="card">
-      <div class="field"><label>Exam</label>
-        <select id="bp-exam" ${billLoading?'disabled':''}>
-          <option value="">${billLoading?'Loading…':'Select exam'}</option>
-          ${exams.map(x=>`<option value="${escAttr(x.exam||x.exam_type||x.name)}" ${billForm.examName==(x.exam||x.exam_type||x.name)?'selected':''}>${escapeHtml(x.name||x.exam||x.exam_type)} — ₦${x.amount||x.price}</option>`).join('')}
-        </select>
-      </div>
-      <div class="field"><label>Quantity</label><input id="bp-qty" type="number" min="1" value="${qty}"></div>
-      ${chosen ? `<p class="subtle">You pay <b>${fmtMoney(price)}</b> (₦${unit} × ${qty}) — deducted from your Bill Wallet.</p>` : ''}
-      ${billPurchaseBtnHtml('bp-rc-confirm', 'Buy PIN(s)')}
-    </div>
-  `;
+  const chosen = exams.find(x=>String(bpExamKey(x))===String(billForm.examName));
+  const qty = [1,2,5].includes(Number(billForm.qty)) ? Number(billForm.qty) : 1;
+  const dot = (x)=>`<span class="bps-dot" style="background:${BP_EXAM_DOT[String(bpExamKey(x)).toUpperCase()]||'#9C9AC0'}"></span>`;
+  let body = `<div class="bps-label">Purchase mode</div><div class="bps-chips"><button class="bps-chip on">🛒 Buy Now</button></div><div class="bps-label">Exam type</div>`;
+  if(billLoading && !exams.length) body += '<div class="bps-loading">Loading…</div>';
+  else {
+    if(chosen){
+      body += `<button class="bps-exam on" id="bp-exam-change"><span>${dot(chosen)}${escapeHtml(chosen.name||bpExamKey(chosen))}</span><span>⌄</span></button>`;
+    } else {
+      body += `<div class="bps-rows">${exams.map(x=>`<button class="bps-rowbtn" data-exam="${escAttr(bpExamKey(x))}"><span>${dot(x)}${escapeHtml(x.name||bpExamKey(x))}</span><span class="rp" style="color:#F59E0B">${bpN(bpPrice(x))}</span></button>`).join('') || '<div class="bps-empty">No exams available right now.</div>'}</div>`;
+    }
+    if(chosen){
+      const unit = bpPrice(chosen); const total = billPreviewPrice('result_checker', bpExamKey(chosen), qty, unit*qty);
+      body += `<div class="bps-label">Quantity (1, 2, or 5 pins only)</div><div class="bps-qty">${[1,2,5].map(n=>`<button class="bps-segbtn ${qty===n?'on':''}" data-qty="${n}">${n} ${n===1?'pin':'pins'}</button>`).join('')}</div>
+        <div class="bps-sum"><div><span>Exam</span><b>${escapeHtml(chosen.name||bpExamKey(chosen))}</b></div><div><span>Price per Pin</span><b>${bpN(unit)}</b></div><div><span>Quantity</span><b>${qty}</b></div><div class="tot"><span>Total</span><b>${bpN(total)}</b></div></div>`;
+    }
+  }
+  return bpSheet(BP_ICONS.cap, 'Result Checker', 'WAEC, NECO, NABTEB pins', body, chosen ? bpCta('bp-rc-confirm','Buy PIN(s)') : '');
 }
 function bindBillResultCheckerEvents(){
-  if(!billCache.resultCheckerPrices && !billLoading) bpLoadResultCheckerPrices();
-  const exam = document.getElementById('bp-exam'); if(exam) exam.addEventListener('change', e=>{ billForm.examName=e.target.value; refreshMain(); });
-  const qty = document.getElementById('bp-qty'); if(qty) qty.addEventListener('input', e=>{ billForm.qty=e.target.value; refreshMain(); });
+  bpBackBind(); bpEnsure('resultCheckerPrices', bpLoadResultCheckerPrices);
+  document.querySelectorAll('[data-exam]').forEach(b=>b.addEventListener('click', ()=>{ billForm.examName=b.dataset.exam; billForm.qty=1; refreshMain(); }));
+  const ch = document.getElementById('bp-exam-change'); if(ch) ch.addEventListener('click', ()=>{ billForm.examName=''; refreshMain(); });
+  document.querySelectorAll('[data-qty]').forEach(b=>b.addEventListener('click', ()=>{ billForm.qty=Number(b.dataset.qty); refreshMain(); }));
   const btn = document.getElementById('bp-rc-confirm');
   if(btn) btn.addEventListener('click', async ()=>{
     if(billPurchaseInFlight) return;
-    const exams = billCache.resultCheckerPrices||[];
-    const chosen = exams.find(x=>String(x.exam||x.exam_type||x.name)===String(billForm.examName));
-    const qtyNum = Math.max(1, Number(billForm.qty||1));
+    const chosen = (billCache.resultCheckerPrices||[]).find(x=>String(bpExamKey(x))===String(billForm.examName));
+    const qtyNum = [1,2,5].includes(Number(billForm.qty)) ? Number(billForm.qty) : 1;
     if(!chosen){ toast('Select an exam.'); return; }
-    const price = billCustomerPrice(bigisubPlanPrice(chosen)*qtyNum);
-    if(!confirm(`Buy ${qtyNum} × ${chosen.name||chosen.exam} PIN(s)? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
+    const price = billPreviewPrice('result_checker', bpExamKey(chosen), qtyNum, bpPrice(chosen)*qtyNum);
+    if(!confirm(`Buy ${qtyNum} × ${chosen.name||bpExamKey(chosen)} PIN(s)? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
     try{
-      const r = await callBigisub('result_checker_purchase', { exam: chosen.exam||chosen.exam_type||chosen.name, quantity: qtyNum, client_ref: billGetClientRef(), bill_pin: pin });
+      const r = await callBigisub('result_checker_purchase', { exam: bpExamKey(chosen), quantity: qtyNum, client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
-      const pins = r.pins || (r.bigisub_response && r.bigisub_response.pins);
       billRecordTxAttribution(billGetClientRef());
-      logAudit('bill_result_checker', `Bought ${qtyNum} × ${chosen.name||chosen.exam} PIN(s)`);
-      toast(pins ? 'PIN(s) generated — see receipt in history' : 'PIN(s) purchased ✅');
-      billScreen='hub';
+      logAudit('bill_result_checker', `Bought ${qtyNum} × ${chosen.name||bpExamKey(chosen)} PIN(s)`);
+      const info = bpSuccessInfo(r, `${qtyNum} × ${chosen.name||bpExamKey(chosen)}`, 'Quantity', `${qtyNum} pin${qtyNum>1?'s':''}`, price, 'Result Checker');
+      billPurchaseInFlight = false; billPurchaseStage = ''; bpShowSuccess(info); return;
     }catch(e){ toast(e.message); }
     billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
   });
 }
 
-/* ---------------- ISP: Smile (verify → topup) & Spectranet (direct topup) ---------------- */
+/* ---------------- INTERNET: Smile & Spectranet ---------------- */
 async function bpLoadIspPlans(provider){
   const key = provider==='smile' ? 'ispSmilePlans' : 'ispSpectranetPlans';
   if(billCache[key]){ refreshMain(); return; }
-  if(billLoading) return; // an identical load is already in flight — don't fire a duplicate request
+  if(billLoading) return;
   billLoading = true; refreshMain();
   try{ billCache[key] = (await callBigisub(provider==='smile'?'isp_smile_plans':'isp_spectranet_plans', {})).plans || []; }
   catch(e){ toast(e.message); billCache[key] = []; }
@@ -9677,94 +9969,85 @@ async function bpLoadIspPlans(provider){
 }
 function screenBillIsp(){
   const isSmile = billForm.ispProvider==='smile';
-  const plans = (isSmile ? billCache.ispSmilePlans : billCache.ispSpectranetPlans) || [];
+  const key = isSmile ? 'ispSmilePlans' : 'ispSpectranetPlans';
+  const plans = (billCache[key]||[]).filter(p=>!bigisubPlanDisabled(p)).slice().sort((a,b)=>bpPrice(a)-bpPrice(b));
   const chosen = plans.find(p=>String(p.id)===String(billForm.planId));
-  const ispQty = isSmile ? 1 : Math.max(1, Number(billForm.qty||1));
-  const unit = chosen ? bigisubPlanPrice(chosen) : 0;
-  const pricingService = isSmile ? 'isp_smile' : 'isp_spectranet';
-  const price = chosen ? billPreviewPrice(pricingService, chosen.id, ispQty, unit*ispQty) : 0;
-  const verified = !isSmile || !!billForm.ispCustomerName; // Spectranet has no verify step
-  return `
-    ${bpHeader('Internet (ISP)')}
-    <div class="card">
-      <div class="field"><label>Provider</label>
-        <select id="bp-isp-provider">
-          <option value="smile" ${isSmile?'selected':''}>Smile</option>
-          <option value="spectranet" ${!isSmile?'selected':''}>Spectranet</option>
-        </select>
-      </div>
-      ${isSmile ? `
-        <div class="field"><label>Account ID</label><input id="bp-account-id" value="${escAttr(billForm.accountId)}" placeholder="e.g. 12345678" ${verified?'disabled':''}></div>
-        ${!verified ? `<button class="btn btn-outline" id="bp-isp-verify" ${billForm.ispVerifying?'disabled':''}>${billForm.ispVerifying?'Verifying…':'Verify Account'}</button>${billForm.ispVerifyError ? `<p class="subtle" style="color:var(--red);margin-top:8px;">${escapeHtml(billForm.ispVerifyError)}</p>` : ''}` : `
-        <p class="subtle" style="color:var(--marigold-dark);">✓ Verified: <b>${escapeHtml(billForm.ispCustomerName)}</b> <a href="#" id="bp-isp-reverify" style="margin-left:8px;">change</a></p>`}
-      ` : `
-        <div class="field"><label>Spectranet Device Number</label><input id="bp-spectranet-number" value="${escAttr(billForm.spectranetNumber)}" placeholder="e.g. SP12345"></div>
-      `}
-      ${verified ? `
-      <div class="field"><label>Plan</label>
-        <select id="bp-plan" ${billLoading?'disabled':''}>
-          <option value="">${billLoading?'Loading…':'Select a plan'}</option>
-          ${plans.map(p=>`<option value="${p.id}" ${billForm.planId==p.id?'selected':''}>${escapeHtml(bigisubPlanLabel(p))} — ₦${bigisubPlanPrice(p)}</option>`).join('')}
-        </select>
-      </div>
-      <div class="field"><label>Phone Number</label><input id="bp-phone" value="${escAttr(billForm.phone)}" placeholder="0802 730 0375"></div>
-      ${isSmile ? `<div class="field"><label>Email</label><input id="bp-email" type="email" value="${escAttr(billForm.email)}" placeholder="customer@email.com"></div>` : `<div class="field"><label>Quantity</label><input id="bp-qty" type="number" min="1" value="${billForm.qty||1}"></div>`}
-      ${chosen ? `<p class="subtle">You pay <b>${fmtMoney(price)}</b>${ispQty>1?` (₦${unit} × ${ispQty})`:''} — deducted from your Bill Wallet.</p>` : ''}
-      ${billPurchaseBtnHtml('bp-isp-confirm', 'Buy Plan')}
-      ` : ''}
-    </div>
-  `;
+  const qty = isSmile ? 1 : Math.max(1, Number(billForm.qty||1));
+  const tile = (k,n,l,bg,fg)=>`<button class="bps-tile ${billForm.ispProvider===k?'on':''}" data-isp="${k}"><span class="bps-logo" style="background:${bg};color:${fg}">${l}</span><span>${n}</span>${billForm.ispProvider===k?'<i class="bps-tick">✓</i>':''}</button>`;
+  let body = `<div class="bps-label">Select provider</div><div class="bps-tiles" style="grid-template-columns:repeat(2,1fr);">${tile('smile','Smile','S','linear-gradient(135deg,#7BD93A,#3E9A10)','#0d2a05')}${tile('spectranet','Spectranet','Sp','linear-gradient(135deg,#1FA4FF,#0B63C4)','#d6ecff')}</div>`;
+  if(billLoading && !(billCache[key]||[]).length) body += '<div class="bps-loading">Loading plans…</div>';
+  else if(!chosen){
+    body += `<div class="bps-label">Select plan</div><div class="bps-rows">${plans.map(p=>`<button class="bps-rowbtn" data-iplan="${escAttr(p.id)}"><span>${escapeHtml(bigisubPlanLabel(p))}${p.validity?`<span class="rs">${escapeHtml(p.validity)}</span>`:''}</span><span class="rp">${bpN(bpPrice(p))}</span></button>`).join('') || '<div class="bps-empty">No plans available right now.</div>'}</div>`;
+  } else {
+    const unit = bpPrice(chosen);
+    const total = billPreviewPrice(isSmile?'isp_smile':'isp_spectranet', chosen.id, qty, unit*qty);
+    body += bpSelected(BP_ICONS.wifi, bigisubPlanLabel(chosen), bpN(unit), 'bp-plan-change');
+    if(isSmile){
+      body += `<div class="bps-label">Smile account ID</div>${bpField('bp-account-id', BP_ICONS.hash, 'Enter account ID (auto-verifies)', billForm.accountId, 'inputmode="numeric"')}
+        <div class="bps-status" id="bp-isp-status">${bpStatusHtml(billForm.ispVerifying, billForm.ispCustomerName, billForm.ispVerifyError)}</div>${bpBenLink('smile')}
+        <div class="bps-label">Email</div>${bpField('bp-email', BP_ICONS.mail, 'customer@email.com', billForm.email, 'type="email"')}`;
+    } else {
+      body += `<div class="bps-label">Spectranet device number</div>${bpField('bp-spectranet-number', BP_ICONS.hash, 'e.g. SP12345', billForm.spectranetNumber)}${bpBenLink('spectranet')}
+        <div class="bps-label">Quantity</div>${bpField('bp-qty', BP_ICONS.hash, '1', String(qty), 'type="number" min="1" inputmode="numeric"')}`;
+    }
+    body += `<div class="bps-label">Phone number</div>${bpField('bp-phone', BP_ICONS.phone, 'e.g. 08012345678', billForm.phone, 'type="tel" inputmode="tel"')}
+      ${bpTotal('Total Amount', `${isSmile?'Smile':'Spectranet'} - ${bigisubPlanLabel(chosen)}`, total)}`;
+  }
+  return bpSheet(BP_ICONS.wifi, 'Internet', 'Smile and Spectranet plans', body, chosen ? bpCta('bp-isp-confirm','Buy Plan') : '');
+}
+async function bpVerifySmile(){
+  if(billForm.ispVerifying || billForm.accountId.trim().length < 6) return;
+  billForm.ispVerifying = true; billForm.ispVerifyError = ''; billForm.ispCustomerName = ''; bpSetStatus('bp-isp-status', bpStatusHtml(true));
+  try{
+    const r = await callBigisub('isp_smile_verify', { account_id: billForm.accountId.trim() });
+    const name = bigisubNameFromResponse(r);
+    if(name) billForm.ispCustomerName = name;
+    else billForm.ispVerifyError = bigisubUpstreamMessage(r && r.raw) || "Couldn't verify this Smile account — double-check the ID.";
+  }catch(e){ billForm.ispVerifyError = e.message || 'Verification failed.'; }
+  billForm.ispVerifying = false; bpSetStatus('bp-isp-status', bpStatusHtml(false, billForm.ispCustomerName, billForm.ispVerifyError));
 }
 function bindBillIspEvents(){
-  const provider = document.getElementById('bp-isp-provider');
-  if(provider) provider.addEventListener('change', e=>{ billForm.ispProvider=e.target.value; billForm.planId=''; billForm.ispCustomerName=''; billForm.ispVerifyError=''; refreshMain(); });
-  if(!billCache[billForm.ispProvider==='smile'?'ispSmilePlans':'ispSpectranetPlans'] && !billLoading) bpLoadIspPlans(billForm.ispProvider);
-
-  const acct = document.getElementById('bp-account-id'); if(acct) acct.addEventListener('input', e=>{ billForm.accountId=e.target.value; });
+  bpBackBind();
+  const isSmile = billForm.ispProvider==='smile';
+  bpEnsure(isSmile ? 'ispSmilePlans' : 'ispSpectranetPlans', ()=>bpLoadIspPlans(billForm.ispProvider));
+  document.querySelectorAll('[data-isp]').forEach(b=>b.addEventListener('click', ()=>{ billForm.ispProvider=b.dataset.isp; billForm.planId=''; billForm.ispCustomerName=''; billForm.ispVerifyError=''; refreshMain(); }));
+  document.querySelectorAll('[data-iplan]').forEach(b=>b.addEventListener('click', ()=>{ billForm.planId=b.dataset.iplan; refreshMain(); }));
+  const ch = document.getElementById('bp-plan-change'); if(ch) ch.addEventListener('click', ()=>{ billForm.planId=''; refreshMain(); });
+  const acct = document.getElementById('bp-account-id');
+  if(acct) acct.addEventListener('input', e=>{ billForm.accountId=e.target.value; billForm.ispCustomerName=''; billForm.ispVerifyError=''; bpSetStatus('bp-isp-status',''); });
+  bpAutoVerify('bp-account-id', ()=>billForm.accountId.trim().length>=8, bpVerifySmile);
+  if(acct && billForm.accountId.trim().length>=8 && !billForm.ispCustomerName && !billForm.ispVerifying && !billForm.ispVerifyError) bpVerifySmile();
   const spNum = document.getElementById('bp-spectranet-number'); if(spNum) spNum.addEventListener('input', e=>{ billForm.spectranetNumber=e.target.value; });
-  const plan = document.getElementById('bp-plan'); if(plan) plan.addEventListener('change', e=>{ billForm.planId=e.target.value; refreshMain(); });
   const phone = document.getElementById('bp-phone'); if(phone) phone.addEventListener('input', e=>{ billForm.phone=e.target.value; });
   const email = document.getElementById('bp-email'); if(email) email.addEventListener('input', e=>{ billForm.email=e.target.value; });
-  const qty = document.getElementById('bp-qty'); if(qty) qty.addEventListener('input', e=>{ billForm.qty=e.target.value; });
-  const reverify = document.getElementById('bp-isp-reverify');
-  if(reverify) reverify.addEventListener('click', e=>{ e.preventDefault(); billForm.ispCustomerName=''; billForm.ispVerifyError=''; refreshMain(); });
-  const verifyBtn = document.getElementById('bp-isp-verify');
-  if(verifyBtn) verifyBtn.addEventListener('click', async ()=>{
-    if(billForm.ispVerifying) return;
-    if(!billForm.accountId.trim()){ billForm.ispVerifyError = 'Enter the Smile account ID.'; refreshMain(); return; }
-    billForm.ispVerifying = true; billForm.ispVerifyError = ''; refreshMain();
-    try{
-      const r = await callBigisub('isp_smile_verify', { account_id: billForm.accountId.trim() });
-      const name = bigisubNameFromResponse(r);
-      if(!name){
-        billForm.ispVerifyError = bigisubUpstreamMessage(r && r.raw) || "Couldn't verify this Smile account — double-check the ID.";
-      } else {
-        billForm.ispCustomerName = name;
-      }
-    }catch(e){ billForm.ispVerifyError = e.message || 'Verification failed.'; }
-    billForm.ispVerifying = false; refreshMain();
-  });
+  const qty = document.getElementById('bp-qty'); if(qty){ qty.addEventListener('input', e=>{ billForm.qty=e.target.value; }); qty.addEventListener('change', ()=>refreshMain()); }
+  bpBindBen('smile','bp-account-id', ()=>bpVerifySmile()); bpBindBen('spectranet','bp-spectranet-number');
   const btn = document.getElementById('bp-isp-confirm');
   if(btn) btn.addEventListener('click', async ()=>{
     if(billPurchaseInFlight) return;
-    const isSmile = billForm.ispProvider==='smile';
     const plans = (isSmile ? billCache.ispSmilePlans : billCache.ispSpectranetPlans) || [];
     const chosen = plans.find(p=>String(p.id)===String(billForm.planId));
     if(!chosen || !billForm.phone.trim()){ toast('Select a plan and enter a phone number.'); return; }
-    if(isSmile && !billForm.email.trim()){ toast('Enter an email for the Smile top-up.'); return; }
-    if(!isSmile && !billForm.spectranetNumber.trim()){ toast('Enter the Spectranet device number.'); return; }
-    const price = billCustomerPrice(bigisubPlanPrice(chosen));
+    if(isSmile){
+      if(!billForm.accountId.trim()){ toast('Enter the Smile account ID.'); return; }
+      if(!billForm.ispCustomerName){ await bpVerifySmile(); if(!billForm.ispCustomerName){ toast(billForm.ispVerifyError || 'Verify the account first.'); return; } }
+      if(!billForm.email.trim()){ toast('Enter an email for the Smile top-up.'); return; }
+    } else if(!billForm.spectranetNumber.trim()){ toast('Enter the Spectranet device number.'); return; }
+    const q = isSmile ? 1 : Math.max(1, Number(billForm.qty||1));
+    const price = billPreviewPrice(isSmile?'isp_smile':'isp_spectranet', chosen.id, q, bpPrice(chosen)*q);
     if(!confirm(`Buy ${bigisubPlanLabel(chosen)}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
     try{
       const r = isSmile
         ? await callBigisub('isp_smile_topup', { plan: chosen.id, phone_number: billForm.phone.trim(), email: billForm.email.trim(), account_id: billForm.accountId.trim(), client_ref: billGetClientRef(), bill_pin: pin })
-        : await callBigisub('isp_spectranet_topup', { plan: chosen.id, phone_number: billForm.phone.trim(), spectranet_number: billForm.spectranetNumber.trim(), quantity: Math.max(1,Number(billForm.qty||1)), client_ref: billGetClientRef(), bill_pin: pin });
+        : await callBigisub('isp_spectranet_topup', { plan: chosen.id, phone_number: billForm.phone.trim(), spectranet_number: billForm.spectranetNumber.trim(), quantity: q, client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
       billRecordTxAttribution(billGetClientRef());
+      bpBenSave(isSmile?'smile':'spectranet', isSmile?billForm.accountId:billForm.spectranetNumber, isSmile?billForm.ispCustomerName:'');
       logAudit('bill_isp', `Bought ${bigisubPlanLabel(chosen)} (${isSmile?'Smile':'Spectranet'})`);
-      toast('Plan purchased ✅'); billScreen='hub';
+      const info = bpSuccessInfo(r, `${isSmile?'Smile':'Spectranet'} ${bigisubPlanLabel(chosen)}`, isSmile?'Account ID':'Device Number', (isSmile?billForm.accountId:billForm.spectranetNumber).trim(), price, 'Internet');
+      billPurchaseInFlight = false; billPurchaseStage = ''; bpShowSuccess(info); return;
     }catch(e){ toast(e.message); }
     billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
   });

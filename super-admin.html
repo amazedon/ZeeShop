@@ -122,6 +122,22 @@
     background:#fff;color:var(--ink);font-size:14px;font-weight:800;cursor:pointer;font-family:inherit;}
   .back-btn:active{transform:scale(.97);}
   .section-bar-title{font-size:17px;font-weight:800;color:var(--ink);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  /* ---- Banners ---- */
+  .bn-slot{border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:14px;background:#fff;}
+  .bn-slot h3{margin:0 0 10px;font-size:14px;color:var(--ink);}
+  .bn-preview{width:100%;aspect-ratio:16/9;border-radius:10px;background:#EEF1F6;display:flex;align-items:center;justify-content:center;color:var(--text-dim);font-size:13px;overflow:hidden;margin-bottom:10px;}
+  .bn-preview img{width:100%;height:100%;object-fit:cover;display:block;}
+  .bn-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;}
+  .bn-tag{font-size:11px;font-weight:800;padding:3px 9px;border-radius:999px;background:#EEF1F6;color:var(--text-dim);}
+  .bn-tag.on{background:#E3F6EC;color:#12794A;}
+  .bn-actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;}
+  .bn-check{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;margin-top:6px;}
+  .bn-check input{width:18px;height:18px;}
+  .ann-row{padding:12px 0;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:flex-start;justify-content:space-between;}
+  .ann-row:last-child{border-bottom:none;}
+  .ann-title{font-weight:800;font-size:14px;color:var(--ink);}
+  .ann-meta{font-size:12px;color:var(--text-dim);margin-top:2px;}
+  .ann-off{opacity:.55;}
   .tab-panel{display:none;}
   .tab-panel.active{display:block;animation:tabIn .15s ease;}
   @keyframes tabIn{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:translateY(0);}}
@@ -211,6 +227,11 @@
       <button class="menu-card" data-tab="notify">
         <span class="mc-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"/><path d="M10 21a2 2 0 0 0 4 0"/></svg></span>
         <span class="mc-text"><span class="mc-title">Notifications</span><span class="mc-desc">Send announcements to businesses</span></span>
+        <span class="mc-arrow">›</span>
+      </button>
+      <button class="menu-card" data-tab="banners">
+        <span class="mc-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M21 15l-5-4.5L8 18"/><path d="M8 21h8"/></svg></span>
+        <span class="mc-text"><span class="mc-title">Banners</span><span class="mc-desc">Up to 3 sliding pictures on the app's Home screen</span></span>
         <span class="mc-arrow">›</span>
       </button>
       <button class="menu-card" data-tab="content">
@@ -369,16 +390,30 @@
       </div>
     </div>
 
+    <div id="banners-section" class="tab-panel">
+      <div class="section-heading">Banners</div>
+      <div class="card">
+        <h2>Home screen pictures</h2>
+        <p class="subtle">Up to 3 pictures slide automatically on every user's Home screen, between "Needs Attention" and "Bill Payments". Pictures are cropped to a wide shape (16:9) so they all match. Each picture can have an optional link: leave it empty and it is just a picture.</p>
+        <div id="banner-slots"><p class="subtle">Loading…</p></div>
+      </div>
+    </div>
+
     <div id="notify-section" class="tab-panel">
       <div class="section-heading">Notifications</div>
       <div class="card">
         <h2>📣 Send Notification</h2>
-        <p class="subtle">Sends a push notification to devices with notifications enabled. Leave "Target Business" blank to send to everyone across the platform.</p>
+        <p class="subtle">Sends a push notification to devices with notifications enabled, <b>and</b> shows the message inside the app as a pop-up and in the user's message list (so people who blocked notifications still see it). Leave "Target Business" blank to send to everyone.</p>
         <div id="broadcast-status"></div>
         <div class="field"><label>Title</label><input id="bc-title" placeholder="e.g. New feature: Auto-Renewal"></div>
         <div class="field"><label>Message</label><input id="bc-body" placeholder="Short message body"></div>
         <div class="field"><label>Target Business ID (optional)</label><input id="bc-business-id" placeholder="Leave blank for all businesses"></div>
         <button class="btn btn-primary" id="send-broadcast-btn">Send Notification</button>
+      </div>
+      <div class="card">
+        <h2>Sent messages</h2>
+        <p class="subtle">Withdraw a message to remove it from users' apps.</p>
+        <div id="ann-list"><p class="subtle">Loading…</p></div>
       </div>
     </div>
   </main>
@@ -492,7 +527,7 @@
   // still loaded up front (above) so switching tabs is instant with no
   // spinner, but the DOM for the other five sections stays hidden until
   // picked, instead of the old single long scrolling page.
-  const TAB_TITLES = { overview:'Overview', businesses:'Businesses', 'bill-payments':'Bill Payments', pricing:'Platform Pricing', notify:'Notifications', content:'Content' };
+  const TAB_TITLES = { overview:'Overview', businesses:'Businesses', 'bill-payments':'Bill Payments', pricing:'Platform Pricing', notify:'Notifications', banners:'Banners', content:'Content' };
   // tabId 'home' = the menu (everything else hidden). Any other id opens
   // that section on its own, with a Back bar. fromHistory=true means the
   // phone's own back button caused this, so we must not add another entry.
@@ -510,6 +545,8 @@
       if(!home) history.pushState({ tab: tabId }, '', '#' + tabId);
     }
     window.scrollTo({ top: 0, behavior: 'instant' });
+    if(!home && tabId === 'banners') loadBanners();
+    if(!home && tabId === 'notify') loadAnnouncementsHistory();
   }
   document.querySelectorAll('.menu-card').forEach(card=>{
     card.addEventListener('click', ()=> showTab(card.dataset.tab));
@@ -528,9 +565,9 @@
 
   const SITE_SECTIONS = [
     { key: 'about_us', label: 'About Us', bodyRows: 4 },
-    { key: 'contact_us', label: 'Contact Us', bodyRows: 3, extraFields: ['email', 'phone', 'address'] },
+    { key: 'contact_us', label: 'Contact Us', bodyRows: 3, extraFields: ['email', 'phone', 'whatsapp', 'address'] },
   ];
-  const FIELD_LABELS = { email: 'Email', phone: 'Phone', address: 'Address' };
+  const FIELD_LABELS = { email: 'Email', phone: 'Phone', whatsapp: 'WhatsApp', address: 'Address' };
 
   async function loadSiteContent(){
     const box = document.getElementById('site-content-editor');
@@ -579,6 +616,129 @@
           }
         });
       });
+    }catch(e){
+      box.innerHTML = `<div class="err">Could not load: ${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+
+  // ================= Banners =================
+  // Shrinks and crops a chosen picture to 1200x675 (16:9) JPEG before upload,
+  // so every banner matches and stays small for people on mobile data.
+  function pictureToJpegBase64(file){
+    return new Promise((resolve, reject)=>{
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = ()=>{
+        const W = 1200, H = 675;
+        const canvas = document.createElement('canvas'); canvas.width = W; canvas.height = H;
+        const ctx = canvas.getContext('2d');
+        const scale = Math.max(W / img.width, H / img.height);          // cover
+        const w = img.width * scale, h = img.height * scale;
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+        ctx.drawImage(img, (W - w) / 2, (H - h) / 2, w, h);
+        URL.revokeObjectURL(url);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+        resolve({ dataUrl, base64: dataUrl.split(',')[1] });
+      };
+      img.onerror = ()=>{ URL.revokeObjectURL(url); reject(new Error('That file could not be read as a picture.')); };
+      img.src = url;
+    });
+  }
+
+  const bannerDraft = {};  // slot -> { dataUrl, base64 } for a picture chosen but not saved yet
+
+  async function loadBanners(){
+    const box = document.getElementById('banner-slots');
+    box.innerHTML = '<p class="subtle">Loading…</p>';
+    try{
+      const r = await callAdminApi('list_banners', {});
+      const bySlot = {}; (r.banners||[]).forEach(b=>{ bySlot[b.position] = b; });
+      box.innerHTML = [1,2,3].map(n=>{
+        const b = bySlot[n];
+        return `
+          <div class="bn-slot" data-slot="${n}">
+            <h3>Picture ${n}</h3>
+            <div class="bn-preview" id="bn-preview-${n}">${b ? `<img src="${escapeHtml(b.image_url)}" alt="">` : 'No picture yet'}</div>
+            <div class="bn-row">
+              <label class="btn btn-outline btn-sm" style="cursor:pointer;">Choose picture<input type="file" accept="image/*" id="bn-file-${n}" style="display:none;"></label>
+              <span class="bn-tag ${b && b.link_url ? 'on' : ''}" id="bn-tag-${n}">${b ? (b.link_url ? 'Has link' : 'No link') : 'Empty'}</span>
+            </div>
+            <div class="field"><label>Link (optional)</label><input id="bn-link-${n}" placeholder="https://… leave empty for no link" value="${escapeHtml(b?.link_url || '')}"></div>
+            <label class="bn-check"><input type="checkbox" id="bn-active-${n}" ${(!b || b.active) ? 'checked' : ''}> Show to users</label>
+            <div class="bn-actions">
+              <button class="btn btn-primary btn-sm" id="bn-save-${n}">Save</button>
+              ${b ? `<button class="btn btn-outline btn-sm" id="bn-del-${n}">Remove</button>` : ''}
+            </div>
+            <div class="subtle" id="bn-status-${n}" style="margin-top:8px;"></div>
+          </div>`;
+      }).join('');
+
+      [1,2,3].forEach(n=>{
+        const status = document.getElementById(`bn-status-${n}`);
+        const say = (msg, color)=>{ status.style.color = color || 'var(--text-dim)'; status.textContent = msg; };
+        document.getElementById(`bn-file-${n}`).addEventListener('change', async (e)=>{
+          const file = e.target.files[0]; if(!file) return;
+          try{
+            say('Preparing picture…');
+            bannerDraft[n] = await pictureToJpegBase64(file);
+            document.getElementById(`bn-preview-${n}`).innerHTML = `<img src="${bannerDraft[n].dataUrl}" alt="">`;
+            say('Picture ready — tap Save to publish it.', 'var(--green)');
+          }catch(err){ say(err.message, 'var(--red)'); }
+        });
+        document.getElementById(`bn-link-${n}`).addEventListener('input', ()=>{
+          const has = document.getElementById(`bn-link-${n}`).value.trim() !== '';
+          const tag = document.getElementById(`bn-tag-${n}`); tag.textContent = has ? 'Has link' : 'No link'; tag.classList.toggle('on', has);
+        });
+        document.getElementById(`bn-save-${n}`).addEventListener('click', async ()=>{
+          const link = document.getElementById(`bn-link-${n}`).value.trim();
+          if(link && !/^https:\/\/\S+$/i.test(link)){ say('The link must start with https:// (or leave it empty).', 'var(--red)'); return; }
+          if(!bannerDraft[n] && !bySlot[n]){ say('Choose a picture first.', 'var(--red)'); return; }
+          const btn = document.getElementById(`bn-save-${n}`); btn.disabled = true; say('Saving…');
+          try{
+            await callAdminApi('save_banner', {
+              position: n, link_url: link, active: document.getElementById(`bn-active-${n}`).checked,
+              ...(bannerDraft[n] ? { image_base64: bannerDraft[n].base64, content_type: 'image/jpeg' } : {}),
+            });
+            delete bannerDraft[n];
+            say('Saved ✅ — users see it next time they open the app.', 'var(--green)');
+            setTimeout(loadBanners, 900);
+          }catch(err){ say('Error: ' + err.message, 'var(--red)'); btn.disabled = false; }
+        });
+        const del = document.getElementById(`bn-del-${n}`);
+        if(del) del.addEventListener('click', async ()=>{
+          if(!confirm(`Remove picture ${n}? Users will stop seeing it.`)) return;
+          try{ await callAdminApi('delete_banner', { position: n }); delete bannerDraft[n]; loadBanners(); }
+          catch(err){ say('Error: ' + err.message, 'var(--red)'); }
+        });
+      });
+    }catch(e){
+      box.innerHTML = `<div class="err">Could not load: ${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  // ================= Sent messages (broadcast history) =================
+  async function loadAnnouncementsHistory(){
+    const box = document.getElementById('ann-list');
+    box.innerHTML = '<p class="subtle">Loading…</p>';
+    try{
+      const r = await callAdminApi('list_announcements', {});
+      const list = r.announcements || [];
+      if(list.length === 0){ box.innerHTML = '<p class="subtle">No messages sent yet.</p>'; return; }
+      box.innerHTML = list.map(a=>`
+        <div class="ann-row ${a.active ? '' : 'ann-off'}">
+          <div style="min-width:0;">
+            <div class="ann-title">${escapeHtml(a.title)}</div>
+            <div class="subtle" style="margin-top:2px;">${escapeHtml(a.body)}</div>
+            <div class="ann-meta">${new Date(a.created_at).toLocaleString()} · ${a.target_business_id ? 'One business' : 'Everyone'}${a.active ? '' : ' · Withdrawn'}</div>
+          </div>
+          <button class="btn btn-outline btn-sm" data-ann="${escapeHtml(a.id)}" data-on="${a.active ? '1' : '0'}">${a.active ? 'Withdraw' : 'Show again'}</button>
+        </div>`).join('');
+      box.querySelectorAll('[data-ann]').forEach(btn=>btn.addEventListener('click', async ()=>{
+        btn.disabled = true;
+        try{ await callAdminApi('set_announcement_active', { id: btn.dataset.ann, active: btn.dataset.on !== '1' }); loadAnnouncementsHistory(); }
+        catch(err){ alert('Error: ' + err.message); btn.disabled = false; }
+      }));
     }catch(e){
       box.innerHTML = `<div class="err">Could not load: ${escapeHtml(e.message)}</div>`;
     }
@@ -1102,7 +1262,8 @@
       });
       const result = await res.json();
       if(!res.ok || result.error){ showError(statusBox, result.error || 'Could not send.'); return; }
-      statusBox.innerHTML = `<div class="ok">Sent to ${result.sent} device(s)${result.failed?`, ${result.failed} failed`:''} (${result.totalTargeted} targeted).</div>`;
+      statusBox.innerHTML = `<div class="ok">Sent to ${result.sent} device(s)${result.failed?`, ${result.failed} failed`:''} (${result.totalTargeted} targeted). ${result.announcementSaved ? 'Also saved in the app, so users will see it when they open it.' : '<b>Not saved inside the app</b> — run banners-setup.sql first.'}</div>`;
+      loadAnnouncementsHistory();
     }catch(e){
       showError(statusBox, 'Could not send — check your connection.');
     }

@@ -2452,6 +2452,7 @@ function bindSignupVerifyEvents(){
     throw new Error("Couldn't create your account: " + (authErr?.message || "Unknown error"));
   }
   const ownerAuthId = authData.user.id;
+  try{ localStorage.setItem('zeeshop_new_signup', '1'); localStorage.removeItem('zeeshop_push_autoasked'); localStorage.removeItem('zeeshop_push_optout'); }catch(_e){}
 
   const { data: sessionData } = await window.sb.auth.getSession();
   const token = sessionData?.session?.access_token;
@@ -3385,6 +3386,8 @@ function screenDashboard(){
     ${handoverNoteBanner()}
     <p class="subtle" style="margin-bottom:14px;">${currentShop()?.name} · ${fmtDate(todayISO())}</p>
 
+    ${pushPromptCard()}
+
     ${dailyDigestBlock()}
 
     ${(alerts.expiring>0 || alerts.dueSoon>0 || alerts.overdue>0 || alerts.lowStock>0 || outStock.length>0) ? `
@@ -3406,10 +3409,237 @@ function screenDashboard(){
       </div>`:''}
     ` : `<div class="empty"><div class="ic">${ICON_CHECK_CIRCLE}</div><b>${t('dash_all_clear')}</b>${t('dash_no_alerts')}</div>`}
 
+    ${promoSliderBlock()}
+    ${messagesRowHtml()}
+
     ${utilityTilesBlock()}
 
     ${isMaster() ? staffActivityFeed() : ''}
   `;
+}
+
+
+/* ===================== Home extras: slider, messages, notifications on by default ===================== */
+(function(){
+  const st = document.createElement('style');
+  st.textContent = `
+    .promo-slider{position:relative;overflow:hidden;border-radius:16px;margin:4px 0 16px;background:#EEF1F6;aspect-ratio:16/9;box-shadow:0 2px 10px rgba(18,33,59,.08);touch-action:pan-y;}
+    .promo-track{display:flex;height:100%;transition:transform .45s ease;}
+    .promo-slide{flex:0 0 100%;height:100%;}
+    .promo-slide img{width:100%;height:100%;object-fit:cover;display:block;-webkit-user-drag:none;user-select:none;}
+    .promo-slide.has-link{cursor:pointer;}
+    .promo-dots{position:absolute;left:0;right:0;bottom:8px;display:flex;justify-content:center;gap:6px;pointer-events:none;}
+    .promo-dot{width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.55);transition:all .25s;}
+    .promo-dot.on{background:#fff;width:18px;border-radius:4px;}
+    .ann-overlay{position:fixed;inset:0;background:rgba(10,18,36,.55);z-index:9998;display:flex;align-items:center;justify-content:center;padding:20px;}
+    .ann-box{background:#fff;border-radius:18px;max-width:420px;width:100%;max-height:80vh;overflow:auto;padding:22px;box-shadow:0 12px 40px rgba(0,0,0,.25);}
+    .ann-box h3{margin:0 0 8px;font-size:18px;color:var(--ink);}
+    .ann-box .ann-body{font-size:14.5px;line-height:1.5;white-space:pre-wrap;color:var(--text);}
+    .ann-box .ann-date{font-size:12px;color:var(--text-dim);margin-bottom:10px;}
+    .ann-item{padding:12px 0;border-bottom:1px solid var(--line);}
+    .ann-item:last-child{border-bottom:none;}
+  `;
+  document.head.appendChild(st);
+})();
+
+// ---- Sliding pictures (posted from Super Admin → Banners) ----
+let promoBanners = (()=>{ try{ return JSON.parse(localStorage.getItem('zeeshop_banners')||'[]'); }catch(_e){ return []; } })();
+let promoFetchedAt = 0;
+async function loadPromoBanners(){
+  promoFetchedAt = Date.now(); // set first so re-renders can't start a second fetch
+  try{
+    const r = await fetch(`${SITE_CONTENT_URL}/rest/v1/banners?select=position,image_url,link_url&order=position.asc`, {
+      headers: { apikey: SITE_CONTENT_ANON_KEY, Authorization: 'Bearer ' + SITE_CONTENT_ANON_KEY }, cache: 'no-store'
+    });
+    if(!r.ok) return;
+    const fresh = await r.json();
+    if(!Array.isArray(fresh)) return;
+    if(JSON.stringify(fresh) !== JSON.stringify(promoBanners)){
+      promoBanners = fresh;
+      try{ localStorage.setItem('zeeshop_banners', JSON.stringify(fresh)); }catch(_e){}
+      if(route==='dashboard') render();
+    }
+  }catch(_e){ /* offline: keep showing the saved pictures */ }
+}
+function promoSliderBlock(){
+  if(!promoBanners.length) return '';
+  const slides = promoBanners.map(b=>`
+    <div class="promo-slide ${b.link_url?'has-link':''}" data-promo-link="${escapeHtml(b.link_url||'')}">
+      <img src="${escapeHtml(b.image_url)}" alt="" draggable="false">
+    </div>`).join('');
+  const dots = promoBanners.length>1 ? promoBanners.map((_,i)=>`<span class="promo-dot ${i===0?'on':''}"></span>`).join('') : '';
+  return `<div class="promo-slider" id="promo-slider"><div class="promo-track" id="promo-track">${slides}</div><div class="promo-dots">${dots}</div></div>`;
+}
+let promoIndex = 0;
+function initPromoSlider(){
+  const root = document.getElementById('promo-slider'); if(!root) return;
+  const track = document.getElementById('promo-track');
+  const slides = [...track.children]; const n = slides.length;
+  const dots = [...root.querySelectorAll('.promo-dot')];
+  let paused = false, startX = null, resumeT = null;
+  const show = (k, animate)=>{
+    promoIndex = ((k % n) + n) % n;
+    track.style.transition = animate===false ? 'none' : '';
+    track.style.transform = `translateX(-${promoIndex*100}%)`;
+    dots.forEach((d,i)=>d.classList.toggle('on', i===promoIndex));
+  };
+  show(Math.min(promoIndex, n-1), false); // keep the position across screen refreshes
+  if(window.__promoTimer) clearInterval(window.__promoTimer);
+  window.__promoTimer = setInterval(()=>{
+    if(!document.body.contains(root)){ clearInterval(window.__promoTimer); return; } // left the Home screen
+    if(!paused && n>1) show(promoIndex+1);
+  }, 4000);
+  const pause = ()=>{ paused = true; clearTimeout(resumeT); };
+  const resume = ()=>{ clearTimeout(resumeT); resumeT = setTimeout(()=>{ paused = false; }, 2500); };
+  root.addEventListener('touchstart', e=>{ pause(); startX = e.touches[0].clientX; }, { passive:true });
+  root.addEventListener('touchend', e=>{
+    if(startX!==null){
+      const dx = e.changedTouches[0].clientX - startX;
+      if(Math.abs(dx) > 40 && n>1) show(promoIndex + (dx<0 ? 1 : -1));
+    }
+    startX = null; resume();
+  }, { passive:true });
+  root.addEventListener('mouseenter', pause); root.addEventListener('mouseleave', resume);
+  slides.forEach(sl=>sl.addEventListener('click', ()=>{
+    const link = sl.dataset.promoLink;
+    // Only secure web links open; a picture with no link does nothing.
+    if(link && /^https:\/\//i.test(link)) window.open(link, '_blank', 'noopener,noreferrer');
+  }));
+}
+
+// ---- Announcements (broadcasts posted from Super Admin → Notifications) ----
+let annList = (()=>{ try{ return JSON.parse(localStorage.getItem('zeeshop_ann_cache')||'[]'); }catch(_e){ return []; } })();
+let annFetchedAt = 0;
+function annSeenIds(){ try{ return JSON.parse(localStorage.getItem('zeeshop_seen_ann')||'[]'); }catch(_e){ return []; } }
+function annMarkSeen(id){ const ids = annSeenIds(); if(!ids.includes(id)){ ids.push(id); try{ localStorage.setItem('zeeshop_seen_ann', JSON.stringify(ids.slice(-100))); }catch(_e){} } }
+async function loadAnnouncements(){
+  annFetchedAt = Date.now();
+  try{
+    const { data } = await window.sb.auth.getSession();
+    const tok = data?.session?.access_token || SITE_CONTENT_ANON_KEY; // signed-in token lets a message sent to just this business through
+    const r = await fetch(`${SITE_CONTENT_URL}/rest/v1/announcements?select=id,title,body,created_at&order=created_at.desc&limit=20`, {
+      headers: { apikey: SITE_CONTENT_ANON_KEY, Authorization: 'Bearer ' + tok }, cache: 'no-store'
+    });
+    if(!r.ok) return;
+    const fresh = await r.json();
+    if(!Array.isArray(fresh)) return;
+    const changed = JSON.stringify(fresh) !== JSON.stringify(annList);
+    annList = fresh;
+    try{ localStorage.setItem('zeeshop_ann_cache', JSON.stringify(fresh)); }catch(_e){}
+    if(route==='dashboard'){ if(changed) render(); showUnseenAnnouncement(); }
+  }catch(_e){ /* offline: keep what we have */ }
+}
+function annCloseModal(){ const m = document.getElementById('ann-modal'); if(m) m.remove(); }
+function showUnseenAnnouncement(){
+  if(document.getElementById('ann-modal')) return;
+  const next = annList.find(a=>!annSeenIds().includes(a.id));
+  if(!next) return;
+  const ov = document.createElement('div'); ov.className = 'ann-overlay'; ov.id = 'ann-modal';
+  ov.innerHTML = `<div class="ann-box">
+    <div style="font-size:26px;margin-bottom:4px;">📣</div>
+    <h3>${escapeHtml(next.title)}</h3>
+    <div class="ann-date">${escapeHtml(new Date(next.created_at).toLocaleDateString())}</div>
+    <div class="ann-body">${escapeHtml(next.body)}</div>
+    <button class="btn btn-primary" id="ann-ok" style="margin-top:16px;">Got it</button>
+  </div>`;
+  document.body.appendChild(ov);
+  document.getElementById('ann-ok').addEventListener('click', ()=>{ annMarkSeen(next.id); annCloseModal(); showUnseenAnnouncement(); });
+}
+function openMessagesList(){
+  if(document.getElementById('ann-modal')) return;
+  const ov = document.createElement('div'); ov.className = 'ann-overlay'; ov.id = 'ann-modal';
+  ov.innerHTML = `<div class="ann-box">
+    <h3>📣 Messages from ZeeShop</h3>
+    ${annList.map(a=>`<div class="ann-item"><div style="font-weight:800;">${escapeHtml(a.title)}</div><div class="ann-date">${escapeHtml(new Date(a.created_at).toLocaleDateString())}</div><div class="ann-body">${escapeHtml(a.body)}</div></div>`).join('')}
+    <button class="btn btn-outline" id="ann-close" style="margin-top:14px;">Close</button>
+  </div>`;
+  document.body.appendChild(ov);
+  document.getElementById('ann-close').addEventListener('click', ()=>{ annList.forEach(a=>annMarkSeen(a.id)); annCloseModal(); });
+}
+function messagesRowHtml(){
+  if(!annList.length) return '';
+  const unseen = annList.filter(a=>!annSeenIds().includes(a.id)).length;
+  return `<div class="card" data-open-messages style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+    <div style="font-size:20px;">📣</div>
+    <div style="flex:1;"><b>Messages from ZeeShop</b>${unseen?` <span class="pill" style="background:var(--marigold);color:var(--ink);">${unseen} new</span>`:''}</div>
+    <div style="color:var(--text-dim);">›</div>
+  </div>`;
+}
+
+// ---- Notifications ON by default ----
+// Every device is signed up for notifications automatically. They stay on
+// until the PERSON turns them off in Settings (that choice is remembered
+// and never overridden). The phone/browser itself still has to grant
+// permission, which no app can force — so when it hasn't been granted we show
+// a clear "Turn On" card on Home, or how to unblock it.
+let pushDeviceState = null;        // 'on' | 'default' | 'denied' | 'off' | 'unsupported' | null (not checked yet)
+let pushEnsureRunning = false;
+function pushOptedOut(){ try{ return localStorage.getItem('zeeshop_push_optout') === '1'; }catch(_e){ return false; } }
+async function ensurePushOn(){
+  if(pushEnsureRunning) return;
+  pushEnsureRunning = true;
+  const before = pushDeviceState;
+  try{
+    if(!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)){ pushDeviceState = 'unsupported'; return; }
+    if(pushOptedOut()){ pushDeviceState = 'off'; return; }
+    const perm = Notification.permission;
+    if(perm === 'denied'){ pushDeviceState = 'denied'; return; }
+    if(perm === 'granted'){
+      const ok = await enablePushNotifications(true);      // quietly (re)subscribe this device
+      pushDeviceState = ok ? 'on' : 'default';
+      return;
+    }
+    pushDeviceState = 'default';
+    // A brand-new account gets one automatic ask. Browsers sometimes ignore an
+    // ask that didn't come from a tap; the Home card below covers that case.
+    let fresh = false;
+    try{ fresh = localStorage.getItem('zeeshop_new_signup') === '1' && localStorage.getItem('zeeshop_push_autoasked') !== '1'; }catch(_e){}
+    if(fresh){
+      try{ localStorage.setItem('zeeshop_push_autoasked', '1'); }catch(_e){}
+      const ok = await enablePushNotifications(true);
+      pushDeviceState = ok ? 'on' : (Notification.permission === 'denied' ? 'denied' : 'default');
+    }
+  }catch(_e){
+    /* leave the state as it was */
+  }finally{
+    pushEnsureRunning = false;
+    if(pushDeviceState !== before && route==='dashboard') render();
+  }
+}
+function pushPromptCard(){
+  if(pushOptedOut()) return '';
+  if(pushDeviceState === 'default'){
+    return `<div class="card" style="display:flex;align-items:center;gap:12px;">
+      <div style="font-size:22px;">🔔</div>
+      <div style="flex:1;"><b>Turn on notifications</b><div class="subtle" style="font-size:12.5px;">Get shop alerts and important updates from ZeeShop.</div></div>
+      <button class="btn btn-primary btn-sm" id="push-turn-on" style="width:auto;">Turn On</button>
+    </div>`;
+  }
+  if(pushDeviceState === 'denied'){
+    return `<div class="card" style="display:flex;align-items:center;gap:12px;">
+      <div style="font-size:22px;">🔕</div>
+      <div style="flex:1;"><b>Notifications are blocked</b><div class="subtle" style="font-size:12.5px;">Allow notifications for this site in your browser settings, then tap Check again.</div></div>
+      <button class="btn btn-outline btn-sm" id="push-check-again" style="width:auto;">Check again</button>
+    </div>`;
+  }
+  return '';
+}
+function bindHomeExtras(){
+  initPromoSlider();
+  if(Date.now() - promoFetchedAt > 5*60*1000) loadPromoBanners();
+  if(Date.now() - annFetchedAt > 5*60*1000) loadAnnouncements();
+  else if(annList.length) setTimeout(showUnseenAnnouncement, 300);
+  if(pushDeviceState === null) ensurePushOn();
+  const row = document.querySelector('[data-open-messages]');
+  if(row) row.addEventListener('click', openMessagesList);
+  const on = document.getElementById('push-turn-on');
+  if(on) on.addEventListener('click', async ()=>{
+    const ok = await enablePushNotifications();   // this tap lets the browser show its permission prompt
+    pushDeviceState = ok ? 'on' : (Notification.permission === 'denied' ? 'denied' : 'default');
+    render();
+  });
+  const again = document.getElementById('push-check-again');
+  if(again) again.addEventListener('click', async ()=>{ pushDeviceState = null; await ensurePushOn(); render(); });
 }
 
 // Quick-access icon tiles for the three most common bill-payment purchases,
@@ -3586,6 +3816,7 @@ function timeAgo(iso){
   return fmtDate(iso.slice(0,10));
 }
 function bindDashboardEvents(){
+  bindHomeExtras();
   document.querySelectorAll('[data-dismiss-handover]').forEach(b=>b.addEventListener('click', ()=>{
     const id = b.dataset.dismissHandover;
     if(!state.dismissedHandoverIds.includes(id)) state.dismissedHandoverIds.push(id);
@@ -3609,7 +3840,7 @@ function bindDashboardEvents(){
   const historyBtn = document.querySelector('[data-wallet-history]');
   if(historyBtn) historyBtn.addEventListener('click', (e)=>{
     e.stopPropagation();
-    route = 'billpayments'; billScreen = 'history'; billHistory = []; render();
+    route = 'billpayments'; billScreen = 'history'; billHistory = []; billHistoryLoaded = false; billHistoryError = null; render();
   });
   const walletRetryBtn = document.querySelector('[data-wallet-retry]');
   if(walletRetryBtn) walletRetryBtn.addEventListener('click', (e)=>{
@@ -7077,14 +7308,16 @@ function urlBase64ToUint8Array(base64String){
  * can reach it later. Needs internet + a live session (same as any
  * other server-touching action) — silently no-ops without either.
  */
-async function enablePushNotifications(){
+async function enablePushNotifications(silent){
+  const say = (m)=>{ if(!silent) toast(m); };
   if(!('serviceWorker' in navigator) || !('PushManager' in window)){
-    toast('Push notifications aren\'t supported on this browser.');
+    say('Push notifications aren\'t supported on this browser.');
     return false;
   }
   try{
-    const permission = await Notification.requestPermission();
-    if(permission !== 'granted'){ toast('Notifications permission was not granted.'); return false; }
+    let permission = Notification.permission;
+    if(permission !== 'granted') permission = await Notification.requestPermission();
+    if(permission !== 'granted'){ say('Notifications permission was not granted.'); return false; }
 
     const reg = await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
@@ -7096,7 +7329,7 @@ async function enablePushNotifications(){
     }
 
     const { data: sessionData } = await window.sb.auth.getSession();
-    if(!sessionData.session){ toast('Please log in online once first, then try again.'); return false; }
+    if(!sessionData.session){ say('Please log in online once first, then try again.'); return false; }
 
     const subJson = sub.toJSON();
     await fetch(`${SITE_CONTENT_URL}/rest/v1/push_subscriptions`, {
@@ -7112,15 +7345,20 @@ async function enablePushNotifications(){
     });
     business().pushEnabled = true;
     save();
-    toast('Notifications enabled ✅');
+    try{ localStorage.removeItem('zeeshop_push_optout'); }catch(_e){}
+    pushDeviceState = 'on';
+    say('Notifications enabled ✅');
     return true;
   }catch(e){
-    toast('Could not enable notifications — please try again.');
+    say('Could not enable notifications — please try again.');
     return false;
   }
 }
 
 async function disablePushNotifications(){
+  // The person chose this, so notifications stay off on this device until THEY turn them on again.
+  try{ localStorage.setItem('zeeshop_push_optout', '1'); }catch(_e){}
+  pushDeviceState = 'off';
   try{
     if('serviceWorker' in navigator){
       const reg = await navigator.serviceWorker.ready;

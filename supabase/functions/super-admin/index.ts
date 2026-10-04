@@ -195,6 +195,113 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true, ...update }, 200);
     }
 
+    // =====================================================================
+    // Banners (the sliding pictures on the app's Home screen) — up to 3,
+    // one per slot. Pictures are stored in the public "banners" storage
+    // folder; only this function (admin-checked above) can add or remove them.
+    // The dashboard shrinks every picture before upload, so these limits are
+    // a safety net, not the normal case.
+    // =====================================================================
+    const BANNER_BUCKET = "banners";
+    const MAX_BANNER_BYTES = 800 * 1024;
+    const bannerPublicUrl = (path: string) => `${supabaseUrl}/storage/v1/object/public/${BANNER_BUCKET}/${path}`;
+    // Empty = no link. Otherwise only a secure https:// address is accepted.
+    const cleanLink = (raw: unknown): { ok: true; value: string | null } | { ok: false } => {
+      const v = String(raw ?? "").trim();
+      if (!v) return { ok: true, value: null };
+      if (v.length > 500 || !/^https:\/\/\S+$/i.test(v)) return { ok: false };
+      try { new URL(v); } catch (_e) { return { ok: false }; }
+      return { ok: true, value: v };
+    };
+
+    if (action === "list_banners") {
+      const { data, error } = await admin.from("banners").select("*").order("position", { ascending: true });
+      if (error) return json({ error: error.message }, 500);
+      return json({ banners: data || [] }, 200);
+    }
+
+    if (action === "save_banner") {
+      const position = Number(params.position);
+      if (![1, 2, 3].includes(position)) return json({ error: "Picture slot must be 1, 2 or 3." }, 400);
+      const link = cleanLink(params.link_url);
+      if (!link.ok) return json({ error: "The link must start with https:// (or leave it empty for no link)." }, 400);
+      const active = params.active === undefined ? true : !!params.active;
+
+      const { data: existing } = await admin.from("banners").select("*").eq("position", position).maybeSingle();
+      let imageUrl = existing?.image_url as string | undefined;
+      let storagePath = existing?.storage_path as string | undefined;
+
+      if (params.image_base64) {
+        const contentType = String(params.content_type || "image/jpeg").toLowerCase();
+        const ext = contentType === "image/png" ? "png" : contentType === "image/webp" ? "webp" : contentType === "image/jpeg" ? "jpg" : null;
+        if (!ext) return json({ error: "Please use a JPG, PNG or WebP picture." }, 400);
+        let bytes: Uint8Array;
+        try {
+          const bin = atob(String(params.image_base64));
+          bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        } catch (_e) { return json({ error: "That picture couldn't be read. Please try another." }, 400); }
+        if (bytes.length === 0 || bytes.length > MAX_BANNER_BYTES) return json({ error: "That picture is too large. Please choose a smaller one." }, 400);
+
+        const newPath = `slot-${position}-${Date.now()}.${ext}`;
+        const { error: upErr } = await admin.storage.from(BANNER_BUCKET).upload(newPath, bytes, { contentType, upsert: false });
+        if (upErr) return json({ error: "Upload failed: " + upErr.message }, 500);
+        if (storagePath) await admin.storage.from(BANNER_BUCKET).remove([storagePath]); // tidy the old one
+        imageUrl = bannerPublicUrl(newPath);
+        storagePath = newPath;
+      }
+      if (!imageUrl) return json({ error: "Choose a picture first." }, 400);
+
+      const { error: saveErr } = await admin.from("banners").upsert({
+        position, image_url: imageUrl, storage_path: storagePath, link_url: link.value, active, updated_at: new Date().toISOString(),
+      }, { onConflict: "position" });
+      if (saveErr) return json({ error: saveErr.message }, 500);
+
+      await admin.from("audit_log_platform").insert({
+        actor_auth_user_id: callerData.user.id, action: "save_banner",
+        detail: `Banner ${position}: ${params.image_base64 ? "new picture, " : ""}${link.value ? "link " + link.value : "no link"}, ${active ? "shown" : "hidden"}`,
+      });
+      return json({ ok: true }, 200);
+    }
+
+    if (action === "delete_banner") {
+      const position = Number(params.position);
+      if (![1, 2, 3].includes(position)) return json({ error: "Picture slot must be 1, 2 or 3." }, 400);
+      const { data: existing } = await admin.from("banners").select("storage_path").eq("position", position).maybeSingle();
+      if (existing?.storage_path) await admin.storage.from(BANNER_BUCKET).remove([existing.storage_path]);
+      const { error } = await admin.from("banners").delete().eq("position", position);
+      if (error) return json({ error: error.message }, 500);
+      await admin.from("audit_log_platform").insert({
+        actor_auth_user_id: callerData.user.id, action: "delete_banner", detail: `Removed banner ${position}`,
+      });
+      return json({ ok: true }, 200);
+    }
+
+    // =====================================================================
+    // Announcements: history of broadcasts, with a way to withdraw one.
+    // (New broadcasts are saved by the send-broadcast function.)
+    // =====================================================================
+    if (action === "list_announcements") {
+      const { data, error } = await admin.from("announcements")
+        .select("id, title, body, target_business_id, active, created_at")
+        .order("created_at", { ascending: false }).limit(30);
+      if (error) return json({ error: error.message }, 500);
+      return json({ announcements: data || [] }, 200);
+    }
+
+    if (action === "set_announcement_active") {
+      const id = String(params.id || "");
+      if (!id) return json({ error: "Missing announcement." }, 400);
+      const active = !!params.active;
+      const { error } = await admin.from("announcements").update({ active }).eq("id", id);
+      if (error) return json({ error: error.message }, 500);
+      await admin.from("audit_log_platform").insert({
+        actor_auth_user_id: callerData.user.id, action: "set_announcement_active",
+        detail: `${active ? "Re-showed" : "Withdrew"} announcement ${id}`,
+      });
+      return json({ ok: true }, 200);
+    }
+
     if (action === "grant_plan") {
       const { business_id, plan, expires_at } = params;
       if (!business_id || !VALID_PLANS.includes(plan)) {

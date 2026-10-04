@@ -48,6 +48,16 @@ Deno.serve(async (req: Request) => {
     if (!title || !body) return json({ error: "Title and body are required" }, 400);
     if (title.length > 100 || body.length > 500) return json({ error: "Title or message is too long." }, 400);
 
+    // Save the message FIRST so users see it inside the app (pop-up + message
+    // list) even when their phone blocks or drops the push notification.
+    // If the announcements table isn't set up yet we still send the push.
+    let announcementSaved = false;
+    const { error: annErr } = await admin.from("announcements").insert({
+      title, body, target_business_id: business_id ? String(business_id) : null,
+    });
+    if (annErr) console.log("announcement not saved (run banners-setup.sql):", annErr.message);
+    else announcementSaved = true;
+
     let query = admin.from("push_subscriptions").select("*").eq("is_active", true);
     if (business_id) query = query.eq("business_id", business_id); // specific business, or omit for "all"
 
@@ -74,7 +84,7 @@ Deno.serve(async (req: Request) => {
       detail: `"${title}" — sent to ${sent}${business_id ? '' : ' (all businesses)'}, ${failed} failed`,
     }).then((r) => { if (r.error) console.log("audit_log_platform insert skipped:", r.error.message); });
 
-    return json({ sent, failed, totalTargeted: (subs || []).length }, 200);
+    return json({ sent, failed, totalTargeted: (subs || []).length, announcementSaved }, 200);
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : "Unexpected error" }, 500);
   }

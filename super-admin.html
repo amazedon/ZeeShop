@@ -138,6 +138,22 @@
   .ann-title{font-weight:800;font-size:14px;color:var(--ink);}
   .ann-meta{font-size:12px;color:var(--text-dim);margin-top:2px;}
   .ann-off{opacity:.55;}
+  /* ---- Bill payments: vertical transaction cards ---- */
+  .tx-filters{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 12px;}
+  .tx-fchip{padding:9px 14px;border-radius:999px;border:1.5px solid var(--line);background:#fff;font-size:13px;font-weight:800;color:var(--text-dim);cursor:pointer;font-family:inherit;}
+  .tx-fchip.on{background:var(--ink);border-color:var(--ink);color:#fff;}
+  .tx-day{font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim);margin:18px 2px 8px;}
+  .tx-card{background:#fff;border:1px solid var(--line);border-left:5px solid #C7CCD6;border-radius:14px;padding:14px 16px;margin-bottom:10px;}
+  .tx-card.tx-success{border-left-color:#1FA668;} .tx-card.tx-failed{border-left-color:#D93636;} .tx-card.tx-pending{border-left-color:#E8A00C;}
+  .tx-top{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+  .tx-svc{font-weight:800;font-size:15px;color:var(--ink);min-width:0;}
+  .tx-amt{font-size:22px;font-weight:900;color:var(--ink);margin:6px 0 2px;}
+  .tx-amt small{font-size:12px;font-weight:600;color:var(--text-dim);}
+  .tx-meta{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;color:var(--text-dim);margin-top:4px;}
+  .tx-money{font-size:13px;margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);display:flex;gap:16px;flex-wrap:wrap;}
+  .tx-money b{color:var(--ink);}
+  .tx-id{font-size:12px;color:var(--text-dim);margin-top:6px;word-break:break-all;}
+  .tx-actions{margin-top:10px;}
   .tab-panel{display:none;}
   .tab-panel.active{display:block;animation:tabIn .15s ease;}
   @keyframes tabIn{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:translateY(0);}}
@@ -323,13 +339,9 @@
 
       <div class="card">
         <h2>Recent Transactions</h2>
-        <p class="subtle">Latest 30 across the whole platform. Pending or failed ones can be manually re-checked with Bigisub.</p>
-        <div class="table-wrap">
-          <table class="stack">
-            <thead><tr><th>Business</th><th>Service</th><th>Recipient</th><th>Paid</th><th>Bigisub cost</th><th>Margin</th><th>Status</th><th>When</th><th></th></tr></thead>
-            <tbody id="bp-recent-tbody"></tbody>
-          </table>
-        </div>
+        <p class="subtle">Latest 100 across the whole platform, newest first. Tap Re-check on a pending or failed one to ask Bigisub for its real status.</p>
+        <div class="tx-filters" id="bp-tx-filters"></div>
+        <div id="bp-recent-cards"></div>
         <div id="bp-recent-empty" class="empty-note hidden">No bill payment transactions yet.</div>
       </div>
 
@@ -749,6 +761,61 @@
     return '₦' + Number(n).toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
 
+  let bpTxData = [];
+  let bpTxFilter = 'all';
+  function bpDayLabel(d){
+    const day = new Date(d); const now = new Date();
+    const same = (a,b)=>a.toDateString()===b.toDateString();
+    const y = new Date(now); y.setDate(now.getDate()-1);
+    if(same(day, now)) return 'Today';
+    if(same(day, y)) return 'Yesterday';
+    return day.toLocaleDateString(undefined, { weekday:'short', day:'numeric', month:'short', year:'numeric' });
+  }
+  function renderBpTransactions(){
+    const box = document.getElementById('bp-recent-cards');
+    const empty = document.getElementById('bp-recent-empty');
+    const filters = document.getElementById('bp-tx-filters');
+    const kind = (t)=> t.status==='success' ? 'success' : t.status==='failed' ? 'failed' : 'pending';
+    const counts = { all: bpTxData.length, pending: 0, failed: 0, success: 0 };
+    bpTxData.forEach(t=>{ counts[kind(t)]++; });
+    filters.innerHTML = [['all','All'],['pending','Pending'],['failed','Failed'],['success','Successful']].map(([k,l])=>
+      `<button class="tx-fchip ${bpTxFilter===k?'on':''}" data-txf="${k}">${l} (${counts[k]})</button>`).join('');
+    filters.querySelectorAll('[data-txf]').forEach(b=>b.addEventListener('click', ()=>{ bpTxFilter=b.dataset.txf; renderBpTransactions(); }));
+    const list = bpTxData.filter(t=> bpTxFilter==='all' || kind(t)===bpTxFilter);
+    if(bpTxData.length === 0){ box.innerHTML=''; empty.classList.remove('hidden'); return; }
+    empty.classList.add('hidden');
+    if(list.length === 0){ box.innerHTML = '<p class="subtle" style="padding:14px 2px;">Nothing in this list.</p>'; return; }
+    let lastDay = '';
+    box.innerHTML = list.map(t=>{
+      const day = bpDayLabel(t.created_at);
+      const head = day !== lastDay ? `<div class="tx-day">${escapeHtml(day)}</div>` : '';
+      lastDay = day;
+      const k = kind(t);
+      const margin = Number(t.sale_price||0) - Number(t.cost_price||0);
+      return `${head}
+        <div class="tx-card tx-${k}">
+          <div class="tx-top"><div class="tx-svc">${escapeHtml(t.service_label || '—')}</div><span class="bp-badge bp-${k}">${escapeHtml(t.status)}</span></div>
+          <div class="tx-amt">${fmtNaira(t.sale_price)} <small>paid by the shop</small></div>
+          <div class="tx-meta"><span>🏪 ${escapeHtml(t.business_name || '—')}</span><span>👤 ${escapeHtml(t.recipient || '—')}</span><span>🕒 ${new Date(t.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span></div>
+          ${k==='failed' ? '' : `<div class="tx-money"><span>Bigisub cost <b>${fmtNaira(t.cost_price)}</b></span><span>Margin <b style="${margin<0?'color:#B3261E;':''}">${fmtNaira(margin)}</b></span></div>`}
+          ${t.bigisub_tranx_id ? `<div class="tx-id">ID: ${escapeHtml(t.bigisub_tranx_id)}</div>` : ''}
+          ${k!=='success' ? `<div class="tx-actions"><button class="btn-outline-sm" data-bp-retry="${t.id}">Re-check with Bigisub</button></div>` : ''}
+        </div>`;
+    }).join('');
+    box.querySelectorAll('[data-bp-retry]').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        btn.disabled = true; btn.textContent = 'Checking…';
+        try{
+          await callAdminApi('retry_bill_transaction', { transaction_id: btn.dataset.bpRetry });
+          loadBillPaymentsOverview();
+        }catch(e){
+          alert('Re-check failed: ' + e.message);
+          btn.disabled = false; btn.textContent = 'Re-check with Bigisub';
+        }
+      });
+    });
+  }
+
   async function loadBillPaymentsOverview(){
     const balBox = document.getElementById('bp-bigisub-balance-box');
     try{
@@ -804,41 +871,10 @@
         `).join('');
       }
 
-      // Recent transactions, with Retry for anything not yet successful.
-      const recentTbody = document.getElementById('bp-recent-tbody');
-      const recentEmpty = document.getElementById('bp-recent-empty');
-      const recent = r.recent_transactions || [];
-      if(recent.length === 0){
-        recentTbody.innerHTML = '';
-        recentEmpty.classList.remove('hidden');
-      }else{
-        recentEmpty.classList.add('hidden');
-        recentTbody.innerHTML = recent.map(t => `
-          <tr>
-            <td data-label="Business">${escapeHtml(t.business_name)}</td>
-            <td data-label="Service">${escapeHtml(t.service_label || '—')}</td>
-            <td data-label="Recipient">${escapeHtml(t.recipient || '—')}</td>
-            <td data-label="Paid">${fmtNaira(t.sale_price)}</td>
-            <td data-label="Bigisub cost">${t.status==='failed' ? '—' : fmtNaira(t.cost_price)}</td>
-            <td data-label="Margin" style="${(t.status!=='failed' && Number(t.sale_price)-Number(t.cost_price) < 0) ? 'color:#B3261E;font-weight:700;' : ''}">${t.status==='failed' ? '—' : fmtNaira(Number(t.sale_price||0)-Number(t.cost_price||0))}</td>
-            <td data-label="Status"><span class="bp-badge bp-${t.status==='success'?'success':t.status==='failed'?'failed':'pending'}">${escapeHtml(t.status)}</span></td>
-            <td data-label="When">${new Date(t.created_at).toLocaleString()}</td>
-            <td>${t.status!=='success' ? `<button class="btn-outline-sm" data-bp-retry="${t.id}">Retry</button>` : ''}</td>
-          </tr>
-        `).join('');
-        document.querySelectorAll('[data-bp-retry]').forEach(btn=>{
-          btn.addEventListener('click', async ()=>{
-            btn.disabled = true; btn.textContent = '…';
-            try{
-              const result = await callAdminApi('retry_bill_transaction', { transaction_id: btn.dataset.bpRetry });
-              loadBillPaymentsOverview(); // simplest correct refresh — re-pulls everything, including this row's new status
-            }catch(e){
-              alert('Retry failed: ' + e.message);
-              btn.disabled = false; btn.textContent = 'Retry';
-            }
-          });
-        });
-      }
+      // Recent transactions as vertical cards, grouped by day, with filters
+      // and a Re-check button on anything not yet successful.
+      bpTxData = r.recent_transactions || [];
+      renderBpTransactions();
     }catch(e){
       balBox.innerHTML = `<div class="err">Could not load bill payments overview: ${escapeHtml(e.message)}</div>`;
     }

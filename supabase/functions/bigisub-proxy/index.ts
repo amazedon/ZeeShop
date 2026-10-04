@@ -465,8 +465,22 @@ Deno.serve(async (req: Request) => {
       const flwData = await flwRes.json();
       let acct = flwData?.data;
       if (!flwRes.ok || flwData?.status !== "success" || !acct?.account_reference) {
-        console.error("Flutterwave payout-subaccount create failed:", flwData?.message);
-        return json({ error: "Account setup is temporarily unavailable. Please try again later." }, 502);
+        console.error("Flutterwave payout-subaccount create failed:", flwRes.status, flwData?.message);
+        // If this email already has a sub-account (created earlier, e.g. before
+        // an account number was cleared from our side), reuse it rather than
+        // leaving the business stuck. Best effort: only used on a failed create.
+        acct = null;
+        try {
+          const wantEmail = String(callerData.user.email || `business-${businessId}@zeeshop.app`).toLowerCase();
+          for (let page = 1; page <= 5 && !acct; page++) {
+            const lr = await fetch(`https://api.flutterwave.com/v3/payout-subaccounts?page=${page}`, { headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` } });
+            const ld = await lr.json().catch(() => null);
+            const rows: any[] = Array.isArray(ld?.data) ? ld.data : (Array.isArray(ld?.data?.subaccounts) ? ld.data.subaccounts : []);
+            if (!lr.ok || rows.length === 0) break;
+            acct = rows.find((r: any) => String(r?.email || "").toLowerCase() === wantEmail && r?.account_reference) || null;
+          }
+        } catch (_e) { /* fall through to the neutral error below */ }
+        if (!acct) return json({ error: "Account setup is temporarily unavailable. Please try again later." }, 502);
       }
 
       // The account number to fund. The create response may carry `nuban`;
@@ -782,12 +796,16 @@ async function loadPricing(admin: ReturnType<typeof createClient>): Promise<Plat
 
 // `quantity` matters for Result Checker and Spectranet, where the flat amount is per unit
 // (so the per-unit display_price × quantity always equals the real charge).
+// Every price the person sees or pays is a WHOLE naira, rounded UP (never
+// ₦26.75). The same function builds the shown price and the charged price,
+// so they can never differ.
+const wholeNaira = (n: number) => Math.ceil(Math.round(n * 100) / 100);
 function computeSalePrice(pricingService: string, costPrice: number, pricing: PlatformPricing, quantity = 1): number {
-  if (pricingService === "airtime" || pricingService === "betting") return Math.round(costPrice * 100) / 100;
-  if (pricingService === "data") return Math.round(costPrice * (1 + (pricing.data_markup_percent || 0) / 100) * 100) / 100;
+  if (pricingService === "airtime" || pricingService === "betting") return wholeNaira(costPrice);
+  if (pricingService === "data") return wholeNaira(costPrice * (1 + (pricing.data_markup_percent || 0) / 100));
   // cable, electricity, isp_smile, isp_spectranet, result_checker
   const units = (pricingService === "result_checker" || pricingService === "isp_spectranet") ? Math.max(1, quantity) : 1;
-  return Math.round((costPrice + (pricing.utility_flat_fee || 0) * units) * 100) / 100;
+  return wholeNaira(costPrice + (pricing.utility_flat_fee || 0) * units);
 }
 
 // Adds `display_price` (the single final total the person pays) to each item
@@ -803,7 +821,7 @@ function withDisplayPrice(items: any[], pricingService: string, pricing: Platfor
 }
 
 // Smallest amount each service accepts (Bigisub's documented minimums).
-const MIN_AMOUNT: Record<string, number> = { airtime: 25, electricity: 1000, betting: 100 };
+const MIN_AMOUNT: Record<string, number> = { airtime: 50, electricity: 500, betting: 1 };
 
 async function handlePurchase(
   admin: ReturnType<typeof createClient>,
@@ -985,7 +1003,7 @@ async function handlePurchase(
   else await admin.from("bill_transactions").insert({ id: txId, business_id: businessId, user_id: userId, service: serviceKey, service_label: serviceLabel, recipient, ...finalFields });
 
   return json({
-    ok: true, wallet_balance: newBalance, status, token: payload?.token || null,
+    ok: true, wallet_balance: newBalance, status, charged: salePrice, token: payload?.token || null,
     pins: payload?.pins || null, bigisub_response: bigisubResponse,
   }, 200);
 }

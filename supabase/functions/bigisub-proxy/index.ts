@@ -339,9 +339,19 @@ Deno.serve(async (req: Request) => {
       const { biller_code, customer_id } = params as { biller_code: string; customer_id: string };
       if (!biller_code || !customer_id) return json({ error: "Missing biller_code or customer_id." }, 400);
       const data = await bigisub("POST", EP.BETTING_VALIDATE, { biller_code, customer_id });
-      const validationReference = data?.validation_reference || data?.reference || null;
-      if (!validationReference) return json({ error: "Betting validation didn't return a reference — cannot proceed to fund." }, 502);
-      return json({ customer_name: extractCustomerName(data), validation_reference: validationReference, raw: data }, 200);
+      // Bigisub wraps the reply as { success, data: {...} }: the validation
+      // reference and the customer's details are INSIDE `data`. (This used to
+      // read the top level, found nothing, and rejected every validation.)
+      const d = inner(data);
+      if (d?.valid === false) return json({ error: "That customer ID wasn't found on this platform. Check it and try again." }, 404);
+      const validationReference = d?.validation_reference || data?.validation_reference || d?.reference || null;
+      if (!validationReference) return json({ error: extractUpstreamMessage(data) || "Couldn't validate this customer ID. Check it and try again." }, 502);
+      return json({
+        customer_name: extractCustomerName(data) || d?.customer_name || null,
+        validation_reference: validationReference,
+        min_amount: d?.min_amount ?? null, max_amount: d?.max_amount ?? null,
+        raw: data,
+      }, 200);
     }
     if (action === "isp_smile_verify") {
       const { account_id } = params as { account_id: string };

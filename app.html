@@ -303,7 +303,7 @@ main{flex:1;padding:14px 14px 90px;max-width:640px;margin:0 auto;width:100%;}
 
 .toast{
   position:fixed;top:16px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;
-  padding:11px 18px;border-radius:10px;font-size:13.5px;font-weight:700;z-index:99;box-shadow:var(--shadow);
+  padding:11px 18px;border-radius:10px;font-size:13.5px;font-weight:700;z-index:100000;box-shadow:var(--shadow);
   animation:toastin .2s ease-out;max-width:90%;text-align:center;
 }
 @keyframes toastin{from{opacity:0;transform:translate(-50%,-8px);}to{opacity:1;transform:translate(-50%,0);}}
@@ -8963,6 +8963,7 @@ function bindBillPaymentsEvents(){
   if(billScreen==='isp') bindBillIspEvents();
   if(billScreen==='history') bindBillHistoryEvents();
   if(billScreen==='success') bindBillSuccessEvents();
+  bindBpAlertEvents();
 }
 
 /* ---------------- TOP UP ----------------
@@ -9218,25 +9219,28 @@ function bpStopPsaPolling(){
   .bps-title{font-size:22px;font-weight:800;line-height:1.15;}
   .bps-sub{font-size:13.5px;color:#9C9AC0;margin-top:3px;}
   .bps-x{width:44px;height:44px;border-radius:50%;border:none;background:#2D2B52;color:#C9C7E8;font-size:18px;cursor:pointer;flex-shrink:0;}
-  .bps-body{flex:1;overflow-y:auto;padding:18px 22px 24px;-webkit-overflow-scrolling:touch;}
+  .bps-body{flex:1;overflow-y:auto;overflow-x:hidden;padding:18px 22px 24px;-webkit-overflow-scrolling:touch;}
   .bps-foot{padding:12px 22px calc(16px + env(safe-area-inset-bottom,0px));border-top:1px solid #2D2B52;flex-shrink:0;background:#1E1B3A;}
   .bps-label{font-size:13px;font-weight:700;letter-spacing:.09em;color:#A3A1C6;text-transform:uppercase;margin:16px 0 10px;}
   .bps-label:first-child{margin-top:2px;}
-  .bps-tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+  .bps-tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;}
   .bps-tile{position:relative;display:flex;flex-direction:column;align-items:center;gap:8px;padding:14px 4px 12px;border-radius:18px;background:#27254A;border:2px solid transparent;color:#B9B7DC;font-size:11.5px;font-weight:800;letter-spacing:.04em;cursor:pointer;font-family:inherit;}
   .bps-tile.on{border-color:#F59E0B;background:#2B2744;color:#fff;}
   .bps-tile.on.net{border-color:#FFD21F;}
   .bps-logo{width:52px;height:52px;border-radius:15px;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:900;}
   .bps-tick{position:absolute;top:-7px;right:-5px;width:22px;height:22px;border-radius:50%;background:#F59E0B;color:#1b1b1b;font-style:normal;font-size:13px;font-weight:900;display:flex;align-items:center;justify-content:center;}
-  .bps-grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+  .bps-grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;}
   .bps-bet{position:relative;display:flex;flex-direction:column;align-items:center;gap:8px;padding:14px 6px;border-radius:18px;background:#27254A;border:2px solid transparent;color:#B9B7DC;font-size:12.5px;font-weight:800;cursor:pointer;font-family:inherit;min-height:112px;}
   .bps-bet .bps-logo{width:48px;height:48px;border-radius:14px;font-size:20px;}
-  .bps-bet span.nm{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .bps-bet{min-width:0;overflow:hidden;}
+  .bps-bet span.nm{display:block;width:100%;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .bps-alert{display:flex;flex-direction:column;gap:10px;padding:14px 16px;border-radius:14px;background:#4A2230;border:1.5px solid #8A3A52;color:#FFD3DC;font-size:15px;line-height:1.4;margin-bottom:14px;}
+  .bps-alert button{align-self:flex-start;padding:11px 18px;border-radius:12px;border:none;background:#F59E0B;color:#1b1206;font-weight:800;font-size:14.5px;cursor:pointer;font-family:inherit;}
   .bps-chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin-bottom:12px;-webkit-overflow-scrolling:touch;}
   .bps-chips.wrap{flex-wrap:wrap;overflow:visible;}
   .bps-chip{flex-shrink:0;padding:11px 18px;border-radius:999px;border:1.5px solid #34325A;background:#232043;color:#C9C7E8;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;}
   .bps-chip.on{border-color:#F59E0B;background:#3A2F2F;color:#F59E0B;}
-  .bps-plans{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+  .bps-plans{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;}
   .bps-plan{display:flex;flex-direction:column;align-items:flex-start;gap:6px;text-align:left;padding:14px 12px;border-radius:16px;background:#27254A;border:2px solid #34325A;color:#fff;cursor:pointer;font-family:inherit;min-height:128px;}
   .bps-plan b{font-size:19px;font-weight:900;}
   .bps-plan .vl{display:flex;gap:5px;font-size:12.5px;color:#9C9AC0;line-height:1.3;}
@@ -9282,7 +9286,7 @@ function bpStopPsaPolling(){
   .bps-exam{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;padding:18px;background:#27254A;border:2px solid #34325A;border-radius:16px;color:#fff;font-size:16.5px;font-weight:700;cursor:pointer;font-family:inherit;text-align:left;}
   .bps-exam.on{border-color:#F59E0B;}
   .bps-dot{width:20px;height:20px;border-radius:50%;flex-shrink:0;display:inline-block;margin-right:12px;vertical-align:middle;}
-  .bps-qty{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+  .bps-qty{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;}
   .bps-ben-overlay{position:fixed;inset:0;z-index:9100;background:rgba(6,5,20,.7);display:flex;align-items:flex-end;justify-content:center;}
   .bps-ben-box{width:100%;max-width:560px;max-height:70vh;overflow:auto;background:#1E1B3A;color:#fff;border-radius:24px 24px 0 0;padding:20px 22px calc(22px + env(safe-area-inset-bottom,0px));}
   .bps-ben-item{display:flex;align-items:center;gap:10px;padding:14px 0;border-bottom:1px solid #2D2B52;}
@@ -9358,6 +9362,35 @@ const BP_TYPE_COLORS = {
 const bpN = (n)=> '₦' + Math.ceil(Number(n)||0).toLocaleString('en-NG');
 const bpPrice = (p)=> Math.ceil(bigisubPlanPrice(p));
 
+// A message that stays visible INSIDE the sheet (a toast alone is easy to miss).
+let billAlert = null; // { screen, msg, action: 'pin' | 'fund' | null }
+function bpAlertHtml(){
+  if(!billAlert || billAlert.screen !== billScreen) return '';
+  const btn = billAlert.action === 'pin' ? '<button id="bp-alert-pin">Set my PIN</button>' : billAlert.action === 'fund' ? '<button id="bp-alert-fund">Add money</button>' : '';
+  return `<div class="bps-alert" role="alert"><div>${escapeHtml(billAlert.msg)}</div>${btn}</div>`;
+}
+function bpFailSet(msg, action){ billAlert = { screen: billScreen, msg: String(msg||'Something went wrong.'), action: action || null }; toast(billAlert.msg); }
+function bpFailNow(msg, action){ bpFailSet(msg, action); billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain(); const b = document.querySelector('.bps-body'); if(b) b.scrollTop = 0; }
+function bindBpAlertEvents(){
+  const pin = document.getElementById('bp-alert-pin');
+  if(pin) pin.addEventListener('click', ()=>{ billAlert = null; route = 'settings'; render(); toast('Open Security → Bill Payments PIN to set your PIN.'); });
+  const fund = document.getElementById('bp-alert-fund');
+  if(fund) fund.addEventListener('click', ()=>{ billAlert = null; billScreen = 'topup'; refreshMain(); });
+}
+// Checks BEFORE anything is charged: PIN set? enough money? Uses fresh numbers from the server.
+async function bpPreflight(price){
+  billAlert = null;
+  try{
+    const r = await callBigisub('my_wallet_summary', {});
+    billWalletBalance = r.wallet_balance; billPinSet = !!r.bill_pin_set; billPinStatusLoaded = true;
+    if(r.bill_surcharge != null) billSurcharge = Number(r.bill_surcharge);
+  }catch(e){ if(!navigator.onLine){ bpFailNow(e.message); return false; } /* otherwise the server re-checks everything */ }
+  if(!billPinSet){ bpFailNow('Set your Bill Payments PIN first. You need a 4-digit PIN to confirm every purchase.', 'pin'); return false; }
+  if(Number(billWalletBalance||0) < Number(price)){
+    bpFailNow(`Insufficient balance. This purchase needs ${bpN(price)} but your Bill Wallet has ${bpN(billWalletBalance||0)}.`, 'fund'); return false;
+  }
+  return true;
+}
 function bpSheet(icon, title, sub, body, foot){
   return `<div class="bps-overlay"><div class="bps-sheet">
     <div class="bps-head">
@@ -9365,7 +9398,7 @@ function bpSheet(icon, title, sub, body, foot){
       <div class="bps-htext"><div class="bps-title">${title}</div><div class="bps-sub">${sub}</div></div>
       <button class="bps-x" id="bp-back" aria-label="Close">✕</button>
     </div>
-    <div class="bps-body">${body}</div>
+    <div class="bps-body">${bpAlertHtml()}${body}</div>
     ${foot ? `<div class="bps-foot">${foot}</div>` : ''}
   </div></div>`;
 }
@@ -9570,6 +9603,7 @@ function bindBillAirtimeEvents(){
     const amount = Number(billForm.amount||0);
     if(!billForm.phone.trim() || amount<BILL_MIN.airtime){ toast(`Enter a valid phone number and an amount of at least ₦${BILL_MIN.airtime}.`); return; }
     const price = billPreviewPrice('airtime', null, 1, amount);
+    if(!(await bpPreflight(price))) return;
     if(!confirm(`Buy ₦${amount} airtime for ${billForm.phone}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
@@ -9581,7 +9615,7 @@ function bindBillAirtimeEvents(){
       logAudit('bill_airtime', `Sold ₦${amount} ${bpNetName()} airtime to ${billForm.phone}`);
       const info = bpSuccessInfo(r, `${bpNetName()} Airtime`, 'Phone Number', billForm.phone.trim(), price, 'VTU');
       billPurchaseInFlight = false; billPurchaseStage = ''; bpShowSuccess(info); return;
-    }catch(e){ toast(e.message); }
+    }catch(e){ bpFailSet(e.message); }
     billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
   });
 }
@@ -9640,6 +9674,7 @@ function bindBillDataEvents(){
     const chosen = (billCache.dataPlans||[]).find(p=>String(p.id)===String(billForm.planId));
     if(!billForm.phone.trim() || !chosen){ toast('Enter a phone number and select a plan.'); return; }
     const price = bpPrice(chosen); const lbl = bigisubPlanLabel(chosen);
+    if(!(await bpPreflight(price))) return;
     if(!confirm(`Buy ${bpNetName()} ${lbl} for ${billForm.phone}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
@@ -9651,7 +9686,7 @@ function bindBillDataEvents(){
       logAudit('bill_data', `Sold ${lbl} data to ${billForm.phone}`);
       const info = bpSuccessInfo(r, `${bpNetName()} ${lbl}`, 'Phone Number', billForm.phone.trim(), price, 'Data');
       billPurchaseInFlight = false; billPurchaseStage = ''; bpShowSuccess(info); return;
-    }catch(e){ toast(e.message); }
+    }catch(e){ bpFailSet(e.message); }
     billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
   });
 }
@@ -9725,6 +9760,7 @@ function bindBillCableEvents(){
     if(!billForm.cableCustomerName){ await bpVerifyCable(); if(!billForm.cableCustomerName){ toast(billForm.cableVerifyError || 'Verify the card first.'); return; } }
     if(!billForm.phone.trim()){ toast('Enter a phone number.'); return; }
     const price = bpPrice(chosen);
+    if(!(await bpPreflight(price))) return;
     if(!confirm(`Pay ${bigisubPlanLabel(chosen)} for ${billForm.cableCustomerName}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
@@ -9736,7 +9772,7 @@ function bindBillCableEvents(){
       logAudit('bill_cable', `Paid ${bigisubPlanLabel(chosen)} for card ${billForm.cardNo} (${billForm.cableCustomerName})`);
       const info = bpSuccessInfo(r, `${bigisubCableName(billForm.cableType)} ${bigisubPlanLabel(chosen)}`, 'Smartcard', billForm.cardNo.trim(), price, 'Cable TV');
       billPurchaseInFlight = false; billPurchaseStage = ''; bpShowSuccess(info); return;
-    }catch(e){ toast(e.message); }
+    }catch(e){ bpFailSet(e.message); }
     billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
   });
 }
@@ -9810,6 +9846,7 @@ function bindBillElectricityEvents(){
     if(!billForm.elecCustomerName){ await bpVerifyMeter(); if(!billForm.elecCustomerName){ toast(billForm.elecVerifyError || 'Verify the meter first.'); return; } }
     if(!billForm.phone.trim() || amount<min){ toast(`Enter a phone number and an amount of at least ₦${min.toLocaleString('en-NG')}.`); return; }
     const price = billPreviewPrice('electricity', null, 1, amount);
+    if(!(await bpPreflight(price))) return;
     if(!confirm(`Buy ₦${amount} token for ${billForm.elecCustomerName}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
@@ -9821,7 +9858,7 @@ function bindBillElectricityEvents(){
       logAudit('bill_electricity', `Sold ₦${amount} token for meter ${billForm.meterNo} (${billForm.elecCustomerName})`);
       const info = bpSuccessInfo(r, `Electricity ${billForm.meterType}`, 'Meter Number', billForm.meterNo.trim(), price, 'Electricity');
       billPurchaseInFlight = false; billPurchaseStage = ''; bpShowSuccess(info); return;
-    }catch(e){ toast(e.message); }
+    }catch(e){ bpFailSet(e.message); }
     billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
   });
 }
@@ -9850,24 +9887,37 @@ function screenBillBetting(){
       <button class="bps-bet" data-biller="${escAttr(bpBetId(b))}"><span class="bps-logo" style="background:${bpBetColor(b.name)};color:#fff">${escapeHtml(bpBetInitials(b.name))}</span><span class="nm">${escapeHtml(b.name)}</span></button>`).join('') || '<div class="bps-empty">No platforms available right now.</div>'}</div>`;
   } else {
     body = bpSelected(BP_ICONS.trophy, chosen.name, `Min ${bpN(min)}`, 'bp-biller-change') +
-      `<div class="bps-label">Customer ID</div>${bpField('bp-customer-id', BP_ICONS.trophy, 'Enter your customer/user ID', billForm.customerId, 'inputmode="text"')}
+      `<div class="bps-label">Customer ID</div>${bpField('bp-customer-id', BP_ICONS.trophy, 'Enter your customer/user ID (auto-verifies)', billForm.customerId, 'inputmode="text" autocapitalize="off"')}
+       <div class="bps-status" id="bp-bet-status">${bpStatusHtml(billForm.betVerifying, billForm.betName, billForm.betVerifyError)}</div>
        ${bpBenLink('bet')}
        <div class="bps-label">Amount</div>
        <div class="bps-input"><span class="bps-ic">${BP_ICONS.naira}</span><input id="bp-amount" type="number" inputmode="numeric" value="${escAttr(billForm.amount)}" placeholder="${bpN(min)} minimum"></div>
        ${bpQuick([100,200,500,1000,2000,5000])}
        ${amount>=min ? bpTotal('Total Amount', `${chosen.name} wallet`, billPreviewPrice('betting', null, 1, amount)) : ''}
-       <p class="bps-muted" style="font-size:12.5px;margin-top:14px;">We confirm the account name right before funding.</p>`;
+`;
   }
   return bpSheet(BP_ICONS.trophy, 'Fund Betting', 'Fund your betting wallet', body, chosen ? bpCta('bp-betting-confirm','Fund Wallet') : '');
 }
+async function bpVerifyBet(){
+  if(billForm.betVerifying || !billForm.billerCode || billForm.customerId.trim().length < 4) return;
+  billForm.betVerifying = true; billForm.betVerifyError = ''; billForm.betName = ''; bpSetStatus('bp-bet-status', bpStatusHtml(true));
+  try{
+    const r = await callBigisub('betting_validate', { biller_code: billForm.billerCode, customer_id: billForm.customerId.trim() });
+    billForm.betName = r.customer_name || billForm.customerId.trim();
+  }catch(e){ billForm.betVerifyError = e.message || "Couldn't validate this customer ID."; }
+  billForm.betVerifying = false; bpSetStatus('bp-bet-status', bpStatusHtml(false, billForm.betName, billForm.betVerifyError));
+}
 function bindBillBettingEvents(){
   bpBackBind(); bpEnsure('bettingBillers', bpLoadBettingBillers);
-  document.querySelectorAll('[data-biller]').forEach(b=>b.addEventListener('click', ()=>{ billForm.billerCode=b.dataset.biller; refreshMain(); }));
-  const ch = document.getElementById('bp-biller-change'); if(ch) ch.addEventListener('click', ()=>{ billForm.billerCode=''; refreshMain(); });
-  const cid = document.getElementById('bp-customer-id'); if(cid) cid.addEventListener('input', e=>{ billForm.customerId=e.target.value; });
+  document.querySelectorAll('[data-biller]').forEach(b=>b.addEventListener('click', ()=>{ billForm.billerCode=b.dataset.biller; billForm.betName=''; billForm.betVerifyError=''; refreshMain(); }));
+  const ch = document.getElementById('bp-biller-change'); if(ch) ch.addEventListener('click', ()=>{ billForm.billerCode=''; billForm.betName=''; billForm.betVerifyError=''; refreshMain(); });
+  const cid = document.getElementById('bp-customer-id');
+  if(cid) cid.addEventListener('input', e=>{ billForm.customerId=e.target.value; billForm.betName=''; billForm.betVerifyError=''; bpSetStatus('bp-bet-status',''); });
+  bpAutoVerify('bp-customer-id', ()=>billForm.customerId.trim().length>=4, bpVerifyBet);
+  if(cid && billForm.customerId.trim().length>=4 && !billForm.betName && !billForm.betVerifying && !billForm.betVerifyError) bpVerifyBet();
   const amt = document.getElementById('bp-amount'); if(amt){ amt.addEventListener('input', e=>{ billForm.amount=e.target.value; }); amt.addEventListener('change', ()=>refreshMain()); }
   bpBindQuick(()=>refreshMain());
-  bpBindBen('bet','bp-customer-id');
+  bpBindBen('bet','bp-customer-id', ()=>bpVerifyBet());
   const btn = document.getElementById('bp-betting-confirm');
   if(btn) btn.addEventListener('click', async ()=>{
     if(billPurchaseInFlight) return;
@@ -9875,12 +9925,13 @@ function bindBillBettingEvents(){
     const min = chosen ? bpMinAmt(chosen.min_amount) : BILL_MIN.betting;
     const amount = Number(billForm.amount||0);
     if(!billForm.billerCode || !billForm.customerId.trim() || amount<min){ toast(`Select a platform, enter the customer ID, and an amount of at least ₦${min}.`); return; }
+    const price = billPreviewPrice('betting', null, 1, amount);
+    if(!(await bpPreflight(price))) return;
     billPurchaseInFlight = true; billPurchaseStage = 'Validating…'; refreshMain();
     let validation;
     try{ validation = await callBigisub('betting_validate', { biller_code: billForm.billerCode, customer_id: billForm.customerId.trim() }); }
-    catch(e){ toast(e.message); billPurchaseInFlight=false; billPurchaseStage=''; refreshMain(); return; }
-    const bettingName = bigisubNameFromResponse(validation) || billForm.customerId;
-    const price = billPreviewPrice('betting', null, 1, amount);
+    catch(e){ bpFailNow(e.message); return; }
+    const bettingName = validation.customer_name || bigisubNameFromResponse(validation) || billForm.customerId;
     if(!confirm(`Fund ${bettingName} with ₦${amount}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)){ billPurchaseInFlight=false; billPurchaseStage=''; refreshMain(); return; }
     const pin = billPromptPin();
     if(pin===null){ billPurchaseInFlight=false; billPurchaseStage=''; refreshMain(); return; }
@@ -9893,7 +9944,7 @@ function bindBillBettingEvents(){
       logAudit('bill_betting', `Funded ${billForm.customerId} (${bettingName}) with ₦${amount}`);
       const info = bpSuccessInfo(r, `${chosen ? chosen.name : 'Betting'} Wallet`, 'Customer ID', billForm.customerId.trim(), price, 'Betting');
       billPurchaseInFlight = false; billPurchaseStage = ''; bpShowSuccess(info); return;
-    }catch(e){ toast(e.message + ' — if this was a timeout on the validation reference, please try again.'); }
+    }catch(e){ bpFailSet(e.message); }
     billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
   });
 }
@@ -9942,6 +9993,7 @@ function bindBillResultCheckerEvents(){
     const qtyNum = [1,2,5].includes(Number(billForm.qty)) ? Number(billForm.qty) : 1;
     if(!chosen){ toast('Select an exam.'); return; }
     const price = billPreviewPrice('result_checker', bpExamKey(chosen), qtyNum, bpPrice(chosen)*qtyNum);
+    if(!(await bpPreflight(price))) return;
     if(!confirm(`Buy ${qtyNum} × ${chosen.name||bpExamKey(chosen)} PIN(s)? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
@@ -9952,7 +10004,7 @@ function bindBillResultCheckerEvents(){
       logAudit('bill_result_checker', `Bought ${qtyNum} × ${chosen.name||bpExamKey(chosen)} PIN(s)`);
       const info = bpSuccessInfo(r, `${qtyNum} × ${chosen.name||bpExamKey(chosen)}`, 'Quantity', `${qtyNum} pin${qtyNum>1?'s':''}`, price, 'Result Checker');
       billPurchaseInFlight = false; billPurchaseStage = ''; bpShowSuccess(info); return;
-    }catch(e){ toast(e.message); }
+    }catch(e){ bpFailSet(e.message); }
     billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
   });
 }
@@ -10035,6 +10087,7 @@ function bindBillIspEvents(){
     } else if(!billForm.spectranetNumber.trim()){ toast('Enter the Spectranet device number.'); return; }
     const q = isSmile ? 1 : Math.max(1, Number(billForm.qty||1));
     const price = billPreviewPrice(isSmile?'isp_smile':'isp_spectranet', chosen.id, q, bpPrice(chosen)*q);
+    if(!(await bpPreflight(price))) return;
     if(!confirm(`Buy ${bigisubPlanLabel(chosen)}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
     const pin = billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
@@ -10048,7 +10101,7 @@ function bindBillIspEvents(){
       logAudit('bill_isp', `Bought ${bigisubPlanLabel(chosen)} (${isSmile?'Smile':'Spectranet'})`);
       const info = bpSuccessInfo(r, `${isSmile?'Smile':'Spectranet'} ${bigisubPlanLabel(chosen)}`, isSmile?'Account ID':'Device Number', (isSmile?billForm.accountId:billForm.spectranetNumber).trim(), price, 'Internet');
       billPurchaseInFlight = false; billPurchaseStage = ''; bpShowSuccess(info); return;
-    }catch(e){ toast(e.message); }
+    }catch(e){ bpFailSet(e.message); }
     billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain();
   });
 }

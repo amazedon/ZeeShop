@@ -293,7 +293,7 @@ Deno.serve(async (req: Request) => {
         fpe_account_number: biz.fpe_account_number || null, fpe_bank_name: biz.fpe_bank_name || null, fpe_status: biz.fpe_status || null,
         upgrade_fee: PSA_UPGRADE_FEE,
         // Added to electricity amounts so the screen can show ONE final total (never labelled as a fee).
-        bill_surcharge: (await loadPricing(admin)).utility_flat_fee,
+        bill_fees: (await loadPricing(admin)).fees,
         bill_pin_set: !!biz.bill_payments_pin_hash,
       }, 200);
     }
@@ -316,9 +316,50 @@ Deno.serve(async (req: Request) => {
     };
     if (action === "data_plans") return await fetchListAction(EP.DATA_PLANS, "plans", "plans", "data");
     if (action === "cable_plans") return await fetchListAction(EP.CABLE_PLANS, "plans", "plans", "cable");
-    if (action === "electricity_providers") return await fetchListAction(EP.ELECTRICITY_PROVIDERS, "providers", "providers");
+    if (action === "electricity_providers") {
+      try {
+        const data = await bigisub("GET", EP.ELECTRICITY_PROVIDERS);
+        const list = normalizeList(data, "providers");
+        // Safety net: Aba, Yola and Benin must always be offered. Added only if
+        // Bigisub's own list doesn't already contain one (matched by name/code).
+        // The codes follow Bigisub's pattern ("ikeja-electric"); a wrong one fails
+        // safely at the meter-verification step, before any money moves.
+        const hay = list.map((p: any) => `${p?.name} ${p?.code} ${p?.id} ${p?.company}`.toLowerCase());
+        const extras = [
+          { test: /\baba\b|aba-electric/, code: "aba-electric", name: "Aba Electricity - AED" },
+          { test: /yola|yedc/, code: "yola-electric", name: "Yola Electricity - YEDC" },
+          { test: /benin|bedc/, code: "benin-electric", name: "Benin Electricity - BEDC" },
+        ];
+        for (const e of extras) {
+          if (!hay.some((h: string) => e.test.test(h))) list.push({ code: e.code, name: e.name, min_amount: MIN_AMOUNT.electricity, service_charge: 0, service_charge_type: "fixed" });
+        }
+        return json({ providers: list }, 200);
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : "Could not reach Bigisub." }, 502);
+      }
+    }
     if (action === "result_checker_prices") return await fetchListAction(EP.RESULT_CHECKER_PRICES, "prices", "prices", "result_checker");
-    if (action === "betting_billers") return await fetchListAction(EP.BETTING_BILLERS, "billers", "billers");
+    if (action === "betting_billers") {
+      try {
+        const data = await bigisub("GET", EP.BETTING_BILLERS);
+        const list = normalizeList(data, "billers");
+        // Logos: ones uploaded in Super Admin win; otherwise any https image
+        // link Bigisub itself includes with the platform.
+        const { data: logoRows } = await admin.from("betting_logos").select("biller_code, image_url");
+        const managed: Record<string, string> = {};
+        for (const r of (logoRows || []) as any[]) managed[String(r.biller_code).toLowerCase()] = r.image_url;
+        const apiLogo = (b: any) => {
+          for (const k of ["logo_url", "logo", "image_url", "image", "icon_url", "icon", "thumbnail", "avatar"]) {
+            const v = b?.[k]; if (typeof v === "string" && /^https:\/\//i.test(v)) return v;
+          }
+          return null;
+        };
+        const withLogos = list.map((b: any) => ({ ...b, logo_url: managed[String(b?.code ?? b?.biller_code ?? b?.id ?? "").toLowerCase()] || apiLogo(b) }));
+        return json({ billers: withLogos }, 200);
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : "Could not reach Bigisub." }, 502);
+      }
+    }
     if (action === "isp_smile_plans") return await fetchListAction(EP.ISP_SMILE_PLANS, "plans", "plans", "isp_smile");
     if (action === "isp_spectranet_plans") return await fetchListAction(EP.ISP_SPECTRANET_PLANS, "plans", "plans", "isp_spectranet");
 
@@ -780,42 +821,42 @@ async function lookupPlanAmount(path: string, preferredKey: string, matchValue: 
   }
 }
 
-// Platform pricing — the ONLY margin the platform earns (no business-side
-// markup or overrides). Managed from the super admin's Platform Pricing tab
-// (platform_settings row id=1):
-//   - Data: percentage markup on Bigisub's cost (data_markup_percent).
-//   - Cable TV, Electricity, ISP (Smile, Spectranet), Result Checker:
-//     a flat naira fee added silently (utility_flat_fee, default ₦50). The
-//     person only ever sees ONE final total — never the fee itself.
-//   - Airtime and Betting: face value, no markup and no fee.
-type PlatformPricing = {
-  data_markup_percent: number;
-  utility_flat_fee: number;
-};
+// Platform pricing — the ONLY margin the platform earns. Each VTU service has
+// its own switch, managed from Super Admin → Platform Pricing (table
+// vtu_service_fees): fee ON/OFF, a flat ₦ amount or a percentage, and the value.
+// The person only ever sees ONE final price — never a fee line.
+type FeeRule = { enabled: boolean; fee_type: "flat" | "percent"; fee_value: number };
+type PlatformPricing = { fees: Record<string, FeeRule> };
+const VTU_SERVICES = ["airtime", "data", "cable", "electricity", "betting", "result_checker", "isp_smile", "isp_spectranet"];
 
 async function loadPricing(admin: ReturnType<typeof createClient>): Promise<PlatformPricing> {
-  const { data } = await admin.from("platform_settings")
-    .select("data_markup_percent, utility_flat_fee").eq("id", 1).maybeSingle();
-  const flat = data?.utility_flat_fee;
-  return {
-    data_markup_percent: Number(data?.data_markup_percent || 0),
-    // Missing column/row → the agreed default of ₦50, not zero.
-    utility_flat_fee: flat === undefined || flat === null ? 50 : Number(flat),
-  };
+  const fees: Record<string, FeeRule> = {};
+  const { data: rows, error } = await admin.from("vtu_service_fees").select("service, enabled, fee_type, fee_value");
+  if (!error && Array.isArray(rows) && rows.length > 0) {
+    for (const r of rows as any[]) fees[r.service] = { enabled: !!r.enabled, fee_type: r.fee_type === "percent" ? "percent" : "flat", fee_value: Number(r.fee_value) || 0 };
+  } else {
+    // Table not created yet: fall back to the earlier two settings so nothing breaks.
+    const { data } = await admin.from("platform_settings").select("data_markup_percent, utility_flat_fee").eq("id", 1).maybeSingle();
+    const flat = data?.utility_flat_fee === undefined || data?.utility_flat_fee === null ? 50 : Number(data.utility_flat_fee);
+    const pct = Number(data?.data_markup_percent || 0);
+    fees.data = { enabled: pct > 0, fee_type: "percent", fee_value: pct };
+    for (const sv of ["cable", "electricity", "result_checker", "isp_smile", "isp_spectranet"]) fees[sv] = { enabled: flat > 0, fee_type: "flat", fee_value: flat };
+  }
+  return { fees };
 }
 
-// `quantity` matters for Result Checker and Spectranet, where the flat amount is per unit
-// (so the per-unit display_price × quantity always equals the real charge).
 // Every price the person sees or pays is a WHOLE naira, rounded UP (never
 // ₦26.75). The same function builds the shown price and the charged price,
 // so they can never differ.
 const wholeNaira = (n: number) => Math.ceil(Math.round(n * 100) / 100);
+// `quantity` matters for Result Checker and Spectranet, where a flat amount is
+// per unit (so the per-unit display_price × quantity always equals the real charge).
 function computeSalePrice(pricingService: string, costPrice: number, pricing: PlatformPricing, quantity = 1): number {
-  if (pricingService === "airtime" || pricingService === "betting") return wholeNaira(costPrice);
-  if (pricingService === "data") return wholeNaira(costPrice * (1 + (pricing.data_markup_percent || 0) / 100));
-  // cable, electricity, isp_smile, isp_spectranet, result_checker
+  const f = pricing.fees[pricingService];
+  if (!f || !f.enabled || !(f.fee_value > 0)) return wholeNaira(costPrice);
+  if (f.fee_type === "percent") return wholeNaira(costPrice * (1 + f.fee_value / 100));
   const units = (pricingService === "result_checker" || pricingService === "isp_spectranet") ? Math.max(1, quantity) : 1;
-  return wholeNaira(costPrice + (pricing.utility_flat_fee || 0) * units);
+  return wholeNaira(costPrice + f.fee_value * units);
 }
 
 // Adds `display_price` (the single final total the person pays) to each item

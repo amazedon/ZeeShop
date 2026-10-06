@@ -3,10 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no">
+<meta name="color-scheme" content="only light">
 <title>ZeeShop — Your Shop, In Your Pocket</title>
 <style>
 :root{
-  color-scheme: light;
+  color-scheme: only light;
   --ink:#12213B;
   --ink-text:#12213B;
   --ink-2:#1B2F52;
@@ -3421,6 +3422,14 @@ function screenDashboard(){
 (function(){
   const st = document.createElement('style');
   st.textContent = `
+    /* Info / warning boxes: explicit colours, so the text is readable whatever the phone's theme does */
+    .zs-note{border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.45;color:#22304A !important;}
+    .zs-note b,.zs-note div,.zs-note span{color:inherit !important;}
+    .zs-note-amber{background:#FFF1CF;border:1px solid #E8C877;color:#4A3200 !important;}
+    .zs-note-info{background:#E8EEF7;border:1px solid #CBD6E8;color:#1E2A3E !important;}
+    .bps-logo.img{background:#10101a;padding:6px;}
+    .bps-logo img{width:100%;height:100%;object-fit:contain;display:block;}
+    .bps-sel .si img{width:100%;height:100%;object-fit:contain;border-radius:10px;}
     .promo-slider{position:relative;overflow:hidden;border-radius:16px;margin:4px 0 16px;background:#EEF1F6;aspect-ratio:16/9;box-shadow:0 2px 10px rgba(18,33,59,.08);touch-action:pan-y;}
     .promo-track{display:flex;height:100%;transition:transform .45s ease;}
     .promo-slide{flex:0 0 100%;height:100%;}
@@ -5452,7 +5461,6 @@ function screenMore(){
   ].filter(i=>i.show);
   return `
     <h2 class="screen-title">${t('more_title')}</h2>
-    ${pushPromptCard()}
     ${items.map(i=>`
       <div class="list-row" data-goto="${i.id}" style="cursor:pointer;">
         <div class="thumb">${i.ic}</div><div class="info"><div class="t1">${i.label}</div></div>
@@ -5472,8 +5480,6 @@ function screenMore(){
   `;
 }
 function bindMoreEvents(){
-  bindPushCardEvents();
-  if(pushDeviceState === null) ensurePushOn();
   const shareAppBtn = document.getElementById('do-share-app');
   if(shareAppBtn) shareAppBtn.addEventListener('click', async ()=>{
     const shareData = {
@@ -6900,6 +6906,7 @@ function screenSettings(){
   const b = business();
   return `
     ${subHeader("Settings")}
+    ${pushPromptCard()}
 
     <div class="section-head"><h3>Appearance</h3></div>
     <div class="card">
@@ -6998,6 +7005,8 @@ function screenSettings(){
   `;
 }
 function bindSettingsEvents(){
+  bindPushCardEvents();
+  if(pushDeviceState === null) ensurePushOn();
   bindBizTypeSelect('set-biztype');
   if(isMaster() && !billPinStatusLoaded) bpLoadPinStatus();
   const pinInput = document.getElementById('bp-pin-input');
@@ -8740,9 +8749,18 @@ async function callBigisub(action, params){
 // EXCEPT electricity, where the person types the amount: the server's flat
 // amount (billSurcharge, from the wallet summary) is folded into the single
 // total shown, never labelled or itemised.
-let billSurcharge = 0;
+let billFees = {};   // per-service fee rules from the server (set by Super Admin)
+function billFeeFor(service, cost, qty){
+  const f = billFees[service];
+  if(!f || !f.enabled || !(Number(f.fee_value) > 0)) return Math.ceil(cost);
+  if(f.fee_type === 'percent') return Math.ceil(cost * (1 + Number(f.fee_value)/100));
+  const units = (service === 'result_checker' || service === 'isp_spectranet') ? Math.max(1, qty||1) : 1;
+  return Math.ceil(cost + Number(f.fee_value) * units);
+}
+// Typed-amount services (airtime, electricity, betting) are priced here; plan lists arrive priced by the server.
 function billPreviewPrice(pricingService, planKey, quantity, costPrice){
-  return pricingService === 'electricity' && costPrice > 0 ? costPrice + billSurcharge : costPrice;
+  return (pricingService === 'airtime' || pricingService === 'electricity' || pricingService === 'betting') && costPrice > 0
+    ? billFeeFor(pricingService, costPrice, 1) : costPrice;
 }
 function billCustomerPrice(costPrice){ return costPrice; }
 // Smallest amount each typed-amount service accepts.
@@ -8891,7 +8909,7 @@ async function bpLoadWallet(){
     billWalletBalance = r.wallet_balance; billCurrency = r.currency || 'NGN';
     billPinSet = !!r.bill_pin_set; billPinStatusLoaded = true;
     if(r.upgrade_fee != null) billUpgradeFee = Number(r.upgrade_fee);
-    if(r.bill_surcharge != null) billSurcharge = Number(r.bill_surcharge);
+    if(r.bill_fees) billFees = r.bill_fees;
     if(r.psa_account_number){ billPsaAccountNumber = r.psa_account_number; billPsaBankName = r.psa_bank_name; }
     if(r.fpe_account_number){ billFpeAccountNumber = r.fpe_account_number; billFpeBankName = r.fpe_bank_name; }
   }catch(e){ billWalletError = e.message || 'Something went wrong.'; }
@@ -9014,14 +9032,14 @@ function bpFundCardHtml(){
   }
   return `
     <div style="text-align:center;padding:12px 0;">
-      <div style="background:#FFF7E6;border:1px solid #F5D9A0;border-radius:10px;padding:10px 12px;text-align:left;font-size:12px;margin-bottom:10px;">
+      <div class="zs-note zs-note-amber" style="text-align:left;margin-bottom:10px;">
         <b>Check the account number every time.</b> Before you send money, come back to this screen and confirm that the account number is still the same.
       </div>
       <div style="font-size:22px;font-weight:700;letter-spacing:1px;margin:6px 0;">${escapeHtml(billPsaAccountNumber)}</div>
       <div class="t1">${escapeHtml(billPsaBankName||'')}</div>
       <button class="btn btn-outline btn-sm" id="bp-psa-copy" style="margin-top:10px;">Copy Account Number</button>
       <br><button class="btn btn-outline btn-sm" id="bp-psa-sync" style="margin-top:10px;">${billPsaSyncing?'Checking…':'↻ Refresh Balance'}</button>
-      <div style="background:#F3F6FA;border-radius:10px;padding:10px 12px;text-align:left;font-size:12px;margin-top:12px;">
+      <div class="zs-note zs-note-info" style="text-align:left;margin-top:12px;">
         <b>Good to know</b>
         <div style="margin-top:4px;">• Transfer charges will be applied to your payment.</div>
         <div>• Your wallet is credited with the amount received after charges.</div>
@@ -9069,7 +9087,7 @@ function bpUpgradeCardHtml(){
   return `
     <h3 style="margin:0 0 6px;font-size:16px;">Upgrade to your own permanent account</h3>
     <p class="subtle">Get a dedicated account number that's yours for good. Transfer to it anytime, from any bank, and your wallet is credited automatically. Fees are usually lower: 1% per transfer, or a flat ₦12 under ₦1,000.</p>
-    <div style="background:#F3F6FA;border-radius:10px;padding:10px 12px;font-size:12px;margin:8px 0;">
+    <div class="zs-note zs-note-info" style="margin:8px 0;">
       <div>• Needs your BVN or NIN. We never save it.</div>
       <div>• One-time setup fee: ${fmtMoney(billUpgradeFee)}, taken from your wallet and refunded if the bank can't verify you.</div>
     </div>
@@ -9383,7 +9401,7 @@ async function bpPreflight(price){
   try{
     const r = await callBigisub('my_wallet_summary', {});
     billWalletBalance = r.wallet_balance; billPinSet = !!r.bill_pin_set; billPinStatusLoaded = true;
-    if(r.bill_surcharge != null) billSurcharge = Number(r.bill_surcharge);
+    if(r.bill_fees) billFees = r.bill_fees;
   }catch(e){ if(!navigator.onLine){ bpFailNow(e.message); return false; } /* otherwise the server re-checks everything */ }
   if(!billPinSet){ bpFailNow('Set your Bill Payments PIN first. You need a 4-digit PIN to confirm every purchase.', 'pin'); return false; }
   if(Number(billWalletBalance||0) < Number(price)){
@@ -9874,6 +9892,19 @@ async function bpLoadBettingBillers(){
 }
 const bpBetId = (b)=> b.id || b.code || b.biller_code;
 function bpBetColor(name){ let h=0; for(const c of String(name)) h=(h*31+c.charCodeAt(0))%360; return `linear-gradient(135deg,hsl(${h},62%,46%),hsl(${(h+30)%360},65%,34%))`; }
+function bpBetLogoUrl(b){ const u = b && b.logo_url; return (typeof u === 'string' && /^https:\/\//i.test(u)) ? u : ''; }
+function bpBetLogoHtml(b){
+  const url = bpBetLogoUrl(b);
+  return url
+    ? `<span class="bps-logo img"><img src="${escAttr(url)}" alt="" loading="lazy" referrerpolicy="no-referrer" data-fb="${escAttr(bpBetInitials(b.name))}"></span>`
+    : `<span class="bps-logo" style="background:${bpBetColor(b.name)};color:#fff">${escapeHtml(bpBetInitials(b.name))}</span>`;
+}
+// A logo that fails to load falls back to the platform's initials instead of a broken picture.
+function bpBetLogoFallbacks(){
+  document.querySelectorAll('.bps-logo img[data-fb]').forEach(img=>img.addEventListener('error', ()=>{
+    const box = img.parentElement; box.classList.remove('img'); box.textContent = img.dataset.fb; box.style.cssText = 'background:#3A3768;color:#fff';
+  }));
+}
 function bpBetInitials(name){ const w = String(name).replace(/[^A-Za-z0-9 ]/g,' ').trim().split(/\s+/); return (w.length>1 ? w[0][0]+w[1][0] : String(name).slice(0,2)).toUpperCase(); }
 function screenBillBetting(){
   const list = billCache.bettingBillers || [];
@@ -9884,9 +9915,9 @@ function screenBillBetting(){
   if(billLoading && !list.length) body = '<div class="bps-loading">Loading…</div>';
   else if(!chosen){
     body = `<div class="bps-label">Select platform</div><div class="bps-grid3">${list.map(b=>`
-      <button class="bps-bet" data-biller="${escAttr(bpBetId(b))}"><span class="bps-logo" style="background:${bpBetColor(b.name)};color:#fff">${escapeHtml(bpBetInitials(b.name))}</span><span class="nm">${escapeHtml(b.name)}</span></button>`).join('') || '<div class="bps-empty">No platforms available right now.</div>'}</div>`;
+      <button class="bps-bet" data-biller="${escAttr(bpBetId(b))}">${bpBetLogoHtml(b)}<span class="nm">${escapeHtml(b.name)}</span></button>`).join('') || '<div class="bps-empty">No platforms available right now.</div>'}</div>`;
   } else {
-    body = bpSelected(BP_ICONS.trophy, chosen.name, `Min ${bpN(min)}`, 'bp-biller-change') +
+    body = bpSelected(bpBetLogoUrl(chosen) ? `<img src="${escAttr(bpBetLogoUrl(chosen))}" alt="" referrerpolicy="no-referrer">` : BP_ICONS.trophy, chosen.name, `Min ${bpN(min)}`, 'bp-biller-change') +
       `<div class="bps-label">Customer ID</div>${bpField('bp-customer-id', BP_ICONS.trophy, 'Enter your customer/user ID (auto-verifies)', billForm.customerId, 'inputmode="text" autocapitalize="off"')}
        <div class="bps-status" id="bp-bet-status">${bpStatusHtml(billForm.betVerifying, billForm.betName, billForm.betVerifyError)}</div>
        ${bpBenLink('bet')}
@@ -9908,7 +9939,7 @@ async function bpVerifyBet(){
   billForm.betVerifying = false; bpSetStatus('bp-bet-status', bpStatusHtml(false, billForm.betName, billForm.betVerifyError));
 }
 function bindBillBettingEvents(){
-  bpBackBind(); bpEnsure('bettingBillers', bpLoadBettingBillers);
+  bpBackBind(); bpEnsure('bettingBillers', bpLoadBettingBillers); bpBetLogoFallbacks();
   document.querySelectorAll('[data-biller]').forEach(b=>b.addEventListener('click', ()=>{ billForm.billerCode=b.dataset.biller; billForm.betName=''; billForm.betVerifyError=''; refreshMain(); }));
   const ch = document.getElementById('bp-biller-change'); if(ch) ch.addEventListener('click', ()=>{ billForm.billerCode=''; billForm.betName=''; billForm.betVerifyError=''; refreshMain(); });
   const cid = document.getElementById('bp-customer-id');

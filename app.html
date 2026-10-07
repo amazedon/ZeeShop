@@ -4437,7 +4437,7 @@ function openReceiptSheet(saleId){
     <p class="subtle" style="margin-bottom:14px;">Share opens your phone's share sheet with the actual receipt image attached — pick WhatsApp, Email, or any app there. Printing needs a Bluetooth thermal printer and works on Android only (not iPhone).</p>
   `);
   const canvas = document.getElementById('receipt-canvas');
-  drawReceiptToCanvas(canvas, s, shop, cust, seller);
+  drawReceiptToCanvas(canvas, s, shop, cust, seller).catch(e=>console.warn('Receipt draw failed:', e));
 
   const markSent = (type)=>{
     s.receiptSent = true;
@@ -7973,7 +7973,7 @@ function openShareHistoryItemModal(idx){
     </div>
   `);
   const canvas = document.getElementById('hist-item-canvas');
-  drawHistoryItemToCanvas(canvas, e);
+  drawHistoryItemToCanvas(canvas, e).catch(err=>console.warn('Receipt draw failed:', err));
   document.getElementById('share-hist-item-img').addEventListener('click', ()=>{
     canvas.toBlob(async blob=>{
       if(!blob){ toast('Could not generate the image.'); return; }
@@ -8312,7 +8312,7 @@ function openLodgingReceiptSheet(bookingId){
     <p class="subtle" style="margin-bottom:14px;">Share opens your phone's share sheet with the receipt image attached — pick WhatsApp, Email, or any app there. ID, next-of-kin and plate number are kept internal and are not shown on this receipt.</p>
   `);
   const canvas = document.getElementById('lodging-receipt-canvas');
-  drawLodgingReceiptToCanvas(canvas, b, r, shop, seller);
+  drawLodgingReceiptToCanvas(canvas, b, r, shop, seller).catch(e=>console.warn('Receipt draw failed:', e));
   document.getElementById('share-lodging-receipt').addEventListener('click', ()=>{
     canvas.toBlob(async blob=>{
       if(!blob){ toast('Could not generate the receipt image.'); return; }
@@ -8612,9 +8612,6 @@ let billTileNavLock = false; // brief guard against rapid double-taps on a VTU t
 // by billPurchaseInFlight/billPurchaseStage rather than baked in once at
 // click time — see the comment above billPurchaseInFlight for why that
 // distinction actually matters here.
-function billPurchaseBtnHtml(id, idleLabel){
-  return `<button class="btn btn-primary" id="${id}" ${billPurchaseInFlight?'disabled':''}>${billPurchaseInFlight?(billPurchaseStage||'Processing…'):idleLabel}</button>`;
-}
 let billPinSet = false;
 let billPinStatusLoaded = false; // Settings loads this independently of ever having opened Bill Payments
 let billPinDraft = ''; // in-progress PIN entry in the settings field, cleared after save
@@ -9204,6 +9201,7 @@ async function bpSyncPsaWallet(manual){
     const before = Number(billWalletBalance || 0);
     const r = await callBigisub('sync_psa_wallet', {});
     billWalletBalance = r.wallet_balance;
+    if(r.warning && !window.__psaWarned){ window.__psaWarned = true; toast(r.warning); }
     const added = Number(r.wallet_balance || 0) - before;
     if(added > 0){
       logAudit('bill_wallet_topup', `Funded bill wallet with ${fmtMoney(added)}`);
@@ -10287,7 +10285,7 @@ function openBillTxReceiptModal(txId){
     <p class="subtle">Share opens your phone's share sheet with the actual receipt image attached — pick WhatsApp, Email, or any app there.</p>
   `);
   const canvas = document.getElementById('bill-receipt-canvas');
-  drawBillReceiptToCanvas(canvas, tx);
+  drawBillReceiptToCanvas(canvas, tx).catch(e=>console.warn('Receipt draw failed:', e));
   document.getElementById('share-bill-receipt-img').addEventListener('click', ()=>{
     canvas.toBlob(async blob=>{
       if(!blob){ toast('Could not generate the receipt image.'); return; }

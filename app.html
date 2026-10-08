@@ -8583,7 +8583,20 @@ function openCheckInModal(roomId){
 // loads, before anything ever renders. Computed lazily inside
 // callBigisub() below instead, where it's only ever evaluated well after
 // the whole script — including that later block — has already run.
-const BIGISUB_NETWORKS = [ {id:1,name:'MTN'}, {id:2,name:'GLO'}, {id:3,name:'9MOBILE'}, {id:4,name:'AIRTEL'} ];
+// Bigisub's documented network ids: 1 MTN, 2 GLO, 3 AIRTEL, 4 9MOBILE.
+// (This list previously had 3 and 4 swapped, which could send an Airtel purchase as 9mobile.)
+const BIGISUB_NETWORKS = [ {id:1,name:'MTN'}, {id:2,name:'GLO'}, {id:3,name:'AIRTEL'}, {id:4,name:'9MOBILE'} ];
+// The data-plan list carries each plan's network id AND name, so use it to double-check the ids above
+// and correct them if Bigisub's live ids ever differ from its documentation.
+function bpSyncNetworkIds(plans){
+  const norm = x=>String(x||'').toUpperCase().replace(/[^A-Z0-9]/g,'').replace('ETISALAT','9MOBILE');
+  (plans||[]).forEach(p=>{
+    const nm = norm(p && (p.network_name || p.networkName)); const id = Number(p && p.network);
+    if(!nm || !Number.isFinite(id)) return;
+    const hit = BIGISUB_NETWORKS.find(n=>norm(n.name)===nm);
+    if(hit && hit.id !== id){ console.warn('Network id corrected from live data:', hit.name, hit.id, '→', id); hit.id = id; }
+  });
+}
 // ^ Per Bigisub's docs at time of writing — double-check against your
 // Bigisub dashboard if a purchase comes back "wrong network".
 
@@ -9641,7 +9654,7 @@ async function bpLoadDataPlans(){
   if(billCache.dataPlans){ refreshMain(); return; }
   if(billLoading) return;
   billLoading = true; refreshMain();
-  try{ billCache.dataPlans = ((await callBigisub('data_plans', {})).plans || []).filter(p=>!bigisubPlanDisabled(p)); }
+  try{ const all = (await callBigisub('data_plans', {})).plans || []; bpSyncNetworkIds(all); billCache.dataPlans = all.filter(p=>!bigisubPlanDisabled(p)); }
   catch(e){ toast(e.message); billCache.dataPlans = []; }
   billLoading = false; refreshMain();
 }

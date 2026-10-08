@@ -472,6 +472,15 @@
   </main>
 </div>
 
+<div id="check-failed-screen" class="center-screen hidden">
+  <div class="auth-card">
+    <div class="brand" style="margin-bottom:4px;color:var(--ink);"><div class="brand-mark">Z</div>ZeeShop Super Admin</div>
+    <p class="subtle">We couldn't check your admin access just now. You are still signed in.</p>
+    <div class="err" id="check-failed-msg">Could not reach the server.</div>
+    <button class="btn btn-primary" id="check-retry-btn" style="margin-top:12px;">Try again</button>
+  </div>
+</div>
+
 <div id="unauthorized-screen" class="center-screen hidden">
   <div class="auth-card unauthorized">
     <div class="brand" style="margin-bottom:12px;color:var(--ink);justify-content:center;"><div class="brand-mark">Z</div>ZeeShop Super Admin</div>
@@ -483,7 +492,12 @@
 <script>
   const SUPABASE_URL = 'https://beypnkzrgqrkjttsxlju.supabase.co';
   const SUPABASE_ANON_KEY = 'sb_publishable_m_MrYeKVF4HgUG5i5v_THg_LPbvmUK5';
-  const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  // The shop app and this page live on the same domain, so by default they would SHARE one
+  // login in the browser: signing out here would sign the shop owner out of the app (and
+  // vice versa). The admin page therefore keeps its own, separate session.
+  const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: { storageKey: 'zeeshop-superadmin-auth', persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+  });
 
   const loginScreen = document.getElementById('login-screen');
   const dashScreen = document.getElementById('dashboard-screen');
@@ -519,8 +533,13 @@
       },
       body: JSON.stringify({ action, ...params })
     });
-    const result = await res.json();
-    if(!res.ok || result.error) throw new Error(result.error || 'Request failed.');
+    let result = null;
+    try{ result = await res.json(); }catch(_e){ /* non-JSON reply: handled below */ }
+    if(!res.ok || !result || result.error){
+      const err = new Error((result && result.error) || (res.status >= 500 ? 'The server had a problem. Please try again.' : 'Request failed.'));
+      err.status = res.status;
+      throw err;
+    }
     return result;
   }
 
@@ -536,37 +555,47 @@
   });
 
   document.getElementById('logout-btn').addEventListener('click', async ()=>{
-    await sb.auth.signOut();
+    await sb.auth.signOut({ scope: 'local' });   // this browser's admin session only
     checkSession();
   });
 
   document.getElementById('unauthorized-back-btn').addEventListener('click', async ()=>{
-    await sb.auth.signOut();
+    await sb.auth.signOut({ scope: 'local' });
     checkSession();
   });
+  const retryBtn = document.getElementById('check-retry-btn');
+  if(retryBtn) retryBtn.addEventListener('click', ()=>checkSession());
+  // If this admin session ends in another tab, show the login screen here too.
+  sb.auth.onAuthStateChange((evt)=>{ if(evt === 'SIGNED_OUT') checkSession(); });
 
+  function showOnly(which){
+    loginScreen.classList.toggle('hidden', which !== 'login');
+    dashScreen.classList.toggle('hidden', which !== 'dash');
+    unauthorizedScreen.classList.toggle('hidden', which !== 'unauthorized');
+    const failed = document.getElementById('check-failed-screen'); if(failed) failed.classList.toggle('hidden', which !== 'failed');
+  }
   async function checkSession(){
     const { data } = await sb.auth.getSession();
-    if(!data.session){
-      loginScreen.classList.remove('hidden');
-      dashScreen.classList.add('hidden');
-      unauthorizedScreen.classList.add('hidden');
-      return;
-    }
-    // Signing in only proves this is A valid ZeeShop account (owner, staff,
-    // anyone) — it does NOT prove super-admin access. That's verified here,
-    // server-side, before anything privileged is shown.
+    if(!data.session){ showOnly('login'); return; }
+    // Signing in only proves this is A valid ZeeShop account — it does NOT prove
+    // super-admin access. That is verified server-side before anything privileged
+    // is shown. Only a real "no" (403) shows the unauthorised screen; a slow
+    // network, a server error or an expired token never throws a real admin out.
     try{
-      await callAdminApi('list_businesses', {});
+      try{ await callAdminApi('list_businesses', {}); }
+      catch(e){
+        if(e.status === 401){                      // token expired/rejected: refresh once and retry
+          const { error: rErr } = await sb.auth.refreshSession();
+          if(rErr){ await sb.auth.signOut({ scope: 'local' }); showOnly('login'); return; }
+          await callAdminApi('list_businesses', {});
+        } else { throw e; }
+      }
     }catch(e){
-      loginScreen.classList.add('hidden');
-      dashScreen.classList.add('hidden');
-      unauthorizedScreen.classList.remove('hidden');
-      return;
+      if(e.status === 403 || e.status === 401){ showOnly('unauthorized'); return; }
+      const msg = document.getElementById('check-failed-msg'); if(msg) msg.textContent = e.message || 'Could not check your access.';
+      showOnly('failed'); return;
     }
-    loginScreen.classList.add('hidden');
-    unauthorizedScreen.classList.add('hidden');
-    dashScreen.classList.remove('hidden');
+    showOnly('dash');
     showTab('home', true);
     loadBusinesses();
     loadSiteContent();

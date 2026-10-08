@@ -195,6 +195,12 @@
   #biz-table tr.acc-row:not(.open) .row-expand{display:none;}
   #biz-table td[data-label]:not(:first-child)::before{content:attr(data-label);display:block;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--text-dim);margin-bottom:4px;}
   #biz-table .acc-badges{display:inline-flex;gap:6px;margin-left:8px;vertical-align:middle;}
+  .plan-filter{width:100%;padding:12px 14px;border:1.5px solid var(--line);border-radius:12px;font-size:15px;font-family:inherit;margin:10px 0 12px;background:#fff;}
+  .plan-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 2px;border-top:1px solid var(--line);font-size:14px;}
+  .plan-row:first-child{border-top:none;}
+  .plan-row .pn{min-width:0;word-break:break-word;}
+  .plan-row .pc{font-weight:800;white-space:nowrap;color:var(--ink);}
+  .plan-group-note{font-size:12px;color:var(--text-dim);}
   .tab-panel{display:none;}
   .tab-panel.active{display:block;animation:tabIn .15s ease;}
   @keyframes tabIn{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:translateY(0);}}
@@ -1011,7 +1017,21 @@
     }
     return null;
   }
+  function planSize(p){
+    const full = /(\d+(?:\.\d+)?)\s*(KB|MB|GB|TB)\b/i;
+    const keys = ['size','plan_size','data_size','plan_volume','volume','data_volume','plan_name','name','plan','data','datasize','product_name'];
+    const vals = keys.map(k=>p && p[k]).filter(v=>v!==undefined && v!==null && String(v).trim()!=='').map(v=>String(v).trim());
+    const fmt=(n,u)=>{ if(u==='MB' && n>=1024){ n=n/1024; u='GB'; } return (Math.round(n*100)/100)+u; };
+    for(const v of vals){ const m=v.match(full); if(m) return fmt(parseFloat(m[1]), m[2].toUpperCase()); }
+    const num = vals.map(v=>v.match(/^(\d+(?:\.\d+)?)$/)).find(Boolean), unit = vals.map(v=>v.match(/^(KB|MB|GB|TB)$/i)).find(Boolean);
+    if(num && unit) return fmt(parseFloat(num[1]), unit[1].toUpperCase());
+    return null;
+  }
   function planLabel(p){
+    if(p && (p.plantype != null || p.plan_volume != null)){
+      const sz = planSize(p); const val = firstOf(p, ['validity','plan_validity','duration']);
+      if(sz) return [sz, p.plantype ? String(p.plantype).toUpperCase() : ''].filter(Boolean).join(' ') + (val ? ' — ' + val : '');
+    }
     const idStr = p.id != null ? String(p.id) : null;
     let direct = firstOf(p, ['name','plan_name','planname','plan','title','package','package_name','bundle_name','plan_title','exam','exam_type','description','desc','label','data_plan','dataplan']);
     if(direct != null && String(direct).trim() === idStr) direct = null;
@@ -1035,41 +1055,81 @@
     const v = firstOf(p, [priceKey, 'amount','price','plan_amount','plan_price','selling_price','cost','cost_price','api_price','user_price','reseller_price']);
     return v;
   }
-  const NETWORK_NAMES = { 1:'MTN', 2:'GLO', 3:'9MOBILE', 4:'AIRTEL' };
+  const NETWORK_NAMES = { 1:'MTN', 2:'GLO', 3:'AIRTEL', 4:'9MOBILE' };   // per Bigisub's docs
   function networkLabel(p){
     const n = firstOf(p, ['network_name','networkname','network','network_id','networkid']);
     if(n == null) return '';
     return NETWORK_NAMES[String(n).trim()] || String(n);
   }
 
+  // Plans are grouped (Data by network, Cable by provider; case-insensitive), each
+  // group is a collapsible section, and a search box narrows everything at once.
+  const NET_ORDER = ['MTN','GLO','AIRTEL','9MOBILE'];
+  const NET_DISPLAY = { MTN:'MTN', GLO:'Glo', AIRTEL:'Airtel', '9MOBILE':'9mobile', ETISALAT:'9mobile' };
+  function groupInfo(p){
+    const net = networkLabel(p);
+    if(net){ let k = String(net).trim().toUpperCase().replace(/\s+/g,''); if(k==='ETISALAT') k='9MOBILE'; return { key:k, label: NET_DISPLAY[k] || net, kind:'network' }; }
+    const cab = firstOf(p, ['cable_name','cable_type','cablename','provider','cable']);
+    if(cab){ const k = String(cab).trim().toUpperCase(); const nice = {DSTV:'DStv',GOTV:'GOtv',STARTIMES:'StarTimes',SHOWMAX:'Showmax'}[k] || cab; return { key:k, label:nice, kind:'provider' }; }
+    return { key:'ALL', label:'All plans', kind:'none' };
+  }
   function renderPriceTable(title, list, priceKey){
-    if(list && list.error) return `<p class="subtle" style="margin-top:10px;"><b>${escapeHtml(title)}:</b> could not load — ${escapeHtml(list.error)}</p>`;
-    if(!Array.isArray(list) || list.length===0) return `<p class="subtle" style="margin-top:10px;"><b>${escapeHtml(title)}:</b> no plans returned.</p>`;
-    const hasNetwork = list.some(p => networkLabel(p));
+    if(list && list.error) return `<div class="acc-item"><div class="acc-head" style="cursor:default;"><span class="acc-main"><span class="acc-title">${escapeHtml(title)}</span><div class="acc-sub" style="color:var(--red);">Could not load — ${escapeHtml(list.error)}</div></span></div></div>`;
+    if(!Array.isArray(list) || list.length===0) return `<div class="acc-item"><div class="acc-head" style="cursor:default;"><span class="acc-main"><span class="acc-title">${escapeHtml(title)}</span><div class="acc-sub">No plans returned.</div></span></div></div>`;
     let unresolvedCount = 0;
-    const rows = list.map(p=>{
-      const label = planLabel(p);
-      if(!label) unresolvedCount++;
-      const network = networkLabel(p);
-      return `<tr>
-        ${hasNetwork ? `<td data-label="Network">${escapeHtml(network||'—')}</td>` : ''}
-        <td data-label="Plan">${escapeHtml(label || ('Plan #'+(p.id??'?')))}</td>
-        <td data-label="Cost">${fmtNaira(planPrice(p, priceKey))}</td>
-      </tr>`;
-    }).join('');
+    const groups = new Map();
+    list.forEach(p=>{
+      const label = planLabel(p); if(!label) unresolvedCount++;
+      const g = groupInfo(p); const price = Number(String(planPrice(p, priceKey) ?? '').replace(/,/g,''));
+      if(!groups.has(g.key)) groups.set(g.key, { label:g.label, kind:g.kind, rows:[] });
+      groups.get(g.key).rows.push({ name: label || ('Plan #'+(p.id??'?')), price: Number.isFinite(price) ? price : null, raw: planPrice(p, priceKey) });
+    });
+    const keys = [...groups.keys()].sort((a,b)=>{ const ia=NET_ORDER.indexOf(a), ib=NET_ORDER.indexOf(b); return (ia<0?99:ia)-(ib<0?99:ib) || a.localeCompare(b); });
+    const single = keys.length === 1 && groups.get(keys[0]).kind === 'none';
+    const range = (rows)=>{ const ps = rows.map(r=>r.price).filter(x=>x!==null); return ps.length ? `${fmtNaira(Math.min(...ps))} – ${fmtNaira(Math.max(...ps))}` : ''; };
+    const rowsHtml = (rows)=>rows.slice().sort((a,b)=>(a.price??1e12)-(b.price??1e12)).map(r=>`<div class="plan-row" data-hay="${escapeHtml(String(r.name).toLowerCase())}"><span class="pn">${escapeHtml(r.name)}</span><span class="pc">${r.price!==null ? fmtNaira(r.price) : '—'}</span></div>`).join('');
+    const groupsHtml = single
+      ? `<div data-group>${rowsHtml(groups.get(keys[0]).rows)}</div>`
+      : keys.map(k=>{ const g = groups.get(k); return `
+        <div class="acc-item" data-group>
+          <button class="acc-head" type="button">
+            <span class="acc-main"><span class="acc-title">${escapeHtml(g.label)}</span><div class="acc-sub">${g.rows.length} plan${g.rows.length>1?'s':''}${range(g.rows)?' · '+range(g.rows):''}</div></span>
+            <span class="acc-chev">⌄</span>
+          </button>
+          <div class="acc-body"><div class="acc-inner"><div class="acc-pad">${rowsHtml(g.rows)}</div></div></div>
+        </div>`; }).join('');
     const rawId = 'raw-' + title.replace(/[^a-z0-9]/gi,'-').toLowerCase();
     return `
-      <div style="margin-top:14px;">
-        <div class="t1" style="margin-bottom:6px;">${escapeHtml(title)}</div>
-        ${unresolvedCount>0 ? `<p class="subtle" style="color:var(--marigold-dark);">${unresolvedCount} of ${list.length} plan${unresolvedCount>1?'s':''} had no recognizable size/name field — showing "Plan #id" for those. Tap "Show raw data" below to see the actual fields Bigisub sent, so this can be fixed precisely.</p>` : ''}
-        <div class="table-wrap"><table class="stack">
-          <thead><tr>${hasNetwork?'<th>Network</th>':''}<th>Plan</th><th>Cost</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table></div>
-        <button class="btn-outline-sm" style="margin-top:8px;" onclick="const el=document.getElementById('${rawId}'); el.classList.toggle('hidden');">Show raw data</button>
-        <pre id="${rawId}" class="hidden" style="margin-top:8px;background:var(--paper-dim);border-radius:8px;padding:10px;font-size:10.5px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">${escapeHtml(JSON.stringify(list.slice(0,3), null, 2))}</pre>
-      </div>
-    `;
+      <div class="acc-item" data-ptable>
+        <button class="acc-head" type="button">
+          <span class="acc-main"><span class="acc-title">${escapeHtml(title)}</span><div class="acc-sub">${list.length} plans${single ? '' : ' in ' + keys.length + (groups.get(keys[0]).kind==='network' ? ' networks' : ' groups')}</div></span>
+          <span class="acc-chev">⌄</span>
+        </button>
+        <div class="acc-body"><div class="acc-inner"><div class="acc-pad">
+          ${unresolvedCount>0 ? `<p class="subtle" style="color:var(--marigold-dark);margin-top:10px;">${unresolvedCount} of ${list.length} plan${unresolvedCount>1?'s':''} had no recognizable size/name field — shown as "Plan #id". Use "Show raw data" below to see what Bigisub sent.</p>` : ''}
+          <input class="plan-filter" type="search" placeholder="Search ${escapeHtml(title)}… (size, validity, type)" data-plan-filter>
+          <div data-groups>${groupsHtml}</div>
+          <div class="plan-group-note" data-nomatch style="display:none;padding:8px 2px;">No plans match your search.</div>
+          <button class="btn-outline-sm" style="margin-top:10px;" onclick="const el=document.getElementById('${rawId}'); el.classList.toggle('hidden');">Show raw data</button>
+          <pre id="${rawId}" class="hidden" style="margin-top:8px;background:var(--paper-dim);border-radius:8px;padding:10px;font-size:10.5px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">${escapeHtml(JSON.stringify(list.slice(0,5), null, 2))}${list.length>5?'\n… ('+(list.length-5)+' more)':''}</pre>
+        </div></div></div>
+      </div>`;
+  }
+  // Search: hides non-matching plans and groups; groups with matches open themselves.
+  function wirePlanFilters(root){
+    root.querySelectorAll('[data-ptable]').forEach(tbl=>{
+      const input = tbl.querySelector('[data-plan-filter]'); if(!input) return;
+      input.addEventListener('input', ()=>{
+        const q = input.value.trim().toLowerCase(); let any = false;
+        tbl.querySelectorAll('[data-group]').forEach(g=>{
+          let shown = 0;
+          g.querySelectorAll('.plan-row').forEach(r=>{ const ok = !q || r.dataset.hay.includes(q); r.style.display = ok ? '' : 'none'; if(ok) shown++; });
+          g.style.display = shown ? '' : 'none'; if(shown) any = true;
+          if(g.classList.contains('acc-item')) g.classList.toggle('open', !!q && shown>0);
+        });
+        tbl.querySelector('[data-nomatch]').style.display = any ? 'none' : '';
+      });
+    });
   }
 
   async function loadBigisubServicePrices(){
@@ -1084,6 +1144,7 @@
         renderPriceTable('Internet — Smile', r.isp_smile_plans, 'amount'),
         renderPriceTable('Internet — Spectranet', r.isp_spectranet_plans, 'amount'),
       ].join('');
+      wireAccordion(box); wirePlanFilters(box);
     }catch(e){
       box.innerHTML = `<div class="err">Could not load Bigisub prices: ${escapeHtml(e.message)}</div>`;
     }

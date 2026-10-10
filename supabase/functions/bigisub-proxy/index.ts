@@ -224,17 +224,48 @@ function extractUpstreamMessage(data: any): string {
 // either way: passes a real array straight through, flattens a grouped
 // object's array values into one list, and only falls back to empty if
 // neither shape is found — never crashes the caller either way.
-function normalizeList(data: any, key: string): any[] {
-  const candidate = data?.[key] ?? data?.data ?? data;
-  if (Array.isArray(candidate)) return candidate;
-  if (candidate && typeof candidate === "object") {
-    const flattened: any[] = [];
-    for (const v of Object.values(candidate)) {
-      if (Array.isArray(v)) flattened.push(...v);
-    }
-    if (flattened.length > 0) return flattened;
+// Bigisub's plan lists can arrive as a plain array, as { plans: [...] }, grouped
+// into several arrays ({ "Data": [...], "Voice": [...] }) or nested a level deeper.
+// Collect EVERY plan from all of them — nothing is dropped.
+function collectArrays(node: any, depth = 0): any[] {
+  if (Array.isArray(node)) return node;
+  if (!node || typeof node !== "object" || depth > 3) return [];
+  const out: any[] = [];
+  for (const v of Object.values(node)) {
+    if (Array.isArray(v)) out.push(...v);
+    else if (v && typeof v === "object") out.push(...collectArrays(v, depth + 1));
   }
-  return [];
+  return out;
+}
+function normalizeList(data: any, key: string): any[] {
+  const candidate = data?.[key] ?? data?.data?.[key] ?? data?.data ?? data;
+  if (Array.isArray(candidate)) return candidate;
+  return collectArrays(candidate).filter((x) => x && typeof x === "object");
+}
+// If the list is paginated, the reply carries a link to the next page.
+function nextPagePath(body: any): string | null {
+  const raw = body?.next ?? body?.data?.next ?? body?.meta?.next ?? body?.pagination?.next ?? null;
+  if (!raw || typeof raw !== "string") return null;
+  try {
+    const u = new URL(raw, BIGISUB_BASE);
+    if (u.host !== new URL(BIGISUB_BASE).host) return null;     // only ever follow links on Bigisub's own host
+    return u.pathname + u.search;
+  } catch (_e) { return null; }
+}
+// Fetches a list and follows its "next page" links (up to 15 pages), de-duplicating by id.
+async function fetchAllPlans(path: string, key: string): Promise<any[]> {
+  const seen = new Set<string>(); const all: any[] = []; let next: string | null = path;
+  for (let page = 0; next && page < 15; page++) {
+    const body = await bigisub("GET", next);
+    for (const item of normalizeList(body, key)) {
+      const id = item?.id !== undefined && item?.id !== null ? String(item.id) : null;
+      if (id !== null) { if (seen.has(id)) continue; seen.add(id); }
+      all.push(item);
+    }
+    const np = nextPagePath(body);
+    next = np && np !== next ? np : null;
+  }
+  return all;
 }
 
 async function hashPin(pin: string): Promise<string> {
@@ -306,8 +337,7 @@ Deno.serve(async (req: Request) => {
     // code) — this is about correct HTTP semantics, not new behavior.
     const fetchListAction = async (path: string, key: string, responseKey: string, pricingService?: string) => {
       try {
-        const data = await bigisub("GET", path);
-        let list = normalizeList(data, key);
+        let list = await fetchAllPlans(path, key);
         if (pricingService) list = withDisplayPrice(list, pricingService, await loadPricing(admin));
         return json({ [responseKey]: list }, 200);
       } catch (e) {
@@ -501,34 +531,50 @@ Deno.serve(async (req: Request) => {
       }
       if (!FLW_SECRET_KEY) return json({ error: "Account setup isn't configured yet." }, 500);
 
+      // RULE: every business gets its OWN Flutterwave sub-account and its own
+      // account number — never shared, never reused. The sub-account is
+      // registered under an email that is unique to THIS business (the owner's
+      // address with a "+zs<id>" tag, so mail still reaches the owner). The old
+      // code used the owner's plain email, so a second business of the same
+      // owner collided with the first.
+      const ownerEmail = String(callerData.user.email || "").toLowerCase();
+      const tag = "zs" + String(businessId).replace(/[^a-z0-9]/gi, "").slice(0, 12).toLowerCase();
+      const uniqueEmail = ownerEmail.includes("@")
+        ? `${ownerEmail.split("@")[0].split("+")[0]}+${tag}@${ownerEmail.split("@")[1]}`
+        : `business-${businessId}@zeeshop.app`;
+
       const flwRes = await fetch("https://api.flutterwave.com/v3/payout-subaccounts", {
         method: "POST",
         headers: { Authorization: `Bearer ${FLW_SECRET_KEY}`, "Content-Type": "application/json" },
         body: JSON.stringify({
           account_name: biz.name || "ZeeShop Business",
-          email: callerData.user.email || `business-${businessId}@zeeshop.app`,
+          email: uniqueEmail,
           mobilenumber: caller.phone || "08000000000",
           // Hardcoded: Flutterwave needs the 2-letter code and every service
           // here is Nigeria-only (biz.country may hold the full name).
           country: "NG",
         }),
       });
-      const flwData = await flwRes.json();
+      const flwData = await flwRes.json().catch(() => null);
       let acct = flwData?.data;
       if (!flwRes.ok || flwData?.status !== "success" || !acct?.account_reference) {
         console.error("Flutterwave payout-subaccount create failed:", flwRes.status, flwData?.message);
-        // If this email already has a sub-account (created earlier, e.g. before
-        // an account number was cleared from our side), reuse it rather than
-        // leaving the business stuck. Best effort: only used on a failed create.
+        // Recovery: this business's OWN sub-account may already exist (created
+        // earlier, then our copy of the number was lost). Match ONLY on this
+        // business's unique email. The owner's plain email is used only when the
+        // owner has exactly ONE business — with several, it is ambiguous and
+        // is never used.
         acct = null;
         try {
-          const wantEmail = String(callerData.user.email || `business-${businessId}@zeeshop.app`).toLowerCase();
+          const { count: ownedCount } = await admin.from("businesses").select("id", { count: "exact", head: true }).eq("owner_auth_user_id", callerData.user.id);
+          const wanted = new Set<string>([uniqueEmail.toLowerCase()]);
+          if ((ownedCount || 0) === 1 && ownerEmail) wanted.add(ownerEmail);
           for (let page = 1; page <= 5 && !acct; page++) {
             const lr = await fetch(`https://api.flutterwave.com/v3/payout-subaccounts?page=${page}`, { headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` } });
             const ld = await lr.json().catch(() => null);
             const rows: any[] = Array.isArray(ld?.data) ? ld.data : (Array.isArray(ld?.data?.subaccounts) ? ld.data.subaccounts : []);
             if (!lr.ok || rows.length === 0) break;
-            acct = rows.find((r: any) => String(r?.email || "").toLowerCase() === wantEmail && r?.account_reference) || null;
+            acct = rows.find((r: any) => wanted.has(String(r?.email || "").toLowerCase()) && r?.account_reference) || null;
           }
         } catch (_e) { /* fall through to the neutral error below */ }
         if (!acct) return json({ error: "Account setup is temporarily unavailable. Please try again later." }, 502);
@@ -552,10 +598,33 @@ Deno.serve(async (req: Request) => {
       }
       if (!accountNumber) return json({ error: "Your account was created but the number isn't ready yet — tap Refresh in a moment." }, 502);
 
-      await admin.from("businesses").update({
+      // NEVER hand one account number (or one Flutterwave sub-account) to two
+      // businesses: if another business already holds either, refuse and log it.
+      const [{ data: refOwner }, { data: numOwner }] = await Promise.all([
+        admin.from("businesses").select("id").neq("id", businessId).eq("psa_account_reference", acct.account_reference).limit(1),
+        admin.from("businesses").select("id").neq("id", businessId).eq("psa_account_number", accountNumber).limit(1),
+      ]);
+      if ((refOwner && refOwner.length) || (numOwner && numOwner.length)) {
+        console.error("PSA COLLISION BLOCKED: business", businessId, "was about to get account", accountNumber, "already held by", (refOwner?.[0] || numOwner?.[0])?.id);
+        return json({ error: "We couldn't assign you a unique account number. Please contact support — no money is at risk." }, 409);
+      }
+
+      // Claim the slot only if it is still empty (a double-tap or a second
+      // device can't overwrite or duplicate it). The database also enforces
+      // uniqueness (see account-safety-setup.sql).
+      const { data: saved, error: saveErr } = await admin.from("businesses").update({
         psa_account_reference: acct.account_reference, psa_account_number: accountNumber,
         psa_bank_name: bankName || "Bank", psa_status: "active",
-      }).eq("id", businessId);
+      }).eq("id", businessId).is("psa_account_number", null).select("id");
+      if (saveErr) {
+        console.error("PSA save failed:", saveErr.code, saveErr.message);
+        return json({ error: saveErr.code === "23505" ? "We couldn't assign you a unique account number. Please contact support." : "Could not save your account. Please try again." }, saveErr.code === "23505" ? 409 : 500);
+      }
+      if (!saved || saved.length === 0) {
+        const { data: cur } = await admin.from("businesses").select("psa_account_number, psa_bank_name, psa_status").eq("id", businessId).maybeSingle();
+        if (cur?.psa_account_number) return json({ account_number: cur.psa_account_number, bank_name: cur.psa_bank_name, status: cur.psa_status || "active" }, 200);
+        return json({ error: "Could not save your account. Please try again." }, 500);
+      }
 
       return json({ account_number: accountNumber, bank_name: bankName || "Bank", status: "active" }, 200);
     }
@@ -570,7 +639,21 @@ Deno.serve(async (req: Request) => {
     // "flw:<reference>" key the webhook uses), so the webhook and this sync
     // can never credit the same transfer twice.
     if (action === "sync_psa_wallet") {
+      let syncWarning: string | null = null;
       if (biz.psa_account_reference && FLW_SECRET_KEY) {
+        // Fail-safe: if this account (or sub-account) is held by more than one
+        // business we cannot tell whose money it is, so credit NOTHING here.
+        const [{ data: shareRef }, { data: shareNum }] = await Promise.all([
+          admin.from("businesses").select("id").eq("psa_account_reference", biz.psa_account_reference).limit(3),
+          admin.from("businesses").select("id").eq("psa_account_number", biz.psa_account_number || "__none__").limit(3),
+        ]);
+        const sharers = new Set<string>([...(shareRef || []), ...(shareNum || [])].map((r: any) => String(r.id)));
+        if (sharers.size > 1) {
+          console.error("PSA SYNC SKIPPED — account shared by businesses:", [...sharers].join(","));
+          syncWarning = "There's a problem with your account number. Please contact support — your money is safe and will be credited once it's fixed.";
+        }
+      }
+      if (!syncWarning && biz.psa_account_reference && FLW_SECRET_KEY) {
         const lastSyncedAt: string | null = (biz as any).psa_last_synced_at || null;
         const from = lastSyncedAt
           ? new Date(new Date(lastSyncedAt).getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
@@ -607,7 +690,7 @@ Deno.serve(async (req: Request) => {
         }
       }
       const { data: fresh } = await admin.from("businesses").select("bill_wallet_balance").eq("id", businessId).maybeSingle();
-      return json({ wallet_balance: Number(fresh?.bill_wallet_balance ?? biz.bill_wallet_balance ?? 0) }, 200);
+      return json({ wallet_balance: Number(fresh?.bill_wallet_balance ?? biz.bill_wallet_balance ?? 0), warning: syncWarning }, 200);
     }
 
     // ---------- wallet funding card 2: upgrade to a dedicated account (FonPayEdge) ----------

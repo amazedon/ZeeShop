@@ -9013,17 +9013,141 @@ const SQUAD_PENDING_KEY = 'zs_squad_pending_ref';
 let billPsaSyncing = false;
 let billPsaPollTimer = null;
 
+/* ---- Squad dedicated account (primary) + state ---- */
+let billVa = null;            // { account, legacy, fee:{badge,short,below_one_percent}, attempts_left, is_owner } from va_status
+let billVaLoading = false;
+let billVaLoadedAt = 0;
+let billVaOpen = false;       // the verification modal
+let billVaBusy = false;
+let billVaError = '';
+// Typed-so-far values live in memory only (so a re-render can't wipe them). The BVN is never saved anywhere.
+let billVaDraft = { fn:null, ln:null, phone:null, email:null, dob:'', bvn:'', consent:false };
+function bpResetVaForm(){ billVaOpen = false; billVaBusy = false; billVaError = ''; billVaDraft = { fn:null, ln:null, phone:null, email:null, dob:'', bvn:'', consent:false }; }
+
+(function(){
+  const st = document.createElement('style');
+  st.textContent = `
+  .va-badge{display:inline-block;background:#FEF3C7;color:#92400E;font-size:11.5px;font-weight:800;letter-spacing:.02em;padding:5px 10px;border-radius:999px;margin-bottom:10px;}
+  .va-badge.on{background:#DCFCE7;color:#166534;}
+  .va-list{list-style:none;padding:0;margin:12px 0 14px;}
+  .va-list li{display:flex;gap:8px;align-items:flex-start;font-size:14px;padding:4px 0;}
+  .va-list li::before{content:"✓";color:#16A34A;font-weight:900;}
+  .va-acct{border:1px solid #E5E7EB;border-radius:14px;padding:14px;text-align:center;margin:10px 0;background:#FAFAF7;}
+  .va-acct .n{font-size:24px;font-weight:800;letter-spacing:1.5px;margin:6px 0;}
+  .va-overlay{position:fixed;inset:0;z-index:9100;background:rgba(6,5,20,.62);display:flex;align-items:flex-end;justify-content:center;}
+  .va-sheet{width:100%;max-width:560px;max-height:92vh;overflow-y:auto;background:#fff;color:#111827;border-radius:22px 22px 0 0;padding:20px 18px 26px;box-shadow:0 -10px 40px rgba(0,0,0,.35);}
+  .va-sheet h3{margin:0 0 4px;font-size:19px;}
+  .va-err{background:#FEF2F2;color:#991B1B;border:1px solid #FECACA;border-radius:10px;padding:10px 12px;font-size:13px;margin:10px 0;}
+  .va-consent{display:flex;gap:10px;align-items:flex-start;font-size:13px;margin:10px 0;}
+  .va-consent input{margin-top:3px;}
+  .va-spin{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.5);border-top-color:#fff;border-radius:50%;animation:vaspin .8s linear infinite;vertical-align:-2px;margin-right:6px;}
+  @keyframes vaspin{to{transform:rotate(360deg)}}
+  `;
+  document.head.appendChild(st);
+})();
+
 function screenBillTopup(){
+  const hasVa = !!(billVa && billVa.account);
   return `
     ${bpHeader('Add Money')}
     <div class="card">
       <p class="subtle">Fund your Bill Wallet to buy airtime, data and pay bills.</p>
+      ${bpVaCardHtml()}
+    </div>
+    <div class="card" style="margin-top:12px;">
+      ${hasVa ? `<h3 style="margin:0 0 6px;font-size:16px;">Your account number (still works)</h3>` : ''}
       ${bpFundCardHtml()}
     </div>
+    ${bpLegacyCardHtml()}
     <div class="card" style="margin-top:12px;">
       ${bpSquadCardHtml()}
     </div>
+    ${bpVaModalHtml()}
   `;
+}
+
+// ---- Primary: dedicated account (invitation before, account details after) ----
+function bpVaCardHtml(){
+  const fee = (billVa && billVa.fee) || { badge:'Save Money • Low Deposit Fee', short:'low', below_one_percent:false };
+  if(billVa && billVa.account){
+    const a = billVa.account;
+    const act = fee.below_one_percent ? (fee.short === 'no deposit fee' ? 'Active • No Deposit Fee' : 'Active • Low Deposit Fee (<1%)') : 'Active • Low Deposit Fee';
+    return `
+      <span class="va-badge on">${escapeHtml(act)}</span>
+      <h3 style="margin:0 0 4px;font-size:17px;">Your Dedicated Business Account</h3>
+      <div class="va-acct">
+        <div class="t1">${escapeHtml(a.bank_name||'')}</div>
+        <div class="n">${escapeHtml(a.number)}</div>
+        <div class="t1" style="font-weight:700;">${escapeHtml(a.name||'')}</div>
+        <button class="btn btn-outline btn-sm" id="bp-va-copy" style="margin-top:10px;">Copy Account Number</button>
+        <br><button class="btn btn-outline btn-sm" id="bp-va-refresh" style="margin-top:8px;">${billPsaSyncing?'Checking…':'↻ Refresh Balance'}</button>
+      </div>
+      <p class="subtle" style="font-size:13px;">Transfer to this account anytime from any bank app for instant wallet funding at our ${fee.below_one_percent ? (fee.short === 'no deposit fee' ? 'zero-fee' : 'ultra-low (below 1%)') : 'low'} rate. Always check the account number before you send.</p>
+    `;
+  }
+  const lowTxt = fee.below_one_percent ? (fee.short === 'no deposit fee' ? 'no deposit fee' : 'transfer fees below 1%') : 'low transfer fees';
+  return `
+    <span class="va-badge">${escapeHtml(fee.badge)}</span>
+    <h3 style="margin:0 0 4px;font-size:18px;">Get Your Dedicated Business Account</h3>
+    <p class="subtle">Upgrade to your personal permanent account number and fund your wallet with ${escapeHtml(lowTxt)}!</p>
+    <ul class="va-list">
+      <li><span><b>100% Free Setup</b></span></li>
+      <li><span><b>${fee.below_one_percent ? 'Ultra-Low' : 'Low'} Transfer Fees</b></span></li>
+      <li><span><b>Instant Auto-Credit</b> within seconds</span></li>
+      <li><span><b>Works with Any Nigerian Bank App</b> (Kuda, Access, Zenith, OPay, GTBank and more)</span></li>
+    </ul>
+    <button class="btn btn-primary" id="bp-va-open">Upgrade &amp; Get Free Dedicated Account</button>
+  `;
+}
+
+// ---- Older dedicated account that still receives money (read-only) ----
+function bpLegacyCardHtml(){
+  const l = billVa && billVa.legacy;
+  if(!l) return '';
+  return `
+    <div class="card" style="margin-top:12px;">
+      <h3 style="margin:0 0 4px;font-size:16px;">Legacy Account (Still Works)</h3>
+      <div style="text-align:center;padding:8px 0;">
+        <div style="font-size:20px;font-weight:700;letter-spacing:1px;margin:6px 0;">${escapeHtml(l.number)}</div>
+        <div class="t1">${escapeHtml(l.bank_name||'')}</div>
+        <button class="btn btn-outline btn-sm" id="bp-legacy-copy" style="margin-top:10px;">Copy Account Number</button>
+        <p class="subtle" style="font-size:11px;margin-top:10px;">Money sent here is still credited automatically. Your new dedicated account above has the lowest fees.</p>
+      </div>
+    </div>`;
+}
+
+// ---- Verification modal ----
+function bpVaModalHtml(){
+  if(!billVaOpen) return '';
+  const cu = currentUser() || {};
+  const d = billVaDraft;
+  const val = (draftVal, profileVal)=> escAttr(draftVal !== null ? draftVal : (profileVal||''));
+  const maxDob = (()=>{ const t = new Date(); t.setFullYear(t.getFullYear()-18); return t.toISOString().slice(0,10); })();
+  return `
+  <div class="va-overlay" id="bp-va-overlay"><div class="va-sheet">
+    <h3>Verify &amp; get your account</h3>
+    <p class="subtle" style="font-size:13px;margin:0 0 8px;">Use the details on your BVN. It takes a few seconds.</p>
+    <div class="field"><label>BVN (11 digits)</label><input id="bp-va-bvn" type="tel" inputmode="numeric" maxlength="11" autocomplete="off" placeholder="11 digits" value="${escAttr(d.bvn)}"></div>
+    <div class="field"><label>Date of birth</label><input id="bp-va-dob" type="date" max="${maxDob}" autocomplete="off" value="${escAttr(d.dob)}"></div>
+    <div class="field"><label>First name</label><input id="bp-va-fn" autocomplete="off" value="${val(d.fn, cu.firstName)}"></div>
+    <div class="field"><label>Last name</label><input id="bp-va-ln" autocomplete="off" value="${val(d.ln, cu.lastName)}"></div>
+    <div class="field"><label>Phone number</label><input id="bp-va-phone" type="tel" inputmode="tel" autocomplete="off" value="${val(d.phone, cu.phone)}"></div>
+    <div class="field"><label>Email</label><input id="bp-va-email" type="email" autocomplete="off" value="${val(d.email, cu.email)}"></div>
+    <div class="zs-note zs-note-info" style="margin:8px 0;font-size:12.5px;">Sent securely to our payment partner to verify with bank records. We do not store your BVN.</div>
+    <label class="va-consent"><input type="checkbox" id="bp-va-consent" ${d.consent?'checked':''}><span>I agree to my BVN and date of birth being used to verify my identity and open this account.</span></label>
+    <div class="va-err" id="bp-va-err" style="${billVaError?'':'display:none;'}">${escapeHtml(billVaError)}</div>
+    <button class="btn btn-primary" id="bp-va-submit" ${billVaBusy?'disabled style="opacity:0.7;"':''}>${billVaBusy?'<span class="va-spin"></span>Verifying…':'Verify &amp; Generate Account Number'}</button>
+    <button class="btn btn-outline" id="bp-va-cancel" style="margin-top:8px;" ${billVaBusy?'disabled':''}>Cancel</button>
+  </div></div>`;
+}
+
+async function bpLoadVaStatus(){
+  if(billVaLoading) return;
+  billVaLoading = true;
+  try{ billVa = await callSquad('va_status', {}); }
+  catch(_e){ /* the invitation still works without the extras; retried in a minute */ }
+  billVaLoading = false; billVaLoadedAt = Date.now();
+  if(!billVaOpen) refreshMain();
 }
 
 // ---- Card 1: the permanent account every business gets ----
@@ -9055,12 +9179,12 @@ function bpFundCardHtml(){
 }
 
 // ---- Card 2: pay now (card / bank / USSD / transfer) ----
-async function callSquad(action, params){
+async function callSquad(action, params, timeoutMs){
   if(!navigator.onLine) throw new Error('You need an internet connection to fund your wallet.');
   const token = await bigisubAuthToken();
   if(!token) throw new Error('Please log in online first.');
   const ctrl = new AbortController();
-  const timer = setTimeout(()=>ctrl.abort(), 30000);
+  const timer = setTimeout(()=>ctrl.abort(), timeoutMs || 30000);
   let res;
   try{
     res = await fetch(`${SITE_CONTENT_URL}/functions/v1/squad-initiate`, {
@@ -9071,7 +9195,7 @@ async function callSquad(action, params){
     });
   }catch(e){
     clearTimeout(timer);
-    if(e && e.name === 'AbortError') throw new Error('The server took too long to respond. If you were paying, check your balance before trying again.');
+    if(e && e.name === 'AbortError') throw new Error('The server took too long to respond. If you were paying or opening an account, wait a minute and check again.');
     throw new Error("Couldn't reach the server. Check your internet connection and try again.");
   }
   clearTimeout(timer);
@@ -9159,7 +9283,71 @@ async function bpCheckPendingSquad(manual){
 }
 
 function bindBillTopupEvents(){
-  if(billPsaAccountNumber && !billPsaPollTimer) bpStartPsaPolling();
+  if((billPsaAccountNumber || (billVa && billVa.account)) && !billPsaPollTimer) bpStartPsaPolling();
+  if(!billVaLoading && Date.now() - billVaLoadedAt > 60000) bpLoadVaStatus();
+
+  // ---- dedicated account ----
+  const vaOpen = document.getElementById('bp-va-open');
+  if(vaOpen) vaOpen.addEventListener('click', ()=>{
+    const cu = currentUser() || {};
+    if(cu.role !== 'master') return toast('Only the business owner can open the dedicated account.');
+    billVaError = ''; billVaOpen = true; refreshMain();
+  });
+  const vaCopy = document.getElementById('bp-va-copy');
+  if(vaCopy) vaCopy.addEventListener('click', ()=>{ if(navigator.clipboard) navigator.clipboard.writeText(billVa.account.number); toast('Account number copied'); });
+  const vaRefresh = document.getElementById('bp-va-refresh');
+  if(vaRefresh) vaRefresh.addEventListener('click', ()=>bpSyncPsaWallet(true));
+  const legacyCopy = document.getElementById('bp-legacy-copy');
+  if(legacyCopy) legacyCopy.addEventListener('click', ()=>{ if(navigator.clipboard) navigator.clipboard.writeText(billVa.legacy.number); toast('Account number copied'); });
+
+  if(billVaOpen){
+    const track = (id, key, isCheck)=>{
+      const el = document.getElementById(id); if(!el) return;
+      const h = ()=>{ billVaDraft[key] = isCheck ? el.checked : el.value; };
+      el.addEventListener('input', h); el.addEventListener('change', h);
+    };
+    track('bp-va-bvn','bvn'); track('bp-va-dob','dob'); track('bp-va-fn','fn'); track('bp-va-ln','ln');
+    track('bp-va-phone','phone'); track('bp-va-email','email'); track('bp-va-consent','consent', true);
+
+    const cancel = document.getElementById('bp-va-cancel');
+    if(cancel) cancel.addEventListener('click', ()=>{ if(billVaBusy) return; bpResetVaForm(); refreshMain(); });
+    const showErr = (m)=>{ const e = document.getElementById('bp-va-err'); if(e){ e.textContent = m; e.style.display = m ? '' : 'none'; } };
+    const submit = document.getElementById('bp-va-submit');
+    if(submit) submit.addEventListener('click', async ()=>{
+      if(billVaBusy) return;
+      const cu = currentUser() || {};
+      const d = billVaDraft;
+      const get = (id, key, fallback)=>{ const el = document.getElementById(id); return (el ? el.value : (d[key] !== null ? d[key] : fallback)) || ''; };
+      const bvn = get('bp-va-bvn','bvn','').replace(/\s/g,'');
+      const dob = get('bp-va-dob','dob','');
+      const fn = get('bp-va-fn','fn',cu.firstName).trim(), ln = get('bp-va-ln','ln',cu.lastName).trim();
+      const phone = get('bp-va-phone','phone',cu.phone).trim(), email = get('bp-va-email','email',cu.email).trim();
+      const consentEl = document.getElementById('bp-va-consent'); const consent = consentEl ? consentEl.checked : !!d.consent;
+      if(!/^\d{11}$/.test(bvn)) return showErr('Your BVN must be exactly 11 digits.');
+      if(!dob) return showErr('Please enter your date of birth.');
+      const dobDate = new Date(dob + 'T00:00:00'); const cutoff = new Date(); cutoff.setFullYear(cutoff.getFullYear()-18);
+      if(isNaN(dobDate) || dobDate > cutoff) return showErr('You must be 18 or older to open a dedicated account.');
+      if(!fn || !ln) return showErr('Please enter your first and last name as on your BVN.');
+      if(!/^\+?\d[\d\s-]{8,17}$/.test(phone)) return showErr('Please enter a valid phone number.');
+      if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return showErr('Please enter a valid email address.');
+      if(!consent) return showErr('Please tick the box to agree before continuing.');
+      showErr('');
+      billVaBusy = true; billVaError = ''; refreshMain();
+      try{
+        const r = await callSquad('create_virtual_account', { bvn, dob, first_name: fn, last_name: ln, phone, email, consent: true }, 60000);
+        billVa = Object.assign({}, billVa || {}, { account: r.account });
+        bpResetVaForm();                                   // clears the BVN/DOB from memory
+        logAudit('bill_wallet_squad_account', `Opened dedicated account ${r.account.number}`);
+        toast('Your dedicated account is ready ✅');
+        bpStartPsaPolling();
+      }catch(e){
+        billVaError = e.message || 'Something went wrong. Please try again.';
+        billVaBusy = false;
+        bpLoadVaStatus();                                  // refresh "attempts left" quietly
+      }
+      refreshMain();
+    });
+  }
 
   const psaSetupBtn = document.getElementById('bp-psa-setup');
   if(psaSetupBtn) psaSetupBtn.addEventListener('click', async ()=>{
@@ -9212,7 +9400,7 @@ async function bpSyncPsaWallet(manual){
   billPsaSyncing = true; if(manual) refreshMain();
   try{
     const before = Number(billWalletBalance || 0);
-    const r = await callBigisub('sync_psa_wallet', {});
+    const r = await callBigisub(billPsaAccountNumber ? 'sync_psa_wallet' : 'my_wallet_summary', {});
     billWalletBalance = r.wallet_balance;
     if(r.warning && !window.__psaWarned){ window.__psaWarned = true; toast(r.warning); }
     const added = Number(r.wallet_balance || 0) - before;
@@ -9224,12 +9412,13 @@ async function bpSyncPsaWallet(manual){
     }
   }catch(e){ if(manual) toast(e.message); }
   billPsaSyncing = false;
-  if(manual || !(document.activeElement && document.activeElement.id === 'bp-sq-amount')) refreshMain();
+  if(manual || !(billVaOpen || (document.activeElement && document.activeElement.id === 'bp-sq-amount'))) refreshMain();
 }
 function bpStartPsaPolling(){
   bpStopPsaPolling(); // clear any previous timer first
   billPsaPollTimer = setInterval(()=>{
-    if(!billPsaAccountNumber || billScreen!=='topup'){ bpStopPsaPolling(); return; }
+    if((!billPsaAccountNumber && !(billVa && billVa.account)) || billScreen!=='topup'){ bpStopPsaPolling(); return; }
+    if(billVaOpen) return;   // don't re-render under someone who is typing
     bpSyncPsaWallet(false);
   }, 8000);
 }

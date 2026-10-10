@@ -52,6 +52,17 @@
   .stats-row.stats-4 .stat-card{display:flex;flex-direction:column;justify-content:center;align-items:center;min-height:96px;padding:16px 12px;}
   .stats-row.stats-4 .stat-card .num{font-size:clamp(17px,5.2vw,22px);line-height:1.15;max-width:100%;overflow-wrap:anywhere;}
   .stats-row.stats-4 .stat-card .label{font-size:11px;line-height:1.35;max-width:100%;overflow-wrap:break-word;hyphens:auto;text-wrap:balance;margin-top:6px;}
+  /* Secondary Bill Payments metrics: one horizontally swipeable row on phones, 4-column grid on desktop.
+     (Same idea as `overflow-x-auto flex gap-3 snap-x no-scrollbar` + `min-w-[140px]` + `whitespace-nowrap`
+     — this page has no Tailwind, so the equivalent CSS lives here.) */
+  .no-scrollbar{scrollbar-width:none;-ms-overflow-style:none;}
+  .no-scrollbar::-webkit-scrollbar{display:none;}
+  .stats-row.stats-scroll .stat-card .num{white-space:nowrap;overflow-wrap:normal;max-width:none;}
+  @media(max-width:899px){
+    .stats-row.stats-scroll{display:flex;gap:12px;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;
+      margin-left:-14px;margin-right:-14px;padding:2px 14px 6px;}
+    .stats-row.stats-scroll .stat-card{flex:0 0 auto;min-width:140px;scroll-snap-align:start;}
+  }
 
   /* Tables render normally on wide screens; below 700px every table
      becomes a stacked list of "cards" — one per row, each cell labeled
@@ -365,7 +376,7 @@
         <div id="bp-bigisub-balance-box"><p class="subtle">Loading…</p></div>
       </div>
 
-      <div class="stats-row stats-4">
+      <div class="stats-row stats-4 stats-scroll no-scrollbar">
         <div class="stat-card"><div class="num" id="bp-stat-wallets">0</div><div class="label">Business Wallets Funded</div></div>
         <div class="stat-card"><div class="num" id="bp-stat-liability">—</div><div class="label">Total Wallet Liability</div></div>
         <div class="stat-card"><div class="num" id="bp-stat-transactions">0</div><div class="label">Transactions</div></div>
@@ -399,7 +410,7 @@
           <div class="acc-body"><div class="acc-inner"><div class="acc-pad">
             <div class="field"><label>Business</label><select id="mc-business"></select></div>
             <div class="field"><label>Amount to credit (₦)</label><input id="mc-amount" type="number" min="1" inputmode="decimal" placeholder="e.g. 188"></div>
-            <div class="field"><label>Reference (bank transfer reference — can be used once)</label><input id="mc-reference" placeholder="e.g. the transaction/session ID"></div>
+            <div class="field"><label>Reference (bank transfer reference — optional)</label><input id="mc-reference" placeholder="Leave blank to auto-generate (can be used once)"></div>
             <div class="field"><label>Note (optional)</label><input id="mc-note" placeholder="Why this credit"></div>
             <button class="btn btn-primary btn-sm" id="mc-save">Credit wallet</button>
             <div class="subtle" id="mc-status" style="margin-top:8px;"></div>
@@ -434,6 +445,32 @@
         </p>
         <div id="pp-status"></div>
         <div id="vtu-accordion"><p class="subtle">Loading…</p></div>
+      </div>
+
+      <div class="card" id="deposit-fee-card">
+        <h2>Wallet funding fee</h2>
+        <p class="subtle">
+          The fee charged when a business adds money with <b>Pay Now</b> (card, bank, USSD or transfer). It applies to the
+          next payment straight away; a payment that is already in progress keeps the fee it was shown. Manual credits
+          by you never carry a fee.
+        </p>
+        <div id="df-status"></div>
+        <div class="field"><label for="df-type">Fee type</label>
+          <select id="df-type">
+            <option value="none">None — no funding fee</option>
+            <option value="percentage">Percentage (%)</option>
+            <option value="flat">Flat amount (₦)</option>
+          </select></div>
+        <div class="field" id="df-value-wrap"><label for="df-value" id="df-value-label">Fee value</label>
+          <input id="df-value" type="number" min="0" step="any" inputmode="decimal" placeholder="e.g. 1.2"></div>
+        <div class="field" id="df-cap-wrap"><label for="df-cap">Maximum fee (₦) — 0 means no cap</label>
+          <input id="df-cap" type="number" min="0" step="any" inputmode="decimal" placeholder="e.g. 1500"></div>
+        <div class="vtu-row"><label for="df-pass">Add the fee on top of what the business pays</label>
+          <input type="checkbox" class="vtu-switch" id="df-pass"></div>
+        <div class="vtu-note" id="df-explain"></div>
+        <div class="vtu-note" id="df-example" style="font-weight:700;"></div>
+        <button class="btn btn-primary btn-sm" id="df-save" style="margin-top:10px;">Save funding fee</button>
+        <div class="subtle" id="df-save-status" style="margin-top:8px;"></div>
       </div>
     </div>
 
@@ -896,11 +933,11 @@
       const note = document.getElementById('mc-note').value.trim();
       if(!business_id){ st.style.color='var(--red)'; st.textContent='Choose a business.'; return; }
       if(!(amount > 0)){ st.style.color='var(--red)'; st.textContent='Enter an amount.'; return; }
-      if(reference.length < 4){ st.style.color='var(--red)'; st.textContent='Enter the transfer reference (at least 4 characters).'; return; }
+      if(reference && reference.length < 4){ st.style.color='var(--red)'; st.textContent='A reference needs at least 4 characters — or leave it blank to generate one.'; return; }
       if(!confirm(`Add ${fmtNaira(amount)} to this business's wallet? This is real money and is recorded in the audit log.`)) return;
       st.style.color='var(--text-dim)'; st.textContent='Crediting…'; root.disabled = true;
-      try{ await callAdminApi('manual_wallet_credit', { business_id, amount, reference, note });
-        st.style.color='var(--green)'; st.textContent='Credited ✅';
+      try{ const cr = await callAdminApi('manual_wallet_credit', { business_id, amount, reference, note });
+        st.style.color='var(--green)'; st.textContent='Credited ✅ Reference: ' + ((cr && cr.reference) || reference) + ' — the owner has been emailed.';
         document.getElementById('mc-amount').value=''; document.getElementById('mc-reference').value=''; document.getElementById('mc-note').value='';
       }catch(e){ st.style.color='var(--red)'; st.textContent='Error: ' + e.message; }
       root.disabled = false;
@@ -988,17 +1025,20 @@
       document.getElementById('bp-stat-profit').textContent = fmtNaira(r.total_profit);
       document.getElementById('ov-profit').textContent = fmtNaira(r.total_profit);
 
-      // By service
+      // By service — every service is listed (Smile and Spectranet included), even at zero.
       const svcBox = document.getElementById('bp-by-service-box');
-      const services = Object.keys(r.by_service || {});
-      if(services.length === 0){
+      const svcRows = Object.entries(r.by_service || {}).map(([key, v])=>({
+        label: v.label || key, ok: (v.success_count !== undefined ? v.success_count : v.count) || 0,
+        revenue: Number(v.revenue || 0), profit: (v.profit !== undefined ? Number(v.profit) : null),
+      })).sort((x, y)=> y.revenue - x.revenue || x.label.localeCompare(y.label));
+      if(svcRows.length === 0){
         svcBox.innerHTML = '<p class="subtle">No transactions yet.</p>';
       }else{
         svcBox.innerHTML = `
           <div class="table-wrap"><table class="stack">
-            <thead><tr><th>Service</th><th>Count</th><th>Revenue</th></tr></thead>
+            <thead><tr><th>Service</th><th>Successful</th><th>Revenue</th><th>Profit</th></tr></thead>
             <tbody>
-              ${services.map(s=>`<tr><td data-label="Service">${escapeHtml(s)}</td><td data-label="Count">${r.by_service[s].count}</td><td data-label="Revenue">${fmtNaira(r.by_service[s].revenue)}</td></tr>`).join('')}
+              ${svcRows.map(x=>`<tr><td data-label="Service">${escapeHtml(x.label)}</td><td data-label="Successful">${x.ok}</td><td data-label="Revenue">${fmtNaira(x.revenue)}</td><td data-label="Profit">${x.profit === null ? '—' : fmtNaira(x.profit)}</td></tr>`).join('')}
             </tbody>
           </table></div>
         `;
@@ -1072,6 +1112,10 @@
     if(direct != null && String(direct).trim() === idStr) direct = null;
     let size = firstOf(p, ['data','data_size','size','plan_size','volume','data_volume','bundle','allowance','data_amount','data_value']);
     const unit = firstOf(p, ['unit','data_unit','size_unit','plan_unit']);
+    // A size of 0 (e.g. size "0" + unit "GB") is "no size given", never "0GB" — fall through to the plan's name instead.
+    const isZeroSize = (v)=> v != null && /^0+(?:[.,]0+)?\s*(?:KB|MB|GB|TB|[GM])?$/i.test(String(v).trim());
+    if(isZeroSize(size)) size = null;
+    if(isZeroSize(direct)) direct = null;
     if(size != null && unit != null && /^[\d.]+$/.test(String(size).trim())) size = String(size).trim() + ' ' + unit;
     let validity = firstOf(p, ['validity','plan_validity','duration','days','period','expiry','expires','validity_period']);
     if(validity != null && /^\d+$/.test(String(validity).trim())) validity = validity + ' days';
@@ -1204,7 +1248,62 @@
     root.querySelectorAll('.acc-head').forEach(h=>h.addEventListener('click', ()=>h.parentElement.classList.toggle('open')));
   }
 
+  // ===== Wallet funding (deposit) fee =====
+  function dfCompute(amount, type, value, cap, pass){
+    // Mirrors calculateDepositFee in squad-initiate (whole-kobo maths). Display only — the server decides.
+    const amountKobo = Math.round(amount * 100); let feeKobo = 0;
+    if(type === 'percentage'){ feeKobo = Math.round(amountKobo * value / 100); if(cap > 0) feeKobo = Math.min(feeKobo, Math.round(cap * 100)); }
+    else if(type === 'flat'){ feeKobo = Math.round(value * 100); }
+    const gross = pass ? amountKobo + feeKobo : amountKobo, net = pass ? amountKobo : amountKobo - feeKobo;
+    return { pay: gross / 100, fee: feeKobo / 100, credit: net / 100 };
+  }
+  function dfRefresh(){
+    const type = document.getElementById('df-type').value;
+    const value = Number(document.getElementById('df-value').value || 0);
+    const cap = Number(document.getElementById('df-cap').value || 0);
+    const pass = document.getElementById('df-pass').checked;
+    document.getElementById('df-value-wrap').classList.toggle('hidden', type === 'none');
+    document.getElementById('df-cap-wrap').classList.toggle('hidden', type !== 'percentage');
+    document.getElementById('df-value-label').textContent = type === 'percentage' ? 'Fee percentage (%) — e.g. 1.2 means 1.2%' : 'Flat fee (₦) — e.g. 50';
+    document.getElementById('df-explain').textContent = type === 'none' ? 'No fee. The business pays the amount and receives the same amount.'
+      : (pass ? 'The business pays the amount PLUS the fee, and its wallet receives the full amount it asked for.'
+              : 'The business pays the amount; the fee is taken out, so its wallet receives the amount minus the fee.');
+    const c = dfCompute(10000, type, value, cap, pass);
+    document.getElementById('df-example').textContent = `Example, ₦10,000 funding: business pays ${fmtNaira(c.pay)} · fee ${fmtNaira(c.fee)} · wallet receives ${fmtNaira(c.credit)}`;
+  }
+  async function loadDepositFees(){
+    const box = document.getElementById('df-status'); if(!box) return;
+    try{
+      const r = await callAdminApi('get_deposit_fee_settings', {});
+      box.innerHTML = '';
+      document.getElementById('df-type').value = r.deposit_fee_type || 'none';
+      document.getElementById('df-value').value = Number(r.deposit_fee_value || 0);
+      document.getElementById('df-cap').value = Number(r.deposit_fee_cap || 0);
+      document.getElementById('df-pass').checked = !!r.pass_charge_to_user;
+      dfRefresh();
+    }catch(e){ box.innerHTML = `<div class="err">Could not load the funding fee: ${escapeHtml(e.message)}</div>`; }
+  }
+  (function wireDepositFees(){
+    const save = document.getElementById('df-save'); if(!save) return;
+    ['df-type','df-value','df-cap','df-pass'].forEach(id=>{ const el = document.getElementById(id); el.addEventListener('input', dfRefresh); el.addEventListener('change', dfRefresh); });
+    save.addEventListener('click', async ()=>{
+      const st = document.getElementById('df-save-status');
+      const deposit_fee_type = document.getElementById('df-type').value;
+      const deposit_fee_value = Number(document.getElementById('df-value').value || 0);
+      const deposit_fee_cap = Number(document.getElementById('df-cap').value || 0);
+      const pass_charge_to_user = document.getElementById('df-pass').checked;
+      if(deposit_fee_type !== 'none' && !(deposit_fee_value >= 0)){ st.style.color='var(--red)'; st.textContent='Enter the fee (0 or more).'; return; }
+      st.style.color='var(--text-dim)'; st.textContent='Saving…'; save.disabled = true;
+      try{
+        await callAdminApi('set_deposit_fee_settings', { deposit_fee_type, deposit_fee_value, deposit_fee_cap, pass_charge_to_user });
+        st.style.color='var(--green)'; st.textContent='Saved ✅ — applies to the next funding payment.';
+      }catch(e){ st.style.color='var(--red)'; st.textContent='Error: ' + e.message; }
+      save.disabled = false;
+    });
+  })();
+
   async function loadPlatformPricing(){
+    loadDepositFees();
     const statusBox = document.getElementById('pp-status');
     const box = document.getElementById('vtu-accordion');
     try{

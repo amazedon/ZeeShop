@@ -8,6 +8,12 @@
 // HMAC signature below is the authentication):
 //     supabase functions deploy squad-webhook --no-verify-jwt
 //
+// Two kinds of event arrive here (Squad allows one webhook URL):
+//   A. Checkout payments (Pay now)            → { Event: "charge_successful", Body: {...} }
+//   B. Transfers into a DEDICATED ACCOUNT     → flat JSON with virtual_account_number / customer_identifier /
+//      transaction_reference / principal_amount (naira) — matched to a business, fee deducted, credited once.
+//      Anything we can't place on exactly one business goes to unmatched_payments for Super Admin to resolve.
+//
 // Rules this file follows:
 //   1. Nothing is trusted until the HMAC-SHA512 signature (keyed with SQUAD_SECRET_KEY) matches.
 //   2. The amount credited comes from OUR squad_payments row (created at initiation),
@@ -52,6 +58,102 @@ function fireEmail(payload: Record<string, unknown>) {
   if (rt && typeof rt.waitUntil === "function") rt.waitUntil(p);
 }
 
+// ---------------------------------------------------------------------------
+// Dedicated-account transfers
+// ---------------------------------------------------------------------------
+type FeeRules = { type: "percentage" | "flat" | "none"; value: number; cap: number };
+
+async function loadAdminFeeRules(admin: ReturnType<typeof createClient>): Promise<FeeRules> {
+  const { data } = await admin.from("platform_settings").select("deposit_fee_type, deposit_fee_value, deposit_fee_cap").eq("id", 1).maybeSingle();
+  const t = String(data?.deposit_fee_type || "none");
+  return { type: t === "percentage" || t === "flat" ? t : "none", value: Math.max(0, Number(data?.deposit_fee_value) || 0), cap: Math.max(0, Number(data?.deposit_fee_cap) || 0) };
+}
+// Same maths as squad-initiate: whole kobo; the fee is deducted from what arrives; a fee that would swallow it all is dropped.
+function feeOnTransfer(rules: FeeRules, amountNaira: number): number {
+  const k = Math.round(amountNaira * 100);
+  let f = 0;
+  if (rules.type === "percentage") { f = Math.round((k * rules.value) / 100); if (rules.cap > 0) f = Math.min(f, Math.round(rules.cap * 100)); }
+  else if (rules.type === "flat") { f = Math.round(rules.value * 100); }
+  return f >= k ? 0 : f / 100;
+}
+const num = (v: unknown) => { const n = Number(String(v ?? "").replace(/,/g, "")); return Number.isFinite(n) ? n : NaN; };
+const safeToken = (v: unknown) => { const t = String(v ?? "").trim(); return /^[A-Za-z0-9_-]{1,80}$/.test(t) ? t : ""; };
+
+// Squad expects this exact acknowledgement for account-transfer notifications.
+const vaAck = (ref: string, extra: Record<string, unknown> = {}) =>
+  new Response(JSON.stringify({ response_code: 200, transaction_reference: ref, response_description: "Success", ...extra }),
+    { status: 200, headers: { "Content-Type": "application/json" } });
+
+async function handleVirtualAccountTransfer(p: any): Promise<Response> {
+  const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+
+  const indicator = String(p.transaction_indicator ?? "C").toUpperCase();
+  if (indicator !== "C") return vaAck(String(p.transaction_reference ?? ""), { ignored: "not a credit" });
+
+  const ref = safeToken(p.transaction_reference);
+  if (!ref) return fail(400, "No transaction reference");
+  const gross = num(p.principal_amount ?? p.amount ?? p.transaction_amount);
+  if (!(gross > 0)) return fail(400, "Bad amount");
+  const settled = num(p.settled_amount);
+  const squadFeeRaw = num(p.fee_charged);
+  const squadFee = Number.isFinite(squadFeeRaw) ? squadFeeRaw : (Number.isFinite(settled) && settled <= gross ? Math.round((gross - settled) * 100) / 100 : null);
+  const account = safeToken(p.virtual_account_number);
+  const identifier = safeToken(p.customer_identifier);
+
+  const rules = await loadAdminFeeRules(admin);
+  const fee = feeOnTransfer(rules, gross);
+
+  // ---- who does this belong to? exactly ONE business, by identifier and/or account number ----
+  const ids = new Set<string>();
+  if (identifier) {
+    const { data } = await admin.from("businesses").select("id").eq("squad_customer_identifier", identifier).limit(2);
+    (data || []).forEach((r: any) => ids.add(String(r.id)));
+  }
+  if (account) {
+    const { data } = await admin.from("businesses").select("id").eq("squad_account_number", account).limit(2);
+    (data || []).forEach((r: any) => ids.add(String(r.id)));
+  }
+
+  if (ids.size !== 1) {
+    const reason = ids.size === 0 ? "No business matches this dedicated account" : "More than one business matches this dedicated account";
+    const { data: existing } = await admin.from("unmatched_payments").select("id").eq("provider", "squad").eq("reference", ref).maybeSingle();
+    if (!existing) {
+      const { error } = await admin.from("unmatched_payments").insert({
+        provider: "squad", reference: ref, account_number: account || null,
+        amount: Math.round((gross - fee) * 100) / 100, gross_amount: gross, fee, reason, status: "open", credit_key: `squadva:${ref}`,
+      });
+      if (error) { console.error("unmatched insert failed:", error.message); return fail(500, "Retry"); }   // 500 → Squad retries; money is never dropped
+    }
+    await admin.from("squad_va_events").upsert({ tx_ref: ref, business_id: null, account_number: account || null, gross_amount: gross, app_fee: fee, net_credited: 0, squad_fee: squadFee, status: "unmatched", raw: p }, { onConflict: "tx_ref", ignoreDuplicates: true });
+    console.warn("squad-webhook VA unmatched:", ref, reason);
+    return vaAck(ref, { flagged: "unmatched" });
+  }
+
+  const businessId = [...ids][0];
+  const { data: applied, error } = await admin.rpc("squad_apply_va_credit", {
+    p_business_id: businessId, p_ref: ref, p_gross: gross, p_fee: fee, p_squad_fee: squadFee, p_account: account || null, p_raw: p,
+  });
+  if (error) { console.error("squad_apply_va_credit error:", error.message); return fail(500, "Could not credit, retry"); }
+
+  if (applied?.result === "applied") {
+    // Receipt to the business owner — never blocks, never fails the credit.
+    try {
+      const { data: b } = await admin.from("businesses").select("owner_auth_user_id").eq("id", businessId).maybeSingle();
+      let email: string | null = null;
+      if (b?.owner_auth_user_id) { const { data: u } = await admin.auth.admin.getUserById(String(b.owner_auth_user_id)); email = u?.user?.email || null; }
+      const { data: m } = await admin.from("app_users").select("email, first_name").eq("business_id", businessId).eq("role", "master").limit(1).maybeSingle();
+      fireEmail({
+        type: "wallet_funding", to: email || m?.email || null, name: m?.first_name || "",
+        data: { amount: applied.net_credited, fee: applied.app_fee, previous_balance: applied.previous_balance, new_balance: applied.new_balance, reference: ref, method: "Bank transfer (dedicated account)" },
+      });
+    } catch (e) { console.warn("VA receipt email skipped:", e instanceof Error ? e.message : e); }
+    return vaAck(ref, { credited: true });
+  }
+  if (applied?.result === "already") return vaAck(ref, { already: true });
+  console.error("squad-webhook VA unexpected result:", ref, JSON.stringify(applied));
+  return fail(500, "Unexpected result, retry");
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return fail(405, "POST only");
   if (!SQUAD_SECRET_KEY) { console.error("SQUAD_SECRET_KEY is not set"); return fail(500, "Not configured"); }
@@ -67,7 +169,16 @@ Deno.serve(async (req: Request) => {
   let payload: any = null;
   try { payload = JSON.parse(raw); } catch (_e) { return fail(400, "Bad JSON"); }
   if (!valid) valid = safeEqual((await hmacSha512Hex(SQUAD_SECRET_KEY, JSON.stringify(payload))).toLowerCase(), received);
+  if (!valid && payload && typeof payload === "object" && "encrypted_body" in payload) {
+    const { encrypted_body: _drop, ...rest } = payload;
+    valid = safeEqual((await hmacSha512Hex(SQUAD_SECRET_KEY, JSON.stringify(rest))).toLowerCase(), received);
+  }
   if (!valid) { console.warn("squad-webhook: signature mismatch"); return fail(401, "Invalid signature"); }
+
+  // ---- dedicated-account transfer? ----
+  const looksLikeVa = payload && typeof payload === "object" && !payload.Event && !payload.event &&
+    (payload.virtual_account_number || payload.customer_identifier || String(payload.channel || "").toLowerCase() === "virtual-account");
+  if (looksLikeVa) return await handleVirtualAccountTransfer(payload);
 
   // ---- 2. only successful charges matter ----
   const event = String(payload?.Event ?? payload?.event ?? "").toLowerCase();

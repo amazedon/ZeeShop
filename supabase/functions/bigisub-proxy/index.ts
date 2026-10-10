@@ -68,21 +68,94 @@ const BIGISUB_PIN = Deno.env.get("BIGISUB_PIN") || ""; // the Bigisub ACCOUNT's 
 //  1. A permanent account for every business, no BVN/NIN (Flutterwave
 //     "payout subaccount"). Secret: FLW_SECRET_KEY (the same one your
 //     Flutterwave functions already use). Credited by flutterwave-webhook.
-//  2. An optional upgrade to a dedicated account opened with the owner's
-//     BVN or NIN (FonPayEdge). Secret: FONPAYEDGE_SECRET_KEY = your LIVE key
-//     (starts "sck_"). Credited by fonpayedge-webhook.
+//  2. Pay now by card / bank / USSD / transfer through Squad checkout. This
+//     lives in its own function: squad-initiate (start + verify) and
+//     squad-webhook (credit). Nothing about Squad is handled in this file.
 const FLW_SECRET_KEY = Deno.env.get("FLW_SECRET_KEY") || "";
 // Only used by the sync fallback below, whose Flutterwave endpoint doesn't
 // report fees; the webhook uses Flutterwave's own fee figure.
 const FLW_ESTIMATED_FEE_PERCENT = Number(Deno.env.get("FLW_ESTIMATED_FEE_PERCENT")) || 2.0;
-const FONPAYEDGE_SECRET_KEY = Deno.env.get("FONPAYEDGE_SECRET_KEY") || "";
-const FONPAYEDGE_BASE = "https://dashboard.fonpayedge.ng/api/v1";
-// One-time fee the BUSINESS pays from its Bill Wallet to upgrade (refunded if
-// the upgrade fails). Optional Supabase secret PSA_UPGRADE_FEE, default 100.
-const PSA_UPGRADE_FEE = Number(Deno.env.get("PSA_UPGRADE_FEE")) || 100;
-// Each upgraded account is registered under this unique email — the
-// fonpayedge-webhook uses it as a backup way to match a payment.
-const walletEmailFor = (businessId: string) => `${businessId}@wallet.zeeshop.app`;
+
+// ---- Email receipts ------------------------------------------------------
+// Sent through the notify-email function. Fire-and-forget: a failed or slow
+// email can NEVER block, delay or roll back a purchase or a wallet credit.
+function fireEmail(payload: Record<string, unknown>) {
+  try {
+    const p = fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/notify-email`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+      body: JSON.stringify(payload),
+    }).catch((e) => console.warn("notify-email call failed:", e instanceof Error ? e.message : e));
+    // deno-lint-ignore no-explicit-any
+    const rt = (globalThis as any).EdgeRuntime;
+    if (rt && typeof rt.waitUntil === "function") rt.waitUntil(p);
+  } catch (e) { console.warn("fireEmail error:", e instanceof Error ? e.message : e); }
+}
+const NETWORK_NAMES: Record<string, string> = { "1": "MTN", "2": "GLO", "3": "AIRTEL", "4": "9MOBILE" };
+const RECIPIENT_LABEL: Record<string, string> = {
+  cable: "Smartcard / IUC number", isp_smile: "Smile account ID", isp_spectranet: "Spectranet number",
+  betting: "Betting account ID", result_checker: "Exam × quantity",
+};
+// A human plan name for the receipt ("2GB - 30 days"), never "0GB".
+function describePlan(item: any): string {
+  if (!item || typeof item !== "object") return "";
+  const sizeRe = /(\d+(?:[.,]\d+)?)\s*(TB|GB|MB|KB)(?![A-Za-z])/i;
+  const validity = String(item.validity ?? item.plan_validity ?? item.duration ?? "").trim();
+  const withValidity = (s: string) => (validity && !s.toLowerCase().includes(validity.toLowerCase()) ? `${s} - ${validity}` : s);
+  for (const k of ["plan_name", "name", "product_name", "title", "plan", "size", "plan_size", "data_size", "label", "description"]) {
+    const v = item[k];
+    if (typeof v === "string" && v.trim()) {
+      const m = v.match(sizeRe);
+      if (m && parseFloat(m[1].replace(",", ".")) > 0) return withValidity(v.trim().length <= 70 ? v.trim() : `${m[1]}${m[2].toUpperCase()}`);
+    }
+  }
+  const vol = Number(item.plan_volume ?? item.volume ?? item.data_volume);
+  const unit = String(item.unit ?? item.data_unit ?? item.size_unit ?? "").toUpperCase();
+  if (Number.isFinite(vol) && vol > 0 && /^(KB|MB|GB|TB)$/.test(unit)) return withValidity(`${vol}${unit}`);
+  for (const k of ["plan_name", "name", "product_name", "title", "label", "description"]) {
+    const v = item[k];
+    if (typeof v === "string" && v.trim() && !/^\d+$/.test(v.trim())) return withValidity(v.trim().slice(0, 70));
+  }
+  return "";
+}
+function deepFindAny(obj: any, keys: string[], depth = 0): string {
+  if (!obj || typeof obj !== "object" || depth > 6) return "";
+  const byNorm: Record<string, unknown> = {};
+  for (const k of Object.keys(obj)) byNorm[k.toLowerCase().replace(/[^a-z0-9]/g, "")] = obj[k];
+  for (const want of keys) {
+    const v = byNorm[want.toLowerCase().replace(/[^a-z0-9]/g, "")];
+    if ((typeof v === "string" && v.trim()) || (typeof v === "number" && Number.isFinite(v))) return String(v).trim();
+  }
+  for (const v of Object.values(obj)) {
+    if (v && typeof v === "object") { const f = deepFindAny(v, keys, depth + 1); if (f) return f; }
+  }
+  return "";
+}
+function pinsToText(pins: any): string {
+  if (!pins) return "";
+  const arr = Array.isArray(pins) ? pins : [pins];
+  return arr.map((p) => (typeof p === "string" || typeof p === "number" ? String(p) : Object.values(p || {}).join(" / "))).join("; ");
+}
+type ReceiptCtx = {
+  to?: string | null; name?: string; serviceLabel: string; recipient: string; amount: number; reference: string; newBalance: number;
+  provider?: string; planName?: string; token?: string; units?: string; meterType?: string; customerName?: string; extra?: { label: string; value: string; mono?: boolean }[];
+};
+function receiptPayload(service: string, c: ReceiptCtx): Record<string, unknown> {
+  const base = { to: c.to, name: c.name };
+  if (service === "electricity") {
+    return { type: "electricity_token", ...base, data: {
+      provider: c.provider, meter_number: c.recipient, meter_type: c.meterType, customer_name: c.customerName,
+      token: c.token, units: c.units, amount: c.amount, reference: c.reference, new_balance: c.newBalance } };
+  }
+  if (service === "airtime" || service === "data") {
+    return { type: "vtu_purchase", ...base, data: {
+      service: c.serviceLabel, phone: c.recipient, network: c.provider, plan: c.planName,
+      amount: c.amount, reference: c.reference, new_balance: c.newBalance } };
+  }
+  return { type: "bill_payment", ...base, data: {
+    service: c.serviceLabel, provider: c.provider, recipient: c.recipient, recipient_label: RECIPIENT_LABEL[service],
+    plan: c.planName, extra: c.extra, amount: c.amount, reference: c.reference, new_balance: c.newBalance } };
+}
 
 const EP = {
   WALLET_BALANCE: "/api/v2/financial/wallet/balance/",
@@ -307,7 +380,7 @@ Deno.serve(async (req: Request) => {
     if (!businessId) return json({ error: `Your account (app_users.id = ${caller.id}) has no business_id set — it isn't linked to a business on the server yet. This can happen if this account was created/updated locally and hasn't finished syncing. Try again once the device shows fully synced (check the sync status dot), or check that row's business_id directly in Supabase.` }, 404);
     const { data: biz, error: bizErr } = await admin
       .from("businesses")
-      .select("id, name, currency, country, bill_wallet_balance, bill_payments_pin_hash, psa_account_reference, psa_account_number, psa_bank_name, psa_status, psa_last_synced_at, fpe_account_number, fpe_bank_name, fpe_status")
+      .select("id, name, currency, country, bill_wallet_balance, bill_payments_pin_hash, psa_account_reference, psa_account_number, psa_bank_name, psa_status, psa_last_synced_at")
       .eq("id", businessId)
       .maybeSingle();
     if (bizErr) return json({ error: bizErr.message }, 500);
@@ -321,8 +394,6 @@ Deno.serve(async (req: Request) => {
       return json({
         wallet_balance: Number(biz.bill_wallet_balance || 0), currency,
         psa_account_number: biz.psa_account_number || null, psa_bank_name: biz.psa_bank_name || null, psa_status: biz.psa_status || null,
-        fpe_account_number: biz.fpe_account_number || null, fpe_bank_name: biz.fpe_bank_name || null, fpe_status: biz.fpe_status || null,
-        upgrade_fee: PSA_UPGRADE_FEE,
         // Added to electricity amounts so the screen can show ONE final total (never labelled as a fee).
         bill_fees: (await loadPricing(admin)).fees,
         bill_pin_set: !!biz.bill_payments_pin_hash,
@@ -469,6 +540,15 @@ Deno.serve(async (req: Request) => {
         }
       } else if (newStatus !== "pending") {
         await admin.from("bill_transactions").update({ status: newStatus, bigisub_response: data }).eq("id", txId);
+        if (newStatus === "success" && txRow.status !== "success") {
+          const d = inner(data);
+          const { data: bRow } = await admin.from("businesses").select("bill_wallet_balance").eq("id", businessId).maybeSingle();
+          fireEmail(receiptPayload(txRow.service, {
+            to: caller.email || callerData.user.email, name: caller.first_name || "", serviceLabel: txRow.service_label || txRow.service,
+            recipient: String(txRow.recipient || ""), amount: Number(txRow.sale_price || 0), reference: String(txRow.bigisub_tranx_id || txRow.id),
+            newBalance: Number(bRow?.bill_wallet_balance ?? 0), token: d?.token || "", units: deepFindAny(data, ["units", "unit", "kwh", "token_units", "total_units"]),
+          }));
+        }
       }
       return json({ status: newStatus, raw: data }, 200);
     }
@@ -634,7 +714,7 @@ Deno.serve(async (req: Request) => {
     // this independently asks Flutterwave for the account's recent transfers
     // and credits any not seen yet. It runs on a timer while the Add Money
     // screen is open. Returns the CURRENT wallet balance either way, so it
-    // also shows credits from the FonPayEdge account.
+    // also shows credits that arrived another way (e.g. Squad).
     // Each payment is recorded FIRST under a unique reference (the same
     // "flw:<reference>" key the webhook uses), so the webhook and this sync
     // can never credit the same transfer twice.
@@ -681,7 +761,14 @@ Deno.serve(async (req: Request) => {
               });
               if (recErr) continue; // already recorded by the webhook or an earlier sync
               const { error: creditErr } = await admin.rpc("increment_bill_wallet", { p_business_id: String(businessId), p_amount: net });
-              if (creditErr) await admin.from("wallet_topups").delete().eq("id", topupId);
+              if (creditErr) { await admin.from("wallet_topups").delete().eq("id", topupId); continue; }
+              // Receipt for this credit (never blocks the credit).
+              const { data: balRow } = await admin.from("businesses").select("bill_wallet_balance").eq("id", businessId).maybeSingle();
+              const nowBal = Number(balRow?.bill_wallet_balance ?? 0);
+              fireEmail({
+                type: "wallet_funding", to: caller.email || callerData.user.email, name: caller.first_name || "",
+                data: { amount: net, fee: Math.round((gross - net) * 100) / 100, previous_balance: Math.round((nowBal - net) * 100) / 100, new_balance: nowBal, reference: ref, method: "Bank transfer" },
+              });
             }
             await admin.from("businesses").update({ psa_last_synced_at: new Date().toISOString() }).eq("id", businessId);
           }
@@ -691,164 +778,6 @@ Deno.serve(async (req: Request) => {
       }
       const { data: fresh } = await admin.from("businesses").select("bill_wallet_balance").eq("id", businessId).maybeSingle();
       return json({ wallet_balance: Number(fresh?.bill_wallet_balance ?? biz.bill_wallet_balance ?? 0), warning: syncWarning }, 200);
-    }
-
-    // ---------- wallet funding card 2: upgrade to a dedicated account (FonPayEdge) ----------
-    // Opened with the OWNER's BVN or NIN (exactly one), plus first name, last
-    // name and phone. The ID number is passed straight through to FonPayEdge
-    // and is NEVER stored or logged here.
-    // The business pays a one-time PSA_UPGRADE_FEE from its Bill Wallet:
-    //  1. the fee is taken first, in one atomic step (refused if the balance
-    //     is too low),
-    //  2. then the account is opened,
-    //  3. and the fee is REFUNDED automatically if anything fails.
-    // FonPayEdge's own charge for opening the account goes to our FonPayEdge
-    // wallet (and is refunded to us when the bank declines).
-    // Payments into it are credited by fonpayedge-webhook.
-    if (action === "upgrade_to_dedicated_account") {
-      if (!isMaster) return json({ error: "Only the business owner can upgrade the account." }, 403);
-      if (biz.fpe_account_number && biz.fpe_status === "active") {
-        return json({ account_number: biz.fpe_account_number, bank_name: biz.fpe_bank_name, status: biz.fpe_status, fee_charged: 0 }, 200);
-      }
-      if (!FONPAYEDGE_SECRET_KEY) return json({ error: "The upgrade isn't available right now. Please try again later." }, 500);
-
-      // ---- validate what the person typed on the form ----
-      const firstName = String(params.first_name ?? "").trim();
-      const lastName = String(params.last_name ?? "").trim();
-      const phone = String(params.phone ?? "").replace(/[\s-]/g, "");
-      const idType = String(params.id_type ?? "").toLowerCase();
-      const idNumber = String(params.id_number ?? "").replace(/\s/g, "");
-      if (!firstName || !lastName || firstName.length > 100 || lastName.length > 100) {
-        return json({ error: "Please enter your first name and last name." }, 400);
-      }
-      if (!/^\+?\d{7,15}$/.test(phone)) return json({ error: "Please enter a valid phone number." }, 400);
-      if (idType !== "bvn" && idType !== "nin") return json({ error: "Please choose BVN or NIN." }, 400);
-      if (!/^\d{11}$/.test(idNumber)) return json({ error: `Your ${idType.toUpperCase()} must be exactly 11 digits.` }, 400);
-
-      // ---- 1. take the upgrade fee from the wallet (atomic; refuses if short) ----
-      const { error: debitErr } = await admin.rpc("debit_bill_wallet", { p_business_id: String(businessId), p_amount: PSA_UPGRADE_FEE });
-      if (debitErr) {
-        if (/INSUFFICIENT/i.test(debitErr.message)) {
-          return json({ error: `Add at least ₦${PSA_UPGRADE_FEE} to your wallet first.` }, 402);
-        }
-        console.error("upgrade fee debit failed:", debitErr.message);
-        return json({ error: "Could not take the setup fee. Please try again." }, 500);
-      }
-      const feeLogId = crypto.randomUUID();
-      await admin.from("wallet_fee_log").insert({
-        id: feeLogId, business_id: String(businessId), amount: PSA_UPGRADE_FEE, kind: "dedicated_account_setup", status: "charged",
-      });
-      // Gives the fee back (and records why). Used on every failure path.
-      const refundFee = async (reason: string) => {
-        const { error: refundErr } = await admin.rpc("increment_bill_wallet", { p_business_id: String(businessId), p_amount: PSA_UPGRADE_FEE });
-        if (refundErr) console.error("UPGRADE FEE REFUND FAILED for business", businessId, refundErr.message);
-        else await admin.from("wallet_fee_log").update({ status: "refunded", note: reason }).eq("id", feeLogId);
-      };
-
-      try {
-        const fpHeaders = {
-          Authorization: `Bearer ${FONPAYEDGE_SECRET_KEY}`,
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        };
-
-        // Turns FonPayEdge's error codes into messages a shop owner can act on.
-        const friendlyError = (fp: any): string => {
-          const code = fp?.code;
-          if (code === "identity_rejected") return "The bank couldn't verify these details. Check your names and your BVN/NIN, then try again.";
-          if (code === "validation_failed") {
-            const firstMsg = fp?.errors ? (Object.values(fp.errors as Record<string, string[]>)[0] || [])[0] : null;
-            return firstMsg || "Some of your details look wrong. Please check them and try again.";
-          }
-          if (code === "provider_unavailable") return "The bank couldn't be reached right now. Please try again shortly.";
-          if (code === "rate_limited") return "Too many tries. Please wait a minute and try again.";
-          // insufficient_funds, invalid/rolled key, business_not_approved, server_error…
-          // are OUR problem, not the customer's — log for us, keep the message neutral.
-          console.error("FonPayEdge createVirtualAccount problem:", code, fp?.message, fp?.requestId);
-          return "The upgrade is temporarily unavailable. Please try again later.";
-        };
-
-        const reference = String(businessId);
-        let fpRes: Response;
-        let fpData: any = null;
-        try {
-          fpRes = await fetch(`${FONPAYEDGE_BASE}/virtual-accounts`, {
-            method: "POST",
-            headers: fpHeaders,
-            body: JSON.stringify({
-              reference, firstName, lastName, phone,
-              email: walletEmailFor(reference),
-              [idType]: idNumber, // sends exactly one of bvn / nin
-            }),
-          });
-          try { fpData = await fpRes.json(); } catch (_e) { /* non-JSON response */ }
-        } catch (_e) {
-          await refundFee("network error");
-          return json({ error: "Could not reach the bank. Your fee was returned — please try again." }, 502);
-        }
-
-        let acct = fpData?.data;
-        let alreadyExisted = false;
-
-        // The account already exists on FonPayEdge's side (e.g. a save failed
-        // last time): they answer 409 duplicate_reference. Find it instead.
-        if (fpRes.status === 409 || fpData?.code === "duplicate_reference") {
-          alreadyExisted = true;
-          acct = null;
-          for (let page = 1; page <= 10 && !acct; page++) {
-            try {
-              const lr = await fetch(`${FONPAYEDGE_BASE}/virtual-accounts?perPage=100&page=${page}`, { headers: fpHeaders });
-              const ld = await lr.json();
-              if (!lr.ok || !Array.isArray(ld?.data)) break;
-              acct = ld.data.find((a: any) => a?.reference === reference) || null;
-              if (page >= (ld?.meta?.lastPage || 1)) break;
-            } catch (_e) { break; }
-          }
-          if (!acct) {
-            await refundFee("existing account not found");
-            return json({ error: "The upgrade is temporarily unavailable. Your fee was returned — please try again later." }, 502);
-          }
-        } else if (!fpRes.ok || fpData?.success !== true || !acct?.accountNumber) {
-          const reason = fpData?.code || `http_${fpRes.status}`;
-          await refundFee(reason);
-          return json({ error: `${friendlyError(fpData)} Your fee was returned.` }, fpRes.status >= 400 && fpRes.status < 500 ? 422 : 502);
-        }
-
-        const accountNumber = String(acct.accountNumber);
-        const bankName = acct.bankName || "Bank";
-        const { error: saveErr } = await admin.from("businesses").update({
-          fpe_account_number: accountNumber, fpe_bank_name: bankName, fpe_status: "active",
-        }).eq("id", businessId);
-        if (saveErr) {
-          // The account IS open on their side but we couldn't store it. Keep
-          // the fee (FonPayEdge charged us); trying again finds the account
-          // via the 409 path above and returns the fee then.
-          console.error("upgrade: account opened but save failed:", saveErr.message);
-          return json({ error: "Your account was opened but couldn't be saved. Please tap Upgrade again — you won't be charged twice." }, 500);
-        }
-
-        // An account that already existed means FonPayEdge did not charge us
-        // again, so give the business its fee back as well.
-        if (alreadyExisted) await refundFee("account already existed");
-
-        const { data: fresh } = await admin.from("businesses").select("bill_wallet_balance").eq("id", businessId).maybeSingle();
-        return json({
-          account_number: accountNumber,
-          bank_name: bankName,
-          status: "active",
-          fee_charged: alreadyExisted ? 0 : PSA_UPGRADE_FEE,
-          wallet_balance: Number(fresh?.bill_wallet_balance ?? 0),
-          // The name the bank has on record — the app uses it to correct the
-          // owner's profile if they typed it differently.
-          verified_first_name: acct?.customer?.firstName ?? null,
-          verified_last_name: acct?.customer?.lastName ?? null,
-        }, 200);
-      } catch (e) {
-        // Anything unexpected before the account was saved: give the fee back.
-        console.error("upgrade_to_dedicated_account error:", e);
-        await refundFee("unexpected error");
-        return json({ error: "Something went wrong. Your fee was returned — please try again." }, 500);
-      }
     }
 
     // ---------- purchases (debit wallet, call Bigisub, log) ----------
@@ -870,7 +799,7 @@ Deno.serve(async (req: Request) => {
         }
       }
       const pricing = await loadPricing(admin);
-      return await handlePurchase(admin, action, params, businessId, biz, pricing, caller.id);
+      return await handlePurchase(admin, action, params, businessId, biz, pricing, caller.id, { email: caller.email || callerData.user.email || null, name: caller.first_name || "" });
     }
 
     return json({ error: "Unknown action." }, 400);
@@ -887,6 +816,11 @@ Deno.serve(async (req: Request) => {
 // list call fails — callers treat that as "can't verify, don't proceed"
 // rather than silently allowing an unchecked purchase.
 async function lookupPlanAmount(path: string, preferredKey: string, matchValue: unknown, matchKeys: string[], addCharges = false): Promise<number | null> {
+  const r = await lookupPlan(path, preferredKey, matchValue, matchKeys, addCharges);
+  return r ? r.amount : null;
+}
+// Same lookup, but also hands back the plan itself so the receipt can name it.
+async function lookupPlan(path: string, preferredKey: string, matchValue: unknown, matchKeys: string[], addCharges = false): Promise<{ amount: number; item: any } | null> {
   try {
     const raw = await bigisub("GET", path);
     const list = normalizeList(raw, preferredKey);
@@ -898,7 +832,7 @@ async function lookupPlanAmount(path: string, preferredKey: string, matchValue: 
     );
     if (!Number.isFinite(amt)) return null;
     // Spectranet plans carry their own `charges`, part of what Bigisub takes.
-    return addCharges ? amt + (Number(item.charges) || 0) : amt;
+    return { amount: addCharges ? amt + (Number(item.charges) || 0) : amt, item };
   } catch (_e) {
     return null;
   }
@@ -965,7 +899,12 @@ async function handlePurchase(
   biz: { bill_wallet_balance: number | null },
   pricing: PlatformPricing,
   userId: string,
+  buyer: { email: string | null; name: string } = { email: null, name: "" },
 ) {
+  let planName = "";       // for the email receipt only
+  let providerName = "";   // network / cable provider / disco / betting platform — receipt only
+  let meterType = "";
+  let customerNameForReceipt = "";
   let serviceLabel = "";
   let recipient = "";
   let estimatedCost = 0; // always resolved to a real, verified amount below before any Bigisub call — see per-branch comments
@@ -979,6 +918,7 @@ async function handlePurchase(
     if (!network || !phone_number || !amount) return json({ error: "Missing network, phone_number, or amount." }, 400);
     if (Number(amount) < MIN_AMOUNT.airtime) return json({ error: `The minimum airtime purchase is ₦${MIN_AMOUNT.airtime}.` }, 400);
     serviceLabel = "Airtime"; recipient = String(phone_number); estimatedCost = Number(amount); pricingService = "airtime";
+    providerName = NETWORK_NAMES[String(network)] || ""; planName = `₦${Number(amount).toLocaleString()} airtime`;
     bigisubCall = () => bigisub("POST", EP.AIRTIME_PURCHASE, { network, phone_number, amount: String(amount), airtime_type: "vtu", pin: BIGISUB_PIN });
 
   } else if (action === "data_purchase") {
@@ -988,22 +928,25 @@ async function handlePurchase(
     // Only a plan ID comes from the client — verify its real price against
     // Bigisub's own plan list rather than trusting whatever the client
     // displayed (client-side prices are for UI only, never authoritative).
-    const price = await lookupPlanAmount(EP.DATA_PLANS, "plans", plan, ["id"]);
+    const found = await lookupPlan(EP.DATA_PLANS, "plans", plan, ["id"]);
+    const price = found ? found.amount : null;
     if (price === null) return json({ error: "Could not verify this plan's price right now — please try again in a moment." }, 502);
     estimatedCost = price;
+    providerName = NETWORK_NAMES[String(network)] || String((found?.item as any)?.network_name || ""); planName = describePlan(found?.item);
     bigisubCall = () => bigisub("POST", EP.DATA_PURCHASE, { network, phone_number, plan, pin: BIGISUB_PIN, ported_number: !!ported_number });
 
   } else if (action === "cable_purchase") {
     const { cable_type, card_no, phone_number, amount, customer_name, plan_id } = params as { cable_type: string; card_no: string; phone_number: string; amount: number; customer_name: string; plan_id?: string | number };
     if (!cable_type || !card_no || !phone_number || !amount || !customer_name) return json({ error: "Missing cable_type, card_no, phone_number, amount, or customer_name (verify the card first)." }, 400);
     serviceLabel = "Cable TV"; recipient = String(card_no); estimatedCost = Number(amount); pricingService = "cable";
+    providerName = String(cable_type).toUpperCase(); customerNameForReceipt = String(customer_name);
     planKey = plan_id != null ? String(plan_id) : null;
     // With a plan id, the price comes from Bigisub's own list — never from the client.
     let cableAmount = Number(amount);
     if (plan_id != null) {
-      const catalogPrice = await lookupPlanAmount(EP.CABLE_PLANS, "plans", plan_id, ["id"]);
-      if (catalogPrice === null) return json({ error: "Could not verify this plan's price right now — please try again in a moment." }, 502);
-      cableAmount = catalogPrice;
+      const catalog = await lookupPlan(EP.CABLE_PLANS, "plans", plan_id, ["id"]);
+      if (catalog === null) return json({ error: "Could not verify this plan's price right now — please try again in a moment." }, 502);
+      cableAmount = catalog.amount; planName = describePlan(catalog.item);
     }
     estimatedCost = cableAmount;
     bigisubCall = () => bigisub("POST", EP.CABLE_PURCHASE, { cable_type: String(cable_type).toLowerCase(), card_no, phone_number, amount: cableAmount, Customer: customer_name, pin: BIGISUB_PIN });
@@ -1013,6 +956,7 @@ async function handlePurchase(
     if (!company || !meter_no || !meter_type || !phone_number || !amount || !customer_name) return json({ error: "Missing company, meter_no, meter_type, phone_number, amount, or customer_name (verify the meter first)." }, 400);
     if (Number(amount) < MIN_AMOUNT.electricity) return json({ error: `The minimum electricity purchase is ₦${MIN_AMOUNT.electricity.toLocaleString()}.` }, 400);
     serviceLabel = "Electricity"; recipient = String(meter_no); estimatedCost = Number(amount); pricingService = "electricity";
+    providerName = String(company); meterType = String(meter_type); customerNameForReceipt = String(customer_name);
     bigisubCall = () => bigisub("POST", EP.ELECTRICITY_PAY, { company, meter_no, meter_type, phone_number, amount: Number(amount), Customer_name: customer_name, pin: BIGISUB_PIN });
 
   } else if (action === "betting_fund") {
@@ -1020,12 +964,14 @@ async function handlePurchase(
     if (!biller_code || !customer_id || !customer_name || !amount || !validation_reference) return json({ error: "Missing biller_code, customer_id, customer_name, amount, or validation_reference (validate first — and don't delay before funding, the reference is short-lived)." }, 400);
     if (Number(amount) < MIN_AMOUNT.betting) return json({ error: `The minimum betting funding is ₦${MIN_AMOUNT.betting}.` }, 400);
     serviceLabel = "Betting Wallet"; recipient = String(customer_id); estimatedCost = Number(amount); pricingService = "betting";
+    providerName = String(biller_code); customerNameForReceipt = String(customer_name);
     bigisubCall = () => bigisub("POST", EP.BETTING_FUND, { biller_code, customer_id, customer_name, amount: Number(amount), validation_reference, pin_code: BIGISUB_PIN });
 
   } else if (action === "result_checker_purchase") {
     const { exam, quantity: qty } = params as { exam: string; quantity: number };
     if (!exam || !qty) return json({ error: "Missing exam or quantity." }, 400);
     serviceLabel = "Result Checker"; recipient = `${exam} × ${qty}`; pricingService = "result_checker"; planKey = String(exam); quantity = Number(qty);
+    providerName = String(exam); planName = `${exam} × ${qty}`;
     const unitPrice = await lookupPlanAmount(EP.RESULT_CHECKER_PRICES, "prices", exam, ["exam", "exam_type", "name"]);
     if (unitPrice === null) return json({ error: "Could not verify this exam's price right now — please try again in a moment." }, 502);
     estimatedCost = unitPrice * quantity;
@@ -1035,7 +981,9 @@ async function handlePurchase(
     const { plan, phone_number, email, account_id } = params as { plan: number; phone_number: string; email: string; account_id: string };
     if (!plan || !phone_number || !email || !account_id) return json({ error: "Missing plan, phone_number, email, or account_id (verify the account first)." }, 400);
     serviceLabel = "ISP — Smile"; recipient = String(account_id); pricingService = "isp_smile"; planKey = String(plan);
-    const price = await lookupPlanAmount(EP.ISP_SMILE_PLANS, "plans", plan, ["id"]);
+    const smilePlan = await lookupPlan(EP.ISP_SMILE_PLANS, "plans", plan, ["id"]);
+    const price = smilePlan ? smilePlan.amount : null;
+    providerName = "Smile"; planName = describePlan(smilePlan?.item);
     if (price === null) return json({ error: "Could not verify this plan's price right now — please try again in a moment." }, 502);
     estimatedCost = price;
     bigisubCall = () => bigisub("POST", EP.ISP_SMILE_TOPUP, { plan, phone_number, email, account_id, pin: BIGISUB_PIN });
@@ -1044,7 +992,9 @@ async function handlePurchase(
     const { plan, phone_number, spectranet_number, quantity: qty } = params as { plan: number; phone_number: string; spectranet_number: string; quantity: number };
     if (!plan || !phone_number || !spectranet_number || !qty) return json({ error: "Missing plan, phone_number, spectranet_number, or quantity." }, 400);
     serviceLabel = "ISP — Spectranet"; recipient = String(spectranet_number); pricingService = "isp_spectranet"; planKey = String(plan); quantity = Number(qty);
-    const unitPrice = await lookupPlanAmount(EP.ISP_SPECTRANET_PLANS, "plans", plan, ["id"], true); // price + Spectranet's own charges
+    const spPlan = await lookupPlan(EP.ISP_SPECTRANET_PLANS, "plans", plan, ["id"], true); // price + Spectranet's own charges
+    const unitPrice = spPlan ? spPlan.amount : null;
+    providerName = "Spectranet"; planName = describePlan(spPlan?.item);
     if (unitPrice === null) return json({ error: "Could not verify this plan's price right now — please try again in a moment." }, 502);
     estimatedCost = unitPrice * quantity;
     bigisubCall = () => bigisub("POST", EP.ISP_SPECTRANET_TOPUP, { plan, phone_number, spectranet_number, quantity, pin: BIGISUB_PIN });
@@ -1135,6 +1085,18 @@ async function handlePurchase(
   const finalFields = { cost_price: costPrice, sale_price: salePrice, status, bigisub_tranx_id: bigisubTranxId, bigisub_response: bigisubResponse };
   if (clientRef) await admin.from("bill_transactions").update(finalFields).eq("id", txId);
   else await admin.from("bill_transactions").insert({ id: txId, business_id: businessId, user_id: userId, service: serviceKey, service_label: serviceLabel, recipient, ...finalFields });
+
+  // Receipt email — only for a purchase that actually succeeded. A "pending" one is emailed later,
+  // from the requery action, if and when it turns successful. Never blocks the response.
+  if (status === "success") {
+    const pinsText = pinsToText(payload?.pins);
+    fireEmail(receiptPayload(serviceKey, {
+      to: buyer.email, name: buyer.name, serviceLabel, recipient, amount: salePrice, reference: String(bigisubTranxId || txId), newBalance,
+      provider: providerName, planName, meterType, customerName: customerNameForReceipt,
+      token: payload?.token || "", units: deepFindAny(bigisubResponse, ["units", "unit", "kwh", "token_units", "total_units"]),
+      extra: pinsText ? [{ label: "PIN(s)", value: pinsText, mono: true }] : undefined,
+    }));
+  }
 
   return json({
     ok: true, wallet_balance: newBalance, status, charged: salePrice, token: payload?.token || null,

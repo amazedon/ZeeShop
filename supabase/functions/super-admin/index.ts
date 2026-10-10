@@ -102,6 +102,39 @@ async function bigisub(method: "GET" | "POST", path: string) {
   return data;
 }
 
+// Receipts go through notify-email. Fire-and-forget: an email problem can never
+// block or undo a wallet credit.
+function fireEmail(payload: Record<string, unknown>) {
+  try {
+    const p = fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/notify-email`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+      body: JSON.stringify(payload),
+    }).catch((e) => console.warn("notify-email call failed:", e instanceof Error ? e.message : e));
+    // deno-lint-ignore no-explicit-any
+    const rt = (globalThis as any).EdgeRuntime;
+    if (rt && typeof rt.waitUntil === "function") rt.waitUntil(p);
+  } catch (e) { console.warn("fireEmail error:", e instanceof Error ? e.message : e); }
+}
+
+// Services shown in Bill Payments → By Service (always listed, even at zero).
+const BILL_SERVICES: { key: string; label: string }[] = [
+  { key: "airtime", label: "Airtime" }, { key: "data", label: "Data" }, { key: "cable", label: "Cable TV" },
+  { key: "electricity", label: "Electricity" }, { key: "betting", label: "Betting Wallet" },
+  { key: "result_checker", label: "Result Checker" }, { key: "isp_smile", label: "Internet — Smile" },
+  { key: "isp_spectranet", label: "Internet — Spectranet" },
+];
+// Older rows may have been saved as plain "isp"; the label tells Smile from Spectranet.
+function normalizeServiceKey(service: string, label: string | null): string {
+  const s = String(service || "").toLowerCase();
+  const l = String(label || "").toLowerCase();
+  if (s === "isp" || s === "internet" || s.startsWith("isp")) {
+    if (s.includes("smile") || l.includes("smile")) return "isp_smile";
+    if (s.includes("spectranet") || l.includes("spectranet")) return "isp_spectranet";
+  }
+  return s;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   try {
@@ -337,6 +370,45 @@ Deno.serve(async (req: Request) => {
     }
 
     // =====================================================================
+    // DEPOSIT FEES for wallet funding through Squad. Stored in platform_settings (id = 1) and read live
+    // by squad-initiate on every checkout. Needs squad-setup.sql.
+    //   deposit_fee_type    "percentage" | "flat" | "none"
+    //   deposit_fee_value   1.2 = 1.2%  (percentage)  or  50 = ₦50 (flat)
+    //   deposit_fee_cap     max fee in ₦ for percentage fees; 0 = no cap
+    //   pass_charge_to_user true  → payer pays amount + fee, wallet gets the amount
+    //                       false → payer pays the amount, the fee is taken out of what the wallet receives
+    // =====================================================================
+    if (action === "get_deposit_fee_settings") {
+      const { data, error } = await admin.from("platform_settings")
+        .select("deposit_fee_type, deposit_fee_value, deposit_fee_cap, pass_charge_to_user").eq("id", 1).maybeSingle();
+      if (error) return json({ error: "Deposit fee settings aren't set up yet — run squad-setup.sql in Supabase first. (" + error.message + ")" }, 500);
+      return json({
+        deposit_fee_type: data?.deposit_fee_type || "none", deposit_fee_value: Number(data?.deposit_fee_value || 0),
+        deposit_fee_cap: Number(data?.deposit_fee_cap || 0), pass_charge_to_user: !!data?.pass_charge_to_user,
+      }, 200);
+    }
+    if (action === "set_deposit_fee_settings") {
+      const type = String(params.deposit_fee_type || "");
+      if (!["percentage", "flat", "none"].includes(type)) return json({ error: "Choose percentage, flat or none." }, 400);
+      const value = type === "none" ? 0 : Number(params.deposit_fee_value);
+      const cap = type === "percentage" ? Number(params.deposit_fee_cap || 0) : 0;
+      if (!Number.isFinite(value) || value < 0) return json({ error: "Enter a fee of 0 or more." }, 400);
+      if (!Number.isFinite(cap) || cap < 0) return json({ error: "Enter a cap of 0 or more (0 = no cap)." }, 400);
+      if (type === "percentage" && value > 20) return json({ error: "A percentage fee above 20% looks like a typo. Please check it." }, 400);
+      if (type === "flat" && value > 100000) return json({ error: "That flat fee looks too large (max ₦100,000)." }, 400);
+      const pass = !!params.pass_charge_to_user;
+      const { error } = await admin.from("platform_settings").upsert({
+        id: 1, deposit_fee_type: type, deposit_fee_value: value, deposit_fee_cap: cap, pass_charge_to_user: pass, updated_at: new Date().toISOString(),
+      }, { onConflict: "id" });
+      if (error) return json({ error: "Could not save: " + error.message }, 500);
+      await admin.from("audit_log_platform").insert({
+        actor_auth_user_id: callerData.user.id, action: "set_deposit_fee_settings",
+        detail: `Deposit fee: ${type}${type === "none" ? "" : " " + (type === "percentage" ? value + "%" : "₦" + value)}${type === "percentage" && cap > 0 ? ", cap ₦" + cap : ""}, ${pass ? "customer pays the fee on top" : "fee deducted from the wallet credit"}`,
+      });
+      return json({ ok: true }, 200);
+    }
+
+    // =====================================================================
     // Betting platform logos: the platforms come from Bigisub; the logo for
     // each is uploaded here (the app only displays what you upload).
     // =====================================================================
@@ -411,6 +483,24 @@ Deno.serve(async (req: Request) => {
     // the right business and credits it — once (the same credit_key that stops
     // double credits is used, so a late webhook retry can't add it again).
     // =====================================================================
+    // Where a credit receipt goes: the business owner's login email (falls back to a master user's email).
+    const ownerContact = async (businessId: string): Promise<{ email: string | null; name: string }> => {
+      let email: string | null = null; let name = "";
+      const { data: b } = await admin.from("businesses").select("owner_auth_user_id").eq("id", businessId).maybeSingle();
+      if (b?.owner_auth_user_id) {
+        const { data: u } = await admin.auth.admin.getUserById(String(b.owner_auth_user_id));
+        email = u?.user?.email || null;
+      }
+      const { data: m } = await admin.from("app_users").select("email, first_name").eq("business_id", businessId).eq("role", "master").limit(1).maybeSingle();
+      if (!email) email = m?.email || null;
+      name = m?.first_name || "";
+      return { email, name };
+    };
+    const walletBalanceOf = async (businessId: string) => {
+      const { data } = await admin.from("businesses").select("bill_wallet_balance").eq("id", businessId).maybeSingle();
+      return Number(data?.bill_wallet_balance ?? 0);
+    };
+
     const creditOnce = async (businessId: string, amount: number, gross: number | null, fee: number | null, key: string) => {
       const topupId = crypto.randomUUID();
       const { error: insErr } = await admin.from("wallet_topups").insert({
@@ -442,7 +532,17 @@ Deno.serve(async (req: Request) => {
         .update({ status: "resolved", resolved_business_id: String(biz.id), resolved_at: new Date().toISOString() })
         .eq("id", id).eq("status", "open").select("id");
       if (!claimed || claimed.length === 0) return json({ error: "This payment was already handled." }, 409);
+      const prevBal = await walletBalanceOf(String(biz.id));
       const r = await creditOnce(String(biz.id), Number(row.amount), row.gross_amount, row.fee, row.credit_key);
+      if ("ok" in r) {
+        try {
+          const contact = await ownerContact(String(biz.id));
+          fireEmail({
+            type: "wallet_funding", to: contact.email, name: contact.name,
+            data: { amount: Number(row.amount), fee: Number(row.fee || 0), previous_balance: prevBal, new_balance: await walletBalanceOf(String(biz.id)), reference: String(row.reference || row.credit_key || ""), method: "Bank transfer (matched by admin)" },
+          });
+        } catch (e) { console.warn("resolve email skipped:", e instanceof Error ? e.message : e); }
+      }
       if ("error" in r) {
         await admin.from("unmatched_payments").update({ status: "open", resolved_business_id: null, resolved_at: null }).eq("id", id);
         return json({ error: "Could not credit: " + r.error }, 500);
@@ -457,21 +557,36 @@ Deno.serve(async (req: Request) => {
     if (action === "manual_wallet_credit") {
       const businessId = String(params.business_id || "");
       const amount = Math.round(Number(params.amount) * 100) / 100;
-      const reference = String(params.reference || "").trim();
+      let reference = String(params.reference || "").trim();
       const note = String(params.note || "").trim().slice(0, 200);
       if (!businessId) return json({ error: "Choose a business." }, 400);
       if (!Number.isFinite(amount) || amount <= 0 || amount > 1000000) return json({ error: "Enter an amount between ₦1 and ₦1,000,000." }, 400);
-      if (reference.length < 4 || reference.length > 80) return json({ error: "Enter a reference (4–80 characters) — for example the bank transfer reference. The same reference can only be used once." }, 400);
+      // The reference is OPTIONAL. Left blank, a unique one is generated. If typed, it must be 4–80 characters
+      // and can only ever be used once.
+      if (reference && (reference.length < 4 || reference.length > 80)) return json({ error: "A reference must be 4–80 characters (or leave it blank to generate one)." }, 400);
+      const autoReference = !reference;
+      if (autoReference) reference = `MANUAL-CREDIT-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       const { data: biz } = await admin.from("businesses").select("id, name").eq("id", businessId).maybeSingle();
       if (!biz) return json({ error: "That business wasn't found." }, 404);
+      const previousBalance = await walletBalanceOf(String(biz.id));
+      // Admin credits never carry a fee: gross = net = amount, fee = 0.
       const r = await creditOnce(String(biz.id), amount, amount, 0, `manual:${reference}`);
       if ("already" in r) return json({ error: "That reference was already used for a credit. Nothing was added." }, 409);
       if ("error" in r) return json({ error: "Could not credit: " + r.error }, 500);
       await admin.from("audit_log_platform").insert({
         actor_auth_user_id: callerData.user.id, action: "manual_wallet_credit",
-        detail: `₦${amount} credited to ${biz.name} (${biz.id}), reference ${reference}${note ? " — " + note : ""}`,
+        detail: `₦${amount} credited to ${biz.name} (${biz.id}), reference ${reference}${autoReference ? " (auto-generated)" : ""}${note ? " — " + note : ""}`,
       });
-      return json({ ok: true }, 200);
+      // Tell the owner. Never blocks, never fails the credit.
+      try {
+        const contact = await ownerContact(String(biz.id));
+        const newBalance = await walletBalanceOf(String(biz.id));
+        fireEmail({
+          type: "wallet_funding", to: contact.email, name: contact.name,
+          data: { amount, fee: 0, previous_balance: previousBalance, new_balance: newBalance, reference, credited_by_admin: true, method: "Admin credit" },
+        });
+      } catch (e) { console.warn("manual credit email skipped:", e instanceof Error ? e.message : e); }
+      return json({ ok: true, reference }, 200);
     }
 
     if (action === "grant_plan") {
@@ -688,26 +803,45 @@ Deno.serve(async (req: Request) => {
         if (bal > 0 || b.psa_account_number) businessesWithWallet++;
       });
 
-      const { data: txns, error: txErr } = await admin
-        .from("bill_transactions")
-        .select("business_id, service, status, cost_price, sale_price")
-        .order("created_at", { ascending: false })
-        .limit(2000);
-      if (txErr) return json({ error: txErr.message }, 500);
-
-      let totalRevenue = 0, totalCost = 0;
+      // Totals come from the database (every row, not just the latest 2,000), grouped by service.
+      let totalRevenue = 0, totalCost = 0, totalTx = 0;
       const byStatus: Record<string, number> = {};
-      const byService: Record<string, { count: number; revenue: number }> = {};
-      (txns || []).forEach((t: any) => {
-        byStatus[t.status] = (byStatus[t.status] || 0) + 1;
-        if (!byService[t.service]) byService[t.service] = { count: 0, revenue: 0 };
-        byService[t.service].count++;
-        if (t.status === "success") {
-          totalRevenue += Number(t.sale_price || 0);
-          totalCost += Number(t.cost_price || 0);
-          byService[t.service].revenue += Number(t.sale_price || 0);
+      const byService: Record<string, { label: string; count: number; success_count: number; revenue: number; profit: number }> = {};
+      for (const s of BILL_SERVICES) byService[s.key] = { label: s.label, count: 0, success_count: 0, revenue: 0, profit: 0 };
+      let aggregated = false;
+      const { data: stats, error: statsErr } = await admin.rpc("bill_overview_stats");
+      if (!statsErr && Array.isArray(stats)) {
+        aggregated = true;
+        for (const r of stats as any[]) {
+          const key = normalizeServiceKey(r.service, r.service_label);
+          if (!byService[key]) byService[key] = { label: r.service_label || key, count: 0, success_count: 0, revenue: 0, profit: 0 };
+          const n = Number(r.tx_count || 0);
+          byService[key].count += n; totalTx += n;
+          byStatus[r.status] = (byStatus[r.status] || 0) + n;
+          if (r.status === "success") {
+            const rev = Number(r.revenue || 0), cost = Number(r.cost || 0);
+            byService[key].success_count += n; byService[key].revenue += rev; byService[key].profit += rev - cost;
+            totalRevenue += rev; totalCost += cost;
+          }
         }
-      });
+      } else {
+        // squad-setup.sql not run yet: fall back to the latest 2,000 rows (still lists every service).
+        console.warn("bill_overview_stats unavailable, using capped fallback:", statsErr?.message);
+        const { data: txns, error: txErr } = await admin.from("bill_transactions")
+          .select("business_id, service, service_label, status, cost_price, sale_price").order("created_at", { ascending: false }).limit(2000);
+        if (txErr) return json({ error: txErr.message }, 500);
+        for (const t of (txns || []) as any[]) {
+          const key = normalizeServiceKey(t.service, t.service_label);
+          if (!byService[key]) byService[key] = { label: t.service_label || key, count: 0, success_count: 0, revenue: 0, profit: 0 };
+          byService[key].count++; totalTx++;
+          byStatus[t.status] = (byStatus[t.status] || 0) + 1;
+          if (t.status === "success") {
+            const rev = Number(t.sale_price || 0), cost = Number(t.cost_price || 0);
+            byService[key].success_count++; byService[key].revenue += rev; byService[key].profit += rev - cost;
+            totalRevenue += rev; totalCost += cost;
+          }
+        }
+      }
 
       const { data: recent, error: recentErr } = await admin
         .from("bill_transactions")
@@ -721,7 +855,7 @@ Deno.serve(async (req: Request) => {
         bigisub_wallet_balance: bigisubWalletBalance, bigisub_error: bigisubError,
         total_bill_wallet_balance: totalBillWallet, businesses_with_wallet: businessesWithWallet,
         businesses: businesses || [],
-        total_transactions: (txns || []).length, transactions_capped_at: 2000,
+        total_transactions: totalTx, transactions_capped_at: aggregated ? null : 2000,
         total_revenue: totalRevenue, total_cost: totalCost, total_profit: totalRevenue - totalCost,
         by_status: byStatus, by_service: byService,
         recent_transactions: recentWithNames,

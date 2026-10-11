@@ -32,6 +32,16 @@
 //     good_batches, sale_items, employment_record_history), resolve
 //     through their parent row (goods/sales/employment_records) instead.
 //
+// HARDENING (added): RLS is bypassed here, so the checks below ARE the security boundary:
+//   - Deactivated and read-only (viewer) accounts can't write at all.
+//   - For update/delete/insert-over-existing, the EXISTING row's owner is always checked — a caller can no
+//     longer claim a victim's row by putting their own business_id/shop_id in the payload.
+//   - businesses and app_users only accept the columns the app legitimately syncs (COLUMN_ALLOWLIST). Wallet
+//     balance, subscription, payment-account, role and permission columns can only be changed server-side
+//     (bigisub-proxy, verify-payment, update-staff-permissions, super-admin, ...). Anything else is ignored.
+//   - Only the owner (master) may write the businesses row; staff may edit only their own app_users row;
+//     users are never created or deleted through this relay.
+//
 // NOTE ON SCHEMA ASSUMPTIONS: table-to-parent relationships below
 // (PARENT_TABLE_MAP) are inferred from how the client constructs each
 // payload throughout app.html, not confirmed against your live schema
@@ -59,6 +69,14 @@ const ALLOWED_TABLES = new Set([
   "record_only_staff", "rooms", "salary_payments", "sale_items", "sales",
   "shop_notes", "shops", "stock_adjustments", "supplier_purchases", "suppliers",
 ]);
+
+// Columns the app is allowed to write on these two sensitive tables (taken from what app.html actually sends).
+// Everything else is dropped, not rejected, so an old client that includes extra fields keeps working.
+const COLUMN_ALLOWLIST: Record<string, Set<string>> = {
+  businesses: new Set(["id", "name", "business_type", "registration_number", "country", "currency", "timezone", "language",
+    "tax_name", "tax_percent", "logo_data_url", "setup_complete"]),
+  app_users: new Set(["id", "username", "first_name", "last_name", "phone", "email", "password_hash", "is_active"]),
+};
 
 // For child tables with no business_id/shop_id of their own — how to
 // find their parent row and which column on THAT row to resolve scope
@@ -88,7 +106,8 @@ Deno.serve(async (req: Request) => {
     const { data: callerData, error: callerErr } = await admin.auth.getUser(token);
     if (callerErr || !callerData?.user) return json({ error: "Not authenticated." }, 401);
 
-    const { table, op, payload } = await req.json();
+    const { table, op, payload: rawPayload } = await req.json();
+    let payload = rawPayload;
     if (!table || !op || !payload) return json({ error: "Missing table, op, or payload." }, 400);
     if (!ALLOWED_TABLES.has(table)) return json({ error: `Table '${table}' is not permitted through this relay.` }, 403);
     if (!["insert", "update", "delete"].includes(op)) return json({ error: "Invalid op." }, 400);
@@ -97,14 +116,14 @@ Deno.serve(async (req: Request) => {
     // used throughout this app (heal a stale auth_user_id via email match).
     let { data: callerRow } = await admin
       .from("app_users")
-      .select("id, business_id, role, auth_user_id")
+      .select("id, business_id, role, auth_user_id, is_active")
       .eq("auth_user_id", callerData.user.id)
       .maybeSingle();
 
     if (!callerRow && callerData.user.email) {
       const { data: emailMatch } = await admin
         .from("app_users")
-        .select("id, business_id, role, auth_user_id")
+        .select("id, business_id, role, auth_user_id, is_active")
         .ilike("email", callerData.user.email)
         .maybeSingle();
       if (emailMatch) {
@@ -115,6 +134,9 @@ Deno.serve(async (req: Request) => {
     if (!callerRow) return json({ error: "No matching account found for this session." }, 404);
 
     const callerBusinessId = callerRow.business_id;
+    if (callerRow.is_active === false) return json({ error: "This account has been deactivated." }, 403);
+    if (callerRow.role === "viewer") return json({ error: "Read-only accounts can't make changes." }, 403);
+    const isOwner = callerRow.role === "master";
 
     // Resolve which business this write actually belongs to.
     const resolvedBusinessId = await resolveBusinessId(admin, table, op, payload, callerBusinessId);
@@ -123,6 +145,35 @@ Deno.serve(async (req: Request) => {
     }
     if (resolvedBusinessId !== callerBusinessId) {
       return json({ error: "This record does not belong to your business." }, 403);
+    }
+
+    // The row that ALREADY exists (if any) must belong to the caller's business too. The payload's own
+    // business_id/shop_id is attacker-controlled, so it can never be the only thing we check.
+    if (payload.id && table !== "businesses") {
+      const existingOwner = await rowToBusinessId(admin, table, String(payload.id));
+      if (existingOwner !== null && existingOwner !== callerBusinessId) {
+        return json({ error: "This record does not belong to your business." }, 403);
+      }
+    }
+
+    // Per-table rules for the two sensitive tables.
+    if (table === "businesses") {
+      if (!isOwner) return json({ error: "Only the owner can change business details." }, 403);
+      if (op === "delete") return json({ error: "Not permitted." }, 403);
+    }
+    if (table === "app_users") {
+      if (op !== "update") return json({ error: "Users can't be created or deleted this way." }, 403);
+      if (payload.id !== callerRow.id && !isOwner) return json({ error: "You can only edit your own profile." }, 403);
+    }
+    const allow = COLUMN_ALLOWLIST[table];
+    if (allow) {
+      const kept: Record<string, unknown> = {};
+      const dropped: string[] = [];
+      for (const [k, v] of Object.entries(payload)) (allow.has(k) ? (kept[k] = v) : dropped.push(k));
+      if (table === "app_users" && !isOwner && "is_active" in kept) { delete kept.is_active; dropped.push("is_active"); }
+      if (dropped.length) console.warn(`sync-relay: ignored protected column(s) on ${table}: ${dropped.join(", ")}`);
+      if (Object.keys(kept).filter((k) => k !== "id").length === 0) return json({ ok: true, ignored: dropped }, 200);
+      payload = kept;
     }
 
     // Authorized — perform the write with the service role client.

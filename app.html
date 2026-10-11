@@ -1454,9 +1454,18 @@ let toastTimer=null;
 // reset automatically on logout — an in-memory object does exactly that
 // without any extra cleanup, since it simply stops being read once a new
 // session starts, and we also explicitly clear it on logout for safety.
-let hiddenBalanceCards = {};
-function isCardHidden(id){ return !!hiddenBalanceCards[id]; }
-function toggleCardHidden(id){ hiddenBalanceCards[id] = !hiddenBalanceCards[id]; refreshMain(); }
+// Which Home number cards the person has hidden with the eye icon. Remembered on this device (per user), so a
+// refresh, a re-open of the app, or logging out and in again keeps them hidden. Never sent to the server.
+const HIDDEN_CARDS_KEY = 'zs_hidden_cards_v1';
+function hiddenCardsAll(){ try{ const o = JSON.parse(localStorage.getItem(HIDDEN_CARDS_KEY) || '{}'); return (o && typeof o === 'object') ? o : {}; }catch(_e){ return {}; } }
+function hiddenCardsUser(){ return String((state && state.sessionUserId) || 'anon'); }
+function isCardHidden(id){ const m = hiddenCardsAll()[hiddenCardsUser()]; return !!(m && m[id]); }
+function toggleCardHidden(id){
+  const all = hiddenCardsAll(); const u = hiddenCardsUser();
+  all[u] = all[u] || {}; all[u][id] = !all[u][id];
+  try{ localStorage.setItem(HIDDEN_CARDS_KEY, JSON.stringify(all)); }catch(_e){ /* private mode: still toggles for this session via the re-render below */ }
+  refreshMain();
+}
 
 function toast(msg){
   clearTimeout(toastTimer);
@@ -1471,7 +1480,142 @@ function toast(msg){
 /* ============================================================
    RENDER ROOT — decides which top-level screen to show
    ============================================================ */
+/* ---------------- SETTINGS WRITE-THROUGH (keeps saved edits from being overwritten by stale data) ----------------
+   Problem this solves: after Save, the server gets the change a moment later (through the sync queue). If the page is
+   refreshed — or a background pull runs — in that gap, the OLD server copy used to be written back over the new
+   local values, so the form "reverted" on the device that made the edit while every other device was fine.
+   How it works now:
+   1. Saving records each edited field as PENDING (kept in localStorage, so it survives a refresh) and pushes at once.
+   2. Pending fields are re-applied on top of whatever a pull wrote, on every render, until the server shows the same value.
+   3. The server's own copy is fetched when Settings opens, on app start, when the tab returns, and every 15s while
+      anything is pending. Fields with no pending edit take the server's value (so a refresh always shows fresh data);
+      pending fields are confirmed (and cleared) once the server matches, or re-pushed if it doesn't.
+   4. A pending edit is dropped after 10 minutes (or 3 failed re-pushes + 2 minutes) so the server can never be
+      overridden forever by an old edit. */
+const SETTINGS_PENDING_KEY = 'zs_settings_pending_v1';
+const SP_MAX_AGE = 10 * 60 * 1000;
+const SETTINGS_LOCAL_KEYS = {
+  shops: { name:'name', address:'address', phone:'phone', email:'email', receipt_footer:'receiptFooter', receipt_terms:'receiptTerms' },
+  businesses: { name:'name', business_type:'businessType', registration_number:'registrationNumber', tax_name:'taxName', tax_percent:'taxPercent',
+                country:'country', currency:'currency', setup_complete:'setupComplete', logo_data_url:'logoDataUrl' },
+  app_users: { username:'username', first_name:'firstName', last_name:'lastName', phone:'phone', email:'email' },
+};
+let settingsPending = null;
+function spLoad(){
+  if(settingsPending) return settingsPending;
+  try{ settingsPending = JSON.parse(localStorage.getItem(SETTINGS_PENDING_KEY) || '{}') || {}; }catch(_e){ settingsPending = {}; }
+  return settingsPending;
+}
+function spSave(){
+  try{
+    if(Object.keys(spLoad()).length) localStorage.setItem(SETTINGS_PENDING_KEY, JSON.stringify(settingsPending));
+    else localStorage.removeItem(SETTINGS_PENDING_KEY);
+  }catch(_e){ /* storage full / private mode: the in-memory copy still protects this session */ }
+}
+function spTarget(table, id){
+  if(table === 'shops') return state.shops.find(x=>x.id===id);
+  if(table === 'businesses') return (state.business && state.business.id === id) ? state.business : null;
+  if(table === 'app_users') return state.users.find(x=>x.id===id);
+  return null;
+}
+// Normalises a server value to the form the app keeps locally.
+function spNorm(table, col, v){
+  if(col === 'tax_percent') return Number(v || 0);
+  if(col === 'setup_complete') return v !== false;
+  if(col === 'tax_name') return (v == null || v === '') ? 'VAT' : v;
+  if(col === 'logo_data_url') return v || null;
+  return v == null ? '' : v;
+}
+// The one call every Settings form uses instead of a bare enqueueSync('…','update',…).
+function enqueueSettings(table, cols){
+  const id = cols.id;
+  const map = SETTINGS_LOCAL_KEYS[table] || {};
+  const p = spLoad(); const key = table + ':' + id;
+  const merged = Object.assign({}, (p[key] && p[key].cols) || {});
+  for(const [c, v] of Object.entries(cols)){
+    if(c === 'id' || !(c in map)) continue;
+    if(typeof v === 'string' && v.length > 700000) continue;      // e.g. a very large logo: don't duplicate it in storage
+    merged[c] = v;
+  }
+  if(Object.keys(merged).length){ p[key] = { table, id, cols: merged, at: Date.now(), pushes: 1 }; spSave(); }
+  save();                                                          // explicit local persist, before the push is even queued
+  enqueueSync(table, 'update', cols);
+  if(typeof flushSyncQueue === 'function'){ try{ flushSyncQueue(); }catch(_e){} }   // push now, don't wait for the next timer
+  setTimeout(()=>syncSettingsWithServer(true), 4000);              // and confirm shortly after
+}
+// Re-applies unconfirmed edits on top of whatever a background pull just wrote. Called at the start of every render.
+function applySettingsPending(){
+  const p = spLoad(); const keys = Object.keys(p); if(!keys.length) return;
+  const now = Date.now(); let dropped = false;
+  for(const key of keys){
+    const rec = p[key];
+    if(now - rec.at > SP_MAX_AGE){ delete p[key]; dropped = true; continue; }
+    const t = spTarget(rec.table, rec.id); if(!t) continue;
+    const map = SETTINGS_LOCAL_KEYS[rec.table] || {};
+    for(const [col, val] of Object.entries(rec.cols)){ const lk = map[col]; if(lk && t[lk] !== val) t[lk] = val; }
+  }
+  if(dropped) spSave();
+}
+function spUserIsTyping(){
+  const a = document.activeElement; const m = document.getElementById('main-content');
+  return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && m && m.contains(a));
+}
+let spSyncing = false, spLastSync = 0;
+async function syncSettingsWithServer(force){
+  if(spSyncing || !navigator.onLine || !state.sessionUserId || !state.business) return;
+  if(!force && Date.now() - spLastSync < 8000) return;
+  spSyncing = true; spLastSync = Date.now();
+  try{
+    const token = await bigisubAuthToken(); if(!token) return;
+    const headers = { 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer ' + token };
+    const bid = encodeURIComponent(state.business.id);
+    const [bRes, sRes] = await Promise.all([
+      fetch(`${SITE_CONTENT_URL}/rest/v1/businesses?select=id,name,business_type,registration_number,tax_name,tax_percent&id=eq.${bid}`, { headers, cache:'no-store' }),
+      fetch(`${SITE_CONTENT_URL}/rest/v1/shops?select=id,name,address,phone,email,receipt_footer,receipt_terms&business_id=eq.${bid}`, { headers, cache:'no-store' }),
+    ]);
+    const bRows = bRes.ok ? await bRes.json() : null;
+    const sRows = sRes.ok ? await sRes.json() : null;
+    if(!Array.isArray(bRows) && !Array.isArray(sRows)) return;                 // offline / blocked: leave everything as it is
+    const p = spLoad(); let changed = false, pendingChanged = false; const now = Date.now();
+    const merge = (table, serverRow)=>{
+      const t = spTarget(table, serverRow.id); if(!t) return;
+      const key = table + ':' + serverRow.id; const rec = p[key]; const map = SETTINGS_LOCAL_KEYS[table];
+      for(const [col, lk] of Object.entries(map)){
+        if(!(col in serverRow)) continue;
+        const sv = spNorm(table, col, serverRow[col]);
+        if(rec && col in rec.cols){
+          if(String(sv) === String(rec.cols[col])){ delete rec.cols[col]; pendingChanged = true; }   // the server has caught up: confirmed
+          continue;                                                                              // otherwise keep the local edit
+        }
+        if(t[lk] !== sv){ t[lk] = sv; changed = true; }                                          // no local edit: take the fresh server value
+      }
+    };
+    if(Array.isArray(bRows) && bRows[0]) merge('businesses', bRows[0]);
+    if(Array.isArray(sRows)) sRows.forEach(r=>merge('shops', r));
+    // Anything still unconfirmed: push it again (a few times), then give up so the server can't be overridden forever.
+    for(const key of Object.keys(p)){
+      const rec = p[key];
+      if(Object.keys(rec.cols).length === 0){ delete p[key]; pendingChanged = true; continue; }
+      const age = now - rec.at;
+      if(rec.pushes >= 3 && age > 120000){ delete p[key]; pendingChanged = true; continue; }
+      if(rec.pushes < 3 && age > 20000 * rec.pushes){
+        rec.pushes++; pendingChanged = true;
+        enqueueSync(rec.table, 'update', Object.assign({ id: rec.id }, rec.cols));
+        if(typeof flushSyncQueue === 'function'){ try{ flushSyncQueue(); }catch(_e){} }
+      }
+    }
+    if(pendingChanged) spSave();
+    if(changed){ save(); if(!spUserIsTyping()) refreshMain(); }
+  }catch(_e){ /* a failed check never disturbs the screen */ }
+  finally{ spSyncing = false; }
+}
+document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState === 'visible') syncSettingsWithServer(true); });
+window.addEventListener('online', ()=>syncSettingsWithServer(true));
+window.addEventListener('load', ()=>{ setTimeout(()=>syncSettingsWithServer(true), 2500); });
+setInterval(()=>{ if(Object.keys(spLoad()).length) syncSettingsWithServer(true); }, 15000);
+
 function render(){
+  applySettingsPending();
   save();
   const app = document.getElementById('app');
   document.body.classList.toggle('market-mode', !!state.marketMode);
@@ -2150,9 +2294,12 @@ async function loadOwnerBusinessData(accessToken, authUserId, emailForLookup){
   if(!state.users.some(x=>x.id===localUser.id)) state.users.push(localUser);
 
   shopRows.forEach(sr=>{
-    if(!state.shops.some(x=>x.id===sr.id)){
-      state.shops.push({ id:sr.id, businessId:sr.business_id, name:sr.name, address:sr.address||'', phone:sr.phone||'', email:sr.email||'' });
-    }
+    // Include the receipt footer/terms, and refresh a shop that already exists on this device — it used to be
+    // skipped, so a stale local copy survived every login.
+    const fields = { businessId:sr.business_id, name:sr.name, address:sr.address||'', phone:sr.phone||'', email:sr.email||'',
+                     receiptFooter:sr.receipt_footer||'', receiptTerms:sr.receipt_terms||'' };
+    const existing = state.shops.find(x=>x.id===sr.id);
+    if(existing) Object.assign(existing, fields); else state.shops.push(Object.assign({ id:sr.id }, fields));
   });
 
   state.sessionUserId = localUser.id;
@@ -2595,9 +2742,9 @@ function bindFinishSetupEvents(){
       u.username = newUsername; u.phone = phone;
       const shop = state.shops.find(s=>s.id===state.currentShopId);
       if(shop){ shop.name = bizName + ' — Main Shop'; shop.phone = phone; }
-      enqueueSync('businesses','update', { id: business().id, name: bizName, country, currency: ccy, setup_complete: true });
-      enqueueSync('app_users','update', { id: u.id, username: newUsername, phone });
-      if(shop) enqueueSync('shops','update', { id: shop.id, name: shop.name, phone });
+      enqueueSettings('businesses', { id: business().id, name: bizName, country, currency: ccy, setup_complete: true });
+      enqueueSettings('app_users', { id: u.id, username: newUsername, phone });
+      if(shop) enqueueSettings('shops', { id: shop.id, name: shop.name, phone });
       logAudit('setup_completed', 'Finished shop setup: '+bizName);
       authError = '';
       toast('All set ✅ Welcome to ZeeShop!');
@@ -3742,21 +3889,19 @@ function dailyDigestBlock(){
   // Bill Wallet Balance is shown universally (to anyone with bill-payments
   // access) rather than being hidden when unfunded — an unconfigured or
   // zero-balance wallet just renders as ₦0 with a "Fund Wallet" prompt so
-  // the feature stays discoverable instead of disappearing. "History" is
-  // always shown regardless of balance; "Fund Wallet" only joins it when
-  // the wallet is empty/unconfigured.
+  // the feature stays discoverable instead of disappearing. "Fund Wallet" and
+  // "History" are both always shown, whatever the balance or load state.
   const walletKnown = billWalletBalance !== null;
   const walletVal = walletKnown ? billWalletBalance : 0;
-  const walletEmpty = !walletKnown || walletVal<=0;
 
   const cards = [
     showWallet ? {
       id:'billwallet', label:'Wallet Balance',
       value: billWalletError ? '—' : fmtMoney(walletVal),
       footer: billWalletError
-        ? `<div class="metric-actions"><button class="metric-action" data-wallet-retry>Couldn't load — Retry</button></div>`
+        ? `<div class="metric-actions"><button class="metric-action" data-wallet-retry>Retry</button><button class="metric-action" data-wallet-history>History</button></div>`
         : `<div class="metric-actions">
-        ${walletEmpty ? `<button class="metric-action" data-wallet-fund>Fund Wallet</button>` : ''}
+        <button class="metric-action" data-wallet-fund>Fund Wallet</button>
         <button class="metric-action" data-wallet-history>History</button>
       </div>`
     } : null,
@@ -3850,7 +3995,7 @@ function bindDashboardEvents(){
   const historyBtn = document.querySelector('[data-wallet-history]');
   if(historyBtn) historyBtn.addEventListener('click', (e)=>{
     e.stopPropagation();
-    route = 'billpayments'; billScreen = 'history'; billHistory = []; billHistoryLoaded = false; billHistoryError = null; render();
+    route = 'billpayments'; billScreen = 'history'; billHistory = []; billTopups = []; billHistoryLoaded = false; billHistoryError = null; render();
   });
   const walletRetryBtn = document.querySelector('[data-wallet-retry]');
   if(walletRetryBtn) walletRetryBtn.addEventListener('click', (e)=>{
@@ -4103,6 +4248,7 @@ function tryAddByBarcode(code){
 }
 
 function bindRouteEvents(){
+  if(route==='settings'){ syncSettingsWithServer(); }   // opening Settings always checks the server's copy
   if(route==='dashboard'){ bindDashboardEvents(); }
   if(route==='sale'){
     const search = document.getElementById('sale-search');
@@ -5496,11 +5642,11 @@ function bindMoreEvents(){
     }
   });
   const lo = document.getElementById('do-logout');
-  if(lo) lo.addEventListener('click', ()=>{ hiddenBalanceCards={}; state.sessionUserId=null; forceFullLogin=false; route='dashboard'; render(); });
+  if(lo) lo.addEventListener('click', ()=>{ state.sessionUserId=null; forceFullLogin=false; route='dashboard'; render(); });
   const flo = document.getElementById('do-full-logout');
   if(flo) flo.addEventListener('click', ()=>{
     if(confirm('Sign out of this business on this device?')){
-      hiddenBalanceCards={}; state.sessionUserId=null; forceFullLogin=true; authMode='login'; pendingSignupData=null; authError=''; route='dashboard';
+      state.sessionUserId=null; forceFullLogin=true; authMode='login'; pendingSignupData=null; authError=''; route='dashboard';
       // A "full" logout has to actually end the Supabase Auth session too —
       // otherwise the device still holds a valid, silently-refreshing
       // session behind the scenes even though the app itself looks logged
@@ -6811,7 +6957,7 @@ function bindProfileEvents(){
     // stayed on whichever device made it, invisible everywhere else
     // (including the person's own second device, and anyone looking them
     // up by name elsewhere in the app).
-    enqueueSync('app_users','update', {
+    enqueueSettings('app_users', {
       id: u.id, username: u.username, first_name: u.firstName, last_name: u.lastName,
       phone: u.phone, email: u.email
     });
@@ -7046,7 +7192,7 @@ function bindSettingsEvents(){
       // they set them. A receipt printed from a different device (or a
       // staff member's phone) would use blank/default values instead of
       // the real, configured business identity.
-      enqueueSync('businesses','update', { id: business().id, logo_data_url: dataUrl });
+      enqueueSettings('businesses', { id: business().id, logo_data_url: dataUrl });
       logAudit('logo_uploaded', 'Uploaded business logo');
       toast('Logo saved ✅'); render();
     } catch(err){ toast('Could not process that image.'); }
@@ -7056,7 +7202,7 @@ function bindSettingsEvents(){
     if(!confirm('Remove your business logo?')) return;
     business().logoDataUrl = null;
     __logoImgCache = { dataUrl:null, img:null };
-    enqueueSync('businesses','update', { id: business().id, logo_data_url: null });
+    enqueueSettings('businesses', { id: business().id, logo_data_url: null });
     logAudit('logo_removed', 'Removed business logo');
     toast('Logo removed'); render();
   });
@@ -7080,13 +7226,14 @@ function bindSettingsEvents(){
     s.address = document.getElementById('set-address').value.trim();
     s.receiptFooter = document.getElementById('set-footer').value.trim();
     s.receiptTerms = document.getElementById('set-terms').value.trim();
-    enqueueSync('shops','update', { id: s.id, name: s.name, address: s.address, receipt_footer: s.receiptFooter, receipt_terms: s.receiptTerms });
-
     business().businessType = readBizTypeValue('set-biztype');
     business().registrationNumber = document.getElementById('set-regnumber').value.trim();
     business().taxName = document.getElementById('set-taxname').value.trim() || 'VAT';
     business().taxPercent = Number(document.getElementById('set-taxpct').value||0);
-    enqueueSync('businesses','update', {
+    // Local values are already updated above; this records them as pending, saves them to storage right now,
+    // and pushes to the server immediately (see SETTINGS WRITE-THROUGH).
+    enqueueSettings('shops', { id: s.id, name: s.name, address: s.address, receipt_footer: s.receiptFooter, receipt_terms: s.receiptTerms });
+    enqueueSettings('businesses', {
       id: business().id, business_type: business().businessType, registration_number: business().registrationNumber,
       tax_name: business().taxName, tax_percent: business().taxPercent
     });
@@ -8650,6 +8797,7 @@ let billForm = {
 };
 
 let billHistory = [];
+let billTopups = [];   // wallet funding credits, shown in the same list as purchases
 let billHistoryLoading = false;
 let billHistoryLoaded = false; // true once a load has finished (even if it returned nothing) — stops an empty history re-loading forever
 let billHistoryError = null; // set on a failed load — stops the auto-retry loop until the person taps Retry
@@ -8970,11 +9118,11 @@ function bindBillPaymentsEvents(){
       });
     });
     const goHist = document.querySelector('[data-bp-goto="history"]');
-    if(goHist) goHist.addEventListener('click', ()=>{ billScreen='history'; billHistory=[]; billHistoryLoaded=false; billHistoryError=null; refreshMain(); });
+    if(goHist) goHist.addEventListener('click', ()=>{ billScreen='history'; billHistory=[]; billTopups=[]; billHistoryLoaded=false; billHistoryError=null; refreshMain(); });
     const topupBtn = document.getElementById('bp-topup-btn');
     if(topupBtn) topupBtn.addEventListener('click', ()=>{ billScreen='topup'; refreshMain(); });
     const historyBtn = document.getElementById('bp-history-btn');
-    if(historyBtn) historyBtn.addEventListener('click', ()=>{ billScreen='history'; billHistory=[]; billHistoryLoaded=false; billHistoryError=null; refreshMain(); });
+    if(historyBtn) historyBtn.addEventListener('click', ()=>{ billScreen='history'; billHistory=[]; billTopups=[]; billHistoryLoaded=false; billHistoryError=null; refreshMain(); });
     return;
   }
   const back = document.getElementById('bp-back');
@@ -9808,7 +9956,7 @@ function bindBillSuccessEvents(){
   const done = document.getElementById('bp-succ-done');
   if(done) done.addEventListener('click', ()=>{ billScreen = 'hub'; billResetForm(); refreshMain(); });
   const hist = document.getElementById('bp-succ-hist');
-  if(hist) hist.addEventListener('click', ()=>{ billScreen = 'history'; billHistory = []; billHistoryLoaded = false; billHistoryError = null; billResetForm(); refreshMain(); });
+  if(hist) hist.addEventListener('click', ()=>{ billScreen = 'history'; billHistory = []; billTopups = []; billHistoryLoaded = false; billHistoryError = null; billResetForm(); refreshMain(); });
 }
 
 /* ---------------- Plan helpers (live Bigisub data) ---------------- */
@@ -9867,11 +10015,18 @@ function screenBillAirtime(){
     ${amount>=BILL_MIN.airtime ? bpTotal('Total Amount', `${bpNetName()} airtime`, billPreviewPrice('airtime', null, 1, amount)) : ''}`;
   return bpSheet(BP_ICONS.phone, 'Buy Airtime', 'Quick and secure airtime top-up', body, bpCta('bp-airtime-confirm','Continue to Payment'));
 }
+// Leaving an amount/quantity box re-draws the screen to refresh the price. Doing that INSTANTLY replaced the
+// "Continue" button in the middle of the tap on it (typing the amount and tapping Continue makes the box lose focus
+// first), so the tap was lost and people had to press twice. Waiting a moment lets the tap finish first.
+function bpLaterRefresh(){
+  clearTimeout(window.__bpRefreshT);
+  window.__bpRefreshT = setTimeout(()=>{ if(!billPurchaseInFlight) refreshMain(); }, 350);
+}
 function bindBillAirtimeEvents(){
   bpBackBind();
   bpBindNetTiles(()=>refreshMain());
   const phone = document.getElementById('bp-phone'); if(phone) phone.addEventListener('input', e=>{ billForm.phone=e.target.value; });
-  const amt = document.getElementById('bp-amount'); if(amt) amt.addEventListener('change', e=>{ billForm.amount=e.target.value; refreshMain(); });
+  const amt = document.getElementById('bp-amount'); if(amt) amt.addEventListener('change', e=>{ billForm.amount=e.target.value; bpLaterRefresh(); });
   if(amt) amt.addEventListener('input', e=>{ billForm.amount=e.target.value; });
   bpBindQuick(()=>refreshMain());
   bpBindBen('phone','bp-phone');
@@ -10122,7 +10277,7 @@ function bindBillElectricityEvents(){
   bpAutoVerify('bp-meter-no', ()=>billForm.meterNo.trim().length>=10, bpVerifyMeter);
   if(mno && billForm.meterNo.trim().length>=10 && !billForm.elecCustomerName && !billForm.elecVerifying && !billForm.elecVerifyError) bpVerifyMeter();
   const phone = document.getElementById('bp-phone'); if(phone) phone.addEventListener('input', e=>{ billForm.phone=e.target.value; });
-  const amt = document.getElementById('bp-amount'); if(amt){ amt.addEventListener('input', e=>{ billForm.amount=e.target.value; }); amt.addEventListener('change', ()=>refreshMain()); }
+  const amt = document.getElementById('bp-amount'); if(amt){ amt.addEventListener('input', e=>{ billForm.amount=e.target.value; }); amt.addEventListener('change', ()=>bpLaterRefresh()); }
   bpBindQuick(()=>refreshMain());
   bpBindBen('meter','bp-meter-no', ()=>bpVerifyMeter());
   const btn = document.getElementById('bp-elec-confirm');
@@ -10217,7 +10372,7 @@ function bindBillBettingEvents(){
   if(cid) cid.addEventListener('input', e=>{ billForm.customerId=e.target.value; billForm.betName=''; billForm.betVerifyError=''; bpSetStatus('bp-bet-status',''); });
   bpAutoVerify('bp-customer-id', ()=>billForm.customerId.trim().length>=4, bpVerifyBet);
   if(cid && billForm.customerId.trim().length>=4 && !billForm.betName && !billForm.betVerifying && !billForm.betVerifyError) bpVerifyBet();
-  const amt = document.getElementById('bp-amount'); if(amt){ amt.addEventListener('input', e=>{ billForm.amount=e.target.value; }); amt.addEventListener('change', ()=>refreshMain()); }
+  const amt = document.getElementById('bp-amount'); if(amt){ amt.addEventListener('input', e=>{ billForm.amount=e.target.value; }); amt.addEventListener('change', ()=>bpLaterRefresh()); }
   bpBindQuick(()=>refreshMain());
   bpBindBen('bet','bp-customer-id', ()=>bpVerifyBet());
   const btn = document.getElementById('bp-betting-confirm');
@@ -10389,7 +10544,7 @@ function bindBillIspEvents(){
   const spNum = document.getElementById('bp-spectranet-number'); if(spNum) spNum.addEventListener('input', e=>{ billForm.spectranetNumber=e.target.value; });
   const phone = document.getElementById('bp-phone'); if(phone) phone.addEventListener('input', e=>{ billForm.phone=e.target.value; });
   const email = document.getElementById('bp-email'); if(email) email.addEventListener('input', e=>{ billForm.email=e.target.value; });
-  const qty = document.getElementById('bp-qty'); if(qty){ qty.addEventListener('input', e=>{ billForm.qty=e.target.value; }); qty.addEventListener('change', ()=>refreshMain()); }
+  const qty = document.getElementById('bp-qty'); if(qty){ qty.addEventListener('input', e=>{ billForm.qty=e.target.value; }); qty.addEventListener('change', ()=>bpLaterRefresh()); }
   bpBindBen('smile','bp-account-id', ()=>bpVerifySmile()); bpBindBen('spectranet','bp-spectranet-number');
   const btn = document.getElementById('bp-isp-confirm');
   if(btn) btn.addEventListener('click', async ()=>{
@@ -10434,9 +10589,27 @@ function bindBillIspEvents(){
 // and shown plainly instead, with a manual Retry button.
 async function bpLoadHistory(){
   billHistoryLoading = true; billHistoryError = null; refreshMain();
-  try{ billHistory = (await callBigisub('list_transactions', {})).transactions || []; }
+  try{ const r = await callBigisub('list_transactions', {}); billHistory = r.transactions || []; billTopups = r.topups || []; }
   catch(e){ billHistoryError = e.message || 'Something went wrong.'; }
   billHistoryLoading = false; billHistoryLoaded = true; refreshMain();
+}
+// Purchases and wallet funding in one list, newest first.
+function bpHistoryRows(){
+  const f = billTopups.map(t=>Object.assign({}, t, { _funding:true }));
+  return billHistory.concat(f).sort((a,b)=> new Date(b.created_at||0) - new Date(a.created_at||0));
+}
+function bpFundingRowHtml(t){
+  const ref = String(t.provider_reference || '');
+  const how = ref.startsWith('squadva:') ? 'Dedicated account' : ref.startsWith('squad:') ? 'Pay Now (card / bank)' : ref.startsWith('manual:') ? 'Credited by Admin' : 'Bank transfer';
+  const fee = Number(t.fee || 0);
+  return `
+    <div class="list-row">
+      <div class="info">
+        <div class="t1">Wallet funding — ${escapeHtml(how)}</div>
+        <div class="t2 subtle">${t.created_at?fmtDateTimeFull(t.created_at):''} · +${fmtMoney(t.amount)}${fee>0 ? ' (fee '+fmtMoney(fee)+')' : ''}</div>
+      </div>
+      <span class="pill pill-green">credited</span>
+    </div>`;
 }
 /* ---------------- MANAGE PRICES (owner only) ---------------- */
 function screenBillHistory(){
@@ -10447,7 +10620,7 @@ function screenBillHistory(){
         <p class="subtle" style="color:var(--red);margin-bottom:10px;">Couldn't load your transaction history: ${escapeHtml(billHistoryError)}</p>
         <button class="btn btn-outline btn-sm" id="bp-history-retry">Retry</button>
       </div>
-    ` : (billHistory.length===0 ? `<p class="subtle">No bill payments yet.</p>` : billHistory.map(tx=>`
+    ` : ((billHistory.length===0 && billTopups.length===0) ? `<p class="subtle">No transactions yet.</p>` : bpHistoryRows().map(tx=> tx._funding ? bpFundingRowHtml(tx) : `
       <div class="list-row">
         <div class="info">
           <div class="t1">${escapeHtml(tx.service_label || tx.service)} — ${escapeHtml(tx.recipient||'')}</div>

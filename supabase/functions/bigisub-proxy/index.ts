@@ -510,7 +510,18 @@ Deno.serve(async (req: Request) => {
         .order("created_at", { ascending: false })
         .limit(50);
       if (error) return json({ error: error.message }, 500);
-      return json({ transactions: txs || [] }, 200);
+      // Wallet funding credits, so "History" shows money coming in as well as going out. If this lookup fails for
+      // any reason the purchases still load — it never breaks the list.
+      let topups: unknown[] = [];
+      const { data: tops, error: topErr } = await admin
+        .from("wallet_topups")
+        .select("id, amount, gross_amount, fee, provider_reference, status, created_at")
+        .eq("business_id", businessId)
+        .order("created_at", { ascending: false })
+        .limit(50);
+      if (!topErr) topups = tops || [];
+      else console.warn("list_transactions: wallet_topups lookup skipped:", topErr.message);
+      return json({ transactions: txs || [], topups }, 200);
     }
 
     if (action === "requery" || action === "betting_requery") {

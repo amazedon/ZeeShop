@@ -8,7 +8,7 @@
 //                                           credits through the same atomic function the webhook uses
 //
 // Two more actions open and show a business's Squad DEDICATED ACCOUNT (a permanent account number):
-//   va_status               → the account (if any), a legacy account (if any), and live fee wording for the card
+//   va_status               → the account (if any) and live fee wording for the card
 //   create_virtual_account  → owner only: { bvn, dob (YYYY-MM-DD), first_name, last_name, phone, email, consent }
 // Settlement is whatever is set as default on the Squad dashboard — nothing about it is hard-coded here.
 // If (and only if) Squad rejects creation for lack of a beneficiary account, set SQUAD_BENEFICIARY_ACCOUNT.
@@ -265,7 +265,7 @@ Deno.serve(async (req: Request) => {
     // ======================= va_status =======================
     if (action === "va_status") {
       const { data: b } = await admin.from("businesses")
-        .select("squad_account_number, squad_bank_name, squad_account_name, fpe_account_number, fpe_bank_name")
+        .select("squad_account_number, squad_bank_name, squad_account_name")
         .eq("id", businessId).maybeSingle();
       const rules = await loadFeeRules(admin);
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -273,8 +273,6 @@ Deno.serve(async (req: Request) => {
         .eq("business_id", businessId).eq("outcome", "rejected").gte("created_at", since);
       return json({
         account: b?.squad_account_number ? { number: b.squad_account_number, bank_name: b.squad_bank_name || "", name: b.squad_account_name || "" } : null,
-        // An older dedicated account that still receives money (read-only; its own webhook keeps crediting it).
-        legacy: b?.fpe_account_number ? { number: b.fpe_account_number, bank_name: b.fpe_bank_name || "" } : null,
         fee: feeWording(rules),
         attempts_left: Math.max(0, VA_DAILY_REJECTIONS - (rejected || 0)),
         is_owner: caller.role === "master",

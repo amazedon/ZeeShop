@@ -9014,8 +9014,12 @@ let billPsaSyncing = false;
 let billPsaPollTimer = null;
 
 /* ---- Squad dedicated account (primary) + state ---- */
-let billVa = null;            // { account, legacy, fee:{badge,short,below_one_percent}, attempts_left, is_owner } from va_status
+let billVa = null;            // { account, fee:{badge,short,below_one_percent}, attempts_left, is_owner } from va_status
 let billVaLoading = false;
+// Accordion: which section is open ('flw' | 'squad' | 'pay' | '' = all closed). null = "use the default":
+// Flutterwave open, or the dedicated account open once the business has one. One open at a time.
+let billAcc = null;
+let billGtkOpen = false;      // the small "Good to know" fold inside the Flutterwave section
 let billVaLoadedAt = 0;
 let billVaOpen = false;       // the verification modal
 let billVaBusy = false;
@@ -9042,39 +9046,90 @@ function bpResetVaForm(){ billVaOpen = false; billVaBusy = false; billVaError = 
   .va-consent input{margin-top:3px;}
   .va-spin{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.5);border-top-color:#fff;border-radius:50%;animation:vaspin .8s linear infinite;vertical-align:-2px;margin-right:6px;}
   @keyframes vaspin{to{transform:rotate(360deg)}}
+  /* accordion */
+  .bp-acc{padding:0 !important;overflow:hidden;margin-top:12px;}
+  .bp-acc-h{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:0;padding:16px;cursor:pointer;color:inherit;font:inherit;-webkit-tap-highlight-color:transparent;}
+  .bp-acc-h:focus-visible,.bp-gtk:focus-visible{outline:2px solid #F2A93B;outline-offset:-2px;border-radius:14px;}
+  .bp-acc-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px;align-items:flex-start;}
+  .bp-acc-title{font-weight:800;font-size:16px;line-height:1.25;}
+  .bp-acc-sum{font-size:12.5px;opacity:.7;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .bp-acc-chev{display:inline-block;transition:transform .25s ease;font-size:18px;opacity:.6;flex:0 0 auto;}
+  .bp-acc.open > .bp-acc-h .bp-acc-chev, .bp-gtk[aria-expanded="true"] .bp-acc-chev{transform:rotate(180deg);}
+  .bp-collapse{display:grid;grid-template-rows:0fr;visibility:hidden;transition:grid-template-rows .26s ease, visibility 0s linear .26s;}
+  .bp-acc.open > .bp-collapse, .bp-collapse.open{grid-template-rows:1fr;visibility:visible;transition:grid-template-rows .26s ease, visibility 0s;}
+  .bp-collapse > .bp-in{overflow:hidden;min-height:0;}
+  .bp-pad{padding:0 16px 16px;}
+  .bp-gtk{display:flex;align-items:center;justify-content:space-between;width:100%;background:none;border:0;padding:10px 0;margin-top:6px;font:inherit;font-weight:700;font-size:13.5px;color:inherit;cursor:pointer;border-top:1px solid rgba(128,128,128,.25);}
+  .bp-hint{font-size:12.5px;opacity:.75;margin:8px 4px 0;text-align:center;}
+  @media (prefers-reduced-motion: reduce){ .bp-collapse,.bp-acc-chev{transition:none !important;} }
   `;
   document.head.appendChild(st);
 })();
 
+// ---- Accordion helpers ----
+function bpAccCurrent(){
+  if(billAcc !== null) return billAcc;
+  return (billVa && billVa.account) ? 'squad' : 'flw';
+}
+function bpAccHtml(id, title, badgeHtml, summary, bodyHtml){
+  const open = bpAccCurrent() === id;
+  return `
+    <div class="card bp-acc ${open?'open':''}" data-acc-id="${id}">
+      <button type="button" class="bp-acc-h" data-acc="${id}" aria-expanded="${open}" aria-controls="bp-acc-${id}">
+        <span class="bp-acc-t">
+          ${badgeHtml || ''}
+          <span class="bp-acc-title">${title}</span>
+          ${summary ? `<span class="bp-acc-sum">${escapeHtml(summary)}</span>` : ''}
+        </span>
+        <span class="bp-acc-chev" aria-hidden="true">▾</span>
+      </button>
+      <div class="bp-collapse" id="bp-acc-${id}" role="region"><div class="bp-in"><div class="bp-pad">${bodyHtml}</div></div></div>
+    </div>`;
+}
+// Opens one section and closes the others WITHOUT re-rendering, so typed amounts and focus survive.
+function bpAccToggle(id){
+  const next = bpAccCurrent() === id ? '' : id;
+  billAcc = next;
+  document.querySelectorAll('.bp-acc').forEach(el=>{
+    const on = el.dataset.accId === next;
+    el.classList.toggle('open', on);
+    const h = el.querySelector('.bp-acc-h'); if(h) h.setAttribute('aria-expanded', on ? 'true' : 'false');
+  });
+}
+
 function screenBillTopup(){
   const hasVa = !!(billVa && billVa.account);
+  let pending = null; try{ pending = localStorage.getItem(SQUAD_PENDING_KEY); }catch(_e){}
+  const psaSummary = billPsaLoading ? 'Setting up…' : (billPsaAccountNumber ? `${billPsaAccountNumber}${billPsaBankName ? ' · ' + billPsaBankName : ''}` : 'Get your account number in one tap');
+  const v = bpVaHeaderParts();
   return `
     ${bpHeader('Add Money')}
-    <div class="card">
-      <p class="subtle">Fund your Bill Wallet to buy airtime, data and pay bills.</p>
-      ${bpVaCardHtml()}
-    </div>
-    <div class="card" style="margin-top:12px;">
-      ${hasVa ? `<h3 style="margin:0 0 6px;font-size:16px;">Your account number (still works)</h3>` : ''}
-      ${bpFundCardHtml()}
-    </div>
-    ${bpLegacyCardHtml()}
-    <div class="card" style="margin-top:12px;">
-      ${bpSquadCardHtml()}
-    </div>
+    <p class="subtle" style="margin:0 4px 4px;">Fund your Bill Wallet to buy airtime, data and pay bills.</p>
+    ${bpAccHtml('flw', 'Your account number', '<span class="va-badge" style="margin:0;">Instant • No ID needed</span>', psaSummary, bpFundCardHtml())}
+    ${hasVa ? '' : `<p class="bp-hint">Want lower deposit fees? Upgrade to a dedicated account below.</p>`}
+    ${bpAccHtml('squad', v.title, v.badge, v.summary, bpVaCardHtml())}
+    ${bpAccHtml('pay', 'Pay Now', '', pending ? 'Card, bank, USSD or transfer • payment awaiting confirmation' : 'Card, bank, USSD or transfer', bpSquadCardHtml())}
     ${bpVaModalHtml()}
   `;
 }
 
-// ---- Primary: dedicated account (invitation before, account details after) ----
+// ---- Dedicated account: accordion header (title/badge/summary) and body ----
+function bpVaFee(){ return (billVa && billVa.fee) || { badge:'Save Money • Low Deposit Fee', short:'low', below_one_percent:false }; }
+function bpVaHeaderParts(){
+  const fee = bpVaFee();
+  if(billVa && billVa.account){
+    const act = fee.below_one_percent ? (fee.short === 'no deposit fee' ? 'Active • No Deposit Fee' : 'Active • Low Deposit Fee (<1%)') : 'Active • Low Deposit Fee';
+    return { badge: `<span class="va-badge on" style="margin:0;">${escapeHtml(act)}</span>`, title: 'Your Dedicated Business Account',
+             summary: `${billVa.account.number}${billVa.account.bank_name ? ' · ' + billVa.account.bank_name : ''}` };
+  }
+  return { badge: `<span class="va-badge" style="margin:0;">${escapeHtml(fee.badge)}</span>`, title: 'Upgrade &amp; Get Free Dedicated Account',
+           summary: 'Free setup • instant auto-credit' };
+}
 function bpVaCardHtml(){
-  const fee = (billVa && billVa.fee) || { badge:'Save Money • Low Deposit Fee', short:'low', below_one_percent:false };
+  const fee = bpVaFee();
   if(billVa && billVa.account){
     const a = billVa.account;
-    const act = fee.below_one_percent ? (fee.short === 'no deposit fee' ? 'Active • No Deposit Fee' : 'Active • Low Deposit Fee (<1%)') : 'Active • Low Deposit Fee';
     return `
-      <span class="va-badge on">${escapeHtml(act)}</span>
-      <h3 style="margin:0 0 4px;font-size:17px;">Your Dedicated Business Account</h3>
       <div class="va-acct">
         <div class="t1">${escapeHtml(a.bank_name||'')}</div>
         <div class="n">${escapeHtml(a.number)}</div>
@@ -9087,8 +9142,7 @@ function bpVaCardHtml(){
   }
   const lowTxt = fee.below_one_percent ? (fee.short === 'no deposit fee' ? 'no deposit fee' : 'transfer fees below 1%') : 'low transfer fees';
   return `
-    <span class="va-badge">${escapeHtml(fee.badge)}</span>
-    <h3 style="margin:0 0 4px;font-size:18px;">Get Your Dedicated Business Account</h3>
+    <h3 style="margin:0 0 4px;font-size:17px;">Get Your Dedicated Business Account</h3>
     <p class="subtle">Upgrade to your personal permanent account number and fund your wallet with ${escapeHtml(lowTxt)}!</p>
     <ul class="va-list">
       <li><span><b>100% Free Setup</b></span></li>
@@ -9098,22 +9152,6 @@ function bpVaCardHtml(){
     </ul>
     <button class="btn btn-primary" id="bp-va-open">Upgrade &amp; Get Free Dedicated Account</button>
   `;
-}
-
-// ---- Older dedicated account that still receives money (read-only) ----
-function bpLegacyCardHtml(){
-  const l = billVa && billVa.legacy;
-  if(!l) return '';
-  return `
-    <div class="card" style="margin-top:12px;">
-      <h3 style="margin:0 0 4px;font-size:16px;">Legacy Account (Still Works)</h3>
-      <div style="text-align:center;padding:8px 0;">
-        <div style="font-size:20px;font-weight:700;letter-spacing:1px;margin:6px 0;">${escapeHtml(l.number)}</div>
-        <div class="t1">${escapeHtml(l.bank_name||'')}</div>
-        <button class="btn btn-outline btn-sm" id="bp-legacy-copy" style="margin-top:10px;">Copy Account Number</button>
-        <p class="subtle" style="font-size:11px;margin-top:10px;">Money sent here is still credited automatically. Your new dedicated account above has the lowest fees.</p>
-      </div>
-    </div>`;
 }
 
 // ---- Verification modal ----
@@ -9155,26 +9193,30 @@ function bpFundCardHtml(){
   if(billPsaLoading) return `<p class="subtle">Setting up your account…</p>`;
   if(!billPsaAccountNumber){
     return `
-      <p class="subtle">Get your account number, then transfer to it from any bank and your wallet is credited automatically.</p>
+      <p class="subtle">Get your account number, then transfer to it from any bank and your wallet is credited automatically. No ID needed.</p>
       <button class="btn btn-primary" id="bp-psa-setup">Get My Account Number</button>
     `;
   }
   return `
-    <div style="text-align:center;padding:12px 0;">
-      <div class="zs-note zs-note-amber" style="text-align:left;margin-bottom:10px;">
-        <b>Check the account number every time.</b> Before you send money, come back to this screen and confirm that the account number is still the same.
-      </div>
+    <div style="text-align:center;padding:4px 0 0;">
       <div style="font-size:22px;font-weight:700;letter-spacing:1px;margin:6px 0;">${escapeHtml(billPsaAccountNumber)}</div>
       <div class="t1">${escapeHtml(billPsaBankName||'')}</div>
       <button class="btn btn-outline btn-sm" id="bp-psa-copy" style="margin-top:10px;">Copy Account Number</button>
       <br><button class="btn btn-outline btn-sm" id="bp-psa-sync" style="margin-top:10px;">${billPsaSyncing?'Checking…':'↻ Refresh Balance'}</button>
-      <div class="zs-note zs-note-info" style="text-align:left;margin-top:12px;">
-        <b>Good to know</b>
-        <div style="margin-top:4px;">• Transfer charges will be applied to your payment.</div>
+    </div>
+    <button type="button" class="bp-gtk" id="bp-gtk" aria-expanded="${billGtkOpen}" aria-controls="bp-gtk-body">
+      <span>Good to know</span><span class="bp-acc-chev" aria-hidden="true">▾</span>
+    </button>
+    <div class="bp-collapse ${billGtkOpen?'open':''}" id="bp-gtk-body"><div class="bp-in">
+      <div class="zs-note zs-note-amber" style="margin:4px 0 8px;">
+        <b>Check the account number every time.</b> Before you send money, come back to this screen and confirm that the account number is still the same.
+      </div>
+      <div class="zs-note zs-note-info">
+        <div>• Transfer charges will be applied to your payment.</div>
         <div>• Your wallet is credited with the amount received after charges.</div>
       </div>
-      <p class="subtle" style="font-size:11px;margin-top:10px;">Your balance updates automatically within a few seconds of your transfer.</p>
-    </div>
+      <p class="subtle" style="font-size:11px;margin:8px 0 0;text-align:center;">Your balance updates automatically within a few seconds of your transfer.</p>
+    </div></div>
   `;
 }
 
@@ -9219,7 +9261,6 @@ function bpSquadPreviewHtml(){
 function bpSquadCardHtml(){
   let pending = null; try{ pending = localStorage.getItem(SQUAD_PENDING_KEY); }catch(_e){}
   return `
-    <h3 style="margin:0 0 6px;font-size:16px;">Pay now</h3>
     <p class="subtle">Pay with card, bank, USSD or transfer. Your wallet is credited as soon as the payment is confirmed.</p>
     <div class="field"><label>Amount (₦)</label>
       <input id="bp-sq-amount" type="number" inputmode="numeric" min="1" placeholder="e.g. 5000" value="${escAttr(billSqAmount)}"></div>
@@ -9286,6 +9327,15 @@ function bindBillTopupEvents(){
   if((billPsaAccountNumber || (billVa && billVa.account)) && !billPsaPollTimer) bpStartPsaPolling();
   if(!billVaLoading && Date.now() - billVaLoadedAt > 60000) bpLoadVaStatus();
 
+  // ---- accordion + "Good to know" ----
+  document.querySelectorAll('.bp-acc-h').forEach(h=>h.addEventListener('click', ()=>bpAccToggle(h.dataset.acc)));
+  const gtk = document.getElementById('bp-gtk');
+  if(gtk) gtk.addEventListener('click', ()=>{
+    billGtkOpen = !billGtkOpen;
+    gtk.setAttribute('aria-expanded', billGtkOpen ? 'true' : 'false');
+    const body = document.getElementById('bp-gtk-body'); if(body) body.classList.toggle('open', billGtkOpen);
+  });
+
   // ---- dedicated account ----
   const vaOpen = document.getElementById('bp-va-open');
   if(vaOpen) vaOpen.addEventListener('click', ()=>{
@@ -9297,8 +9347,6 @@ function bindBillTopupEvents(){
   if(vaCopy) vaCopy.addEventListener('click', ()=>{ if(navigator.clipboard) navigator.clipboard.writeText(billVa.account.number); toast('Account number copied'); });
   const vaRefresh = document.getElementById('bp-va-refresh');
   if(vaRefresh) vaRefresh.addEventListener('click', ()=>bpSyncPsaWallet(true));
-  const legacyCopy = document.getElementById('bp-legacy-copy');
-  if(legacyCopy) legacyCopy.addEventListener('click', ()=>{ if(navigator.clipboard) navigator.clipboard.writeText(billVa.legacy.number); toast('Account number copied'); });
 
   if(billVaOpen){
     const track = (id, key, isCheck)=>{
@@ -9336,6 +9384,7 @@ function bindBillTopupEvents(){
       try{
         const r = await callSquad('create_virtual_account', { bvn, dob, first_name: fn, last_name: ln, phone, email, consent: true }, 60000);
         billVa = Object.assign({}, billVa || {}, { account: r.account });
+        billAcc = 'squad';                                 // show the new account number straight away
         bpResetVaForm();                                   // clears the BVN/DOB from memory
         logAudit('bill_wallet_squad_account', `Opened dedicated account ${r.account.number}`);
         toast('Your dedicated account is ready ✅');
@@ -9422,7 +9471,7 @@ function bpStartPsaPolling(){
     bpSyncPsaWallet(false);
   }, 8000);
 }
-window.addEventListener('load', ()=>{ try{ if(new URL(location.href).searchParams.get('squad_ref')) setTimeout(()=>{ bpCheckPendingSquad(false); }, 2500); }catch(_e){} });
+window.addEventListener('load', ()=>{ try{ if(new URL(location.href).searchParams.get('squad_ref')){ billAcc = 'pay'; setTimeout(()=>{ bpCheckPendingSquad(false); }, 2500); } }catch(_e){} });
 function bpStopPsaPolling(){
   if(billPsaPollTimer){ clearInterval(billPsaPollTimer); billPsaPollTimer=null; }
 }

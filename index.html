@@ -54,9 +54,9 @@ nav a:hover{color:var(--ink);}
 /* ---------- hero ---------- */
 .hero{padding:64px 0 48px;}
 .hero-grid{display:grid;grid-template-columns:1.1fr 0.9fr;gap:48px;align-items:center;}
-.hero h1{font-size:40px;line-height:1.08;margin:14px 0 16px;}
-.hero p.lede{font-size:16px;color:var(--text-dim);max-width:46ch;margin-bottom:26px;}
-.hero-ctas{display:flex;gap:12px;flex-wrap:wrap;}
+.hero h1{font-size:40px;line-height:1.08;margin:14px 0 26px;}
+.hero-ctas{display:flex;gap:12px;flex-wrap:nowrap;}
+.hero-ctas .btn{flex:1 1 auto;justify-content:center;white-space:nowrap;}
 .btn{
   display:inline-flex;align-items:center;gap:8px;padding:12px 20px;border-radius:10px;
   font-weight:800;font-size:14px;text-decoration:none;border:1.5px solid transparent;
@@ -95,6 +95,7 @@ section{padding:44px 0;}
 .feat-card .num{font-family:"Courier New",monospace;font-size:11px;color:var(--marigold-dark);font-weight:800;}
 .feat-card h3{font-size:16px;margin:8px 0 6px;}
 .feat-card p{font-size:13.5px;color:var(--text-dim);}
+.feat-wide{grid-column:1 / -1;}
 
 /* ---------- about ---------- */
 .about-box{background:var(--teal);color:var(--paper);border-radius:16px;padding:32px;}
@@ -118,8 +119,13 @@ footer{border-top:1px solid var(--line);padding:28px 0;}
   .feat-grid{grid-template-columns:1fr;}
   .contact-grid{grid-template-columns:1fr;}
   .hero h1{font-size:30px;}
+  .hero-ctas{gap:10px;}
+  .hero-ctas .btn{padding:12px 12px;font-size:13.5px;}
   nav{display:none;}
   .ticket{transform:none;}
+}
+@media (max-width:340px){
+  .hero-ctas .btn{padding:12px 8px;font-size:12.5px;}
 }
 </style>
 </head>
@@ -145,7 +151,6 @@ footer{border-top:1px solid var(--line);padding:28px 0;}
     <div>
       <div class="eyebrow">Shop management software</div>
       <h1>Your shop, in your pocket.</h1>
-      <p class="lede">ZeeShop is shop and inventory management software built for small and medium retailers — track stock, log supplier restocks, manage staff access, and keep an eye on sales, all from your phone.</p>
       <div class="hero-ctas">
         <a class="btn btn-primary" href="app.html">Log In to ZeeShop</a>
         <a class="btn btn-outline" href="#features">See what it does</a>
@@ -201,6 +206,11 @@ footer{border-top:1px solid var(--line);padding:28px 0;}
         <div class="num">04</div>
         <h3>Multi-shop support</h3>
         <p>Manage more than one shop location from the same account, switching between them without losing track of stock.</p>
+      </div>
+      <div class="feat-card feat-wide">
+        <div class="num">05</div>
+        <h3>VTU &amp; bill payments</h3>
+        <p>Sell airtime and data, pay electricity, cable TV and internet bills, and top up betting wallets, all from your ZeeShop wallet, with a receipt for every purchase.</p>
       </div>
     </div>
   </div>

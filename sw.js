@@ -1,5 +1,7 @@
-// Zed — basic service worker for PWA installability and offline shell caching
-const CACHE_NAME = "zed-cache-v1";
+// Zeeshop — basic service worker for PWA installability and offline shell caching
+// Bumped to v2: the old worker kept sync-engine.js cache-first FOREVER, so phones never received sync fixes.
+// Bump this number again whenever you want every device to drop its cached files.
+const CACHE_NAME = "zed-cache-v2";
 const CORE_ASSETS = [
   "/app.html",
   "/manifest.json",
@@ -39,6 +41,25 @@ self.addEventListener("fetch", (event) => {
           return response;
         })
         .catch(() => caches.match(request).then((cached) => cached || caches.match("/app.html")))
+    );
+    return;
+  }
+
+  // App code (JS/CSS/HTML such as sync-engine.js): network-first, so a deployed fix reaches phones the next time they
+  // are online; the cached copy is used only when offline. Everything else (icons, images, fonts): cache-first.
+  const url = new URL(request.url);
+  const isAppCode = url.origin === self.location.origin && /\.(js|css|html|json)$/.test(url.pathname);
+  if (isAppCode) {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response && response.ok) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+          }
+          return response;
+        })
+        .catch(() => caches.match(request))
     );
     return;
   }

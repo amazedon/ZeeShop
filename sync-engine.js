@@ -26,14 +26,28 @@
 const SYNC_QUEUE_KEY = 'zeeshop_sync_queue_v1';
 const SYNC_SUPABASE_URL = 'https://beypnkzrgqrkjttsxlju.supabase.co';
 
+// If the phone's storage is full, writing the queue used to THROW from inside enqueueSync — which stopped the screen's
+// own save handler halfway (the edit was applied on screen but never queued, so it never reached the server).
+// Now: free what is safe to free, retry, and as a last resort keep the queue in memory for this session and tell
+// the app (it shows a "storage full" warning). Nothing here ever throws.
+let __memQueue = null;
 function loadSyncQueue(){
+  if(__memQueue) return __memQueue;       // newer than whatever storage holds
   try{
     return JSON.parse(localStorage.getItem(SYNC_QUEUE_KEY) || '[]');
   }catch(e){ return []; }
 }
 
 function saveSyncQueue(queue){
-  localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(queue));
+  const json = JSON.stringify(queue);
+  try{ localStorage.setItem(SYNC_QUEUE_KEY, json); __memQueue = null; return true; }catch(_e){ /* fall through */ }
+  try{                                      // the dead-letter log is diagnostics only: safe to drop to make room
+    localStorage.removeItem('zeeshop_sync_dead_letter_v1');
+    localStorage.setItem(SYNC_QUEUE_KEY, json); __memQueue = null; return true;
+  }catch(_e){ /* still full */ }
+  __memQueue = queue;
+  try{ window.dispatchEvent(new CustomEvent('zeeshop-storage-full', { detail: { where: 'sync-queue' } })); }catch(_e){}
+  return false;
 }
 
 /**
@@ -101,7 +115,7 @@ function moveToDeadLetter(item, reason){
     const dead = JSON.parse(localStorage.getItem(DEAD_LETTER_KEY) || '[]');
     dead.push({ ...item, failedAt: new Date().toISOString(), reason });
     // Cap it — this is a diagnostic log, not a growing liability.
-    localStorage.setItem(DEAD_LETTER_KEY, JSON.stringify(dead.slice(-100)));
+    try{ localStorage.setItem(DEAD_LETTER_KEY, JSON.stringify(dead.slice(-100))); }catch(_e){ /* full: diagnostics only */ }
   }catch(e){ /* best-effort */ }
 }
 
@@ -444,7 +458,8 @@ async function pullSync(){
       const existing = state.goods.find(x=>x.id===r.id);
       const remoteBatches = batches.filter(b=>b.good_id===r.id).map(b=>({
         id:b.id, qtyRemaining:b.qty_remaining, expiryDate:b.expiry_date, costPrice:b.cost_price,
-        batchNo:b.batch_no, auctionActive:b.auction_active, auctionPrice:b.auction_price, auctionDiscount:b.auction_discount
+        batchNo:b.batch_no, auctionActive:b.auction_active, auctionPrice:b.auction_price, auctionDiscount:b.auction_discount,
+        createdAt:b.created_at || null      // received date: the tie-breaker that keeps batches first-in-first-out
       }));
       const remoteVariants = variants.filter(v=>v.good_id===r.id).map(v=>({
         id:v.id, size:v.size, color:v.color, label:v.label, qty:v.qty
@@ -454,6 +469,7 @@ async function pullSync(){
         const g = {
           id:r.id, shopId:r.shop_id, name:r.name, basePrice:r.base_price, costPrice:r.cost_price,
           emoji:'🛍️', groupPrices:[], barcode:r.barcode||null, reorderLevel:r.reorder_level, hasVariants:r.has_variants,
+          isActive: r.is_active !== false, deactivatedAt: r.deactivated_at || null, deactivationReason: r.deactivation_reason || '',
           batches: remoteBatches, variants: remoteVariants
         };
         if(r.spec){ g.spec = r.spec; g.specLabel = r.spec_label; }
@@ -466,9 +482,12 @@ async function pullSync(){
       // Good already known locally — refresh its own fields (name, price,
       // reorder level, etc.) unless this device has an unpushed edit queued.
       if(!isPending('goods', r.id)){
-        const fresh = { name:r.name, basePrice:r.base_price, costPrice:r.cost_price, barcode:r.barcode||null, reorderLevel:r.reorder_level, hasVariants:r.has_variants };
-        Object.assign(existing, fresh);
-        changed = true;
+        const fresh = { name:r.name, basePrice:r.base_price, costPrice:r.cost_price, barcode:r.barcode||null, reorderLevel:r.reorder_level, hasVariants:r.has_variants,
+                        isActive: r.is_active !== false, deactivatedAt: r.deactivated_at || null, deactivationReason: r.deactivation_reason || '' };
+        // Only count it as a change when something really differs. This used to say "changed" for EVERY good on EVERY
+        // pull, so the whole screen was re-drawn every 60 seconds — wiping anything half-typed in a form.
+        const differs = Object.keys(fresh).some(k => (existing[k] ?? null) !== (fresh[k] ?? null));
+        if(differs){ Object.assign(existing, fresh); changed = true; }
       }
       // Batches and variants are pushed as their OWN queue items (see
       // syncSaleInsert's stock deduction and sale-return handling), so each
@@ -479,7 +498,11 @@ async function pullSync(){
         if(isPending('good_batches', rb.id)) return;
         const idx = existing.batches.findIndex(x=>x.id===rb.id);
         if(idx===-1){ existing.batches.push(rb); changed = true; }
-        else if(JSON.stringify(existing.batches[idx]) !== JSON.stringify(rb)){ existing.batches[idx] = rb; changed = true; }
+        else {
+          const strip = o => { const c = Object.assign({}, o); delete c.createdAt; return JSON.stringify(c); };
+          if(strip(existing.batches[idx]) !== strip(rb)){ existing.batches[idx] = rb; changed = true; }
+          else if(rb.createdAt && !existing.batches[idx].createdAt){ existing.batches[idx].createdAt = rb.createdAt; }   // backfill quietly
+        }
       });
       remoteVariants.forEach(rv=>{
         if(isPending('good_variants', rv.id)) return;
@@ -621,7 +644,12 @@ async function pullSync(){
 
     if(changed && typeof save === 'function'){
       save();
-      if(typeof render === 'function') render();
+      // A full re-draw replaces every input on the screen. If the person is in the middle of typing, hold the
+      // redraw until they leave the field (the data above is already merged and saved).
+      const typing = (()=>{ const a = document.activeElement; return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)); })();
+      if(typeof render === 'function'){
+        if(typing){ window.__renderDeferred = true; } else { render(); }
+      }
     }
   } finally {
     pullInProgress = false;
@@ -631,3 +659,14 @@ async function pullSync(){
 window.addEventListener('online', pullSync);
 setInterval(pullSync, 60000); // less frequent than push — pulling is heavier
 window.addEventListener('load', pullSync);
+
+// Run the redraw that pullSync held back, once the person has left the field they were typing in.
+document.addEventListener('focusout', ()=>{
+  if(!window.__renderDeferred) return;
+  setTimeout(()=>{
+    const a = document.activeElement;
+    if(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;     // moved straight into another field
+    window.__renderDeferred = false;
+    if(typeof render === 'function') render();
+  }, 400);
+});

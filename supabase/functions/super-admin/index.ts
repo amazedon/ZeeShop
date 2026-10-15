@@ -8,7 +8,7 @@
 //      silently does nothing.
 //   2. Security: super-admin.html signs in through the SAME Supabase Auth
 //      pool as every ordinary business owner and staff account. Without a
-//      server-side check, ANY person with ANY valid Zed login (their own
+//      server-side check, ANY person with ANY valid ZeeShop login (their own
 //      shop's owner account is enough) could open this page, sign in with
 //      their own credentials, and see or edit every business on the
 //      platform. This function is what actually enforces "only real super

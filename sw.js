@@ -1,7 +1,7 @@
-// Zeeshop — basic service worker for PWA installability and offline shell caching
+// ZeeShop — basic service worker for PWA installability and offline shell caching
 // Bumped to v2: the old worker kept sync-engine.js cache-first FOREVER, so phones never received sync fixes.
 // Bump this number again whenever you want every device to drop its cached files.
-const CACHE_NAME = "zed-cache-v2";
+const CACHE_NAME = "zeeshop-cache-v2";
 const CORE_ASSETS = [
   "/app.html",
   "/manifest.json",
@@ -82,7 +82,7 @@ self.addEventListener("fetch", (event) => {
    PUSH NOTIFICATIONS
    ============================================================ */
 self.addEventListener("push", (event) => {
-  let data = { title: "Zed", body: "You have a new update.", url: "/app.html" };
+  let data = { title: "ZeeShop", body: "You have a new update.", url: "/app.html" };
   try{ if(event.data) data = { ...data, ...event.data.json() }; }catch(e){ /* fall back to defaults */ }
 
   event.waitUntil(
@@ -119,10 +119,10 @@ self.addEventListener("notificationclick", (event) => {
    (on load, on reconnect) still covers it the next time it's opened.
    ============================================================ */
 self.addEventListener("sync", (event) => {
-  if (event.tag === "zed-flush-sync-queue") {
+  if (event.tag === "zeeshop-flush-sync-queue") {
     event.waitUntil(
       self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
-        clientList.forEach((client) => client.postMessage({ type: "ZED_FLUSH_SYNC_QUEUE" }));
+        clientList.forEach((client) => client.postMessage({ type: "ZEESHOP_FLUSH_SYNC_QUEUE" }));
       })
     );
   }

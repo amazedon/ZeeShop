@@ -1361,7 +1361,30 @@ function load(){
     dismissedHandoverIds:[], /* local-only — per-device "got it" acks, never synced */
     stockAdjustments:[], billTransactions:[], billTxAttribution:{} };
 }
-function save(){ localStorage.setItem(DB_KEY, JSON.stringify(state)); }
+// Saving never throws. If the phone's storage is full: trim old log copies (they are also kept on the server),
+// retry, and only then warn — the app keeps working instead of freezing on a half-finished save.
+function trimLocalData(){
+  if(Array.isArray(state.auditLog) && state.auditLog.length > 300) state.auditLog = state.auditLog.slice(0, 300);
+  if(Array.isArray(state.communicationLog) && state.communicationLog.length > 300) state.communicationLog = state.communicationLog.slice(0, 300);
+  try{ localStorage.removeItem('zeeshop_sync_dead_letter_v1'); }catch(_e){}
+}
+function showStorageBanner(){
+  if(document.getElementById('storage-banner') || !document.body) return;
+  const d = document.createElement('div');
+  d.id = 'storage-banner'; d.setAttribute('role', 'alert');
+  d.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:99999;background:#B42318;color:#fff;padding:10px 14px;font-size:13px;line-height:1.4;text-align:center;';
+  d.innerHTML = '<b>Storage is full on this device.</b> New changes may not be saved here. Your online data is safe — free up space (clear unused browser data) and reload.';
+  document.body.appendChild(d);
+}
+function hideStorageBanner(){ const b = document.getElementById('storage-banner'); if(b) b.remove(); }
+window.addEventListener('zeeshop-storage-full', showStorageBanner);
+function save(){
+  try{ localStorage.setItem(DB_KEY, JSON.stringify(state)); hideStorageBanner(); return true; }
+  catch(_e){
+    try{ trimLocalData(); localStorage.setItem(DB_KEY, JSON.stringify(state)); hideStorageBanner(); return true; }
+    catch(_e2){ showStorageBanner(); return false; }
+  }
+}
 function business(){ return state.business; }
 function currentUser(){ return state.users.find(u=>u.id===state.sessionUserId); }
 function currentShop(){ return state.shops.find(s=>s.id===state.currentShopId); }
@@ -1402,7 +1425,7 @@ function canDo(perm){
 // block, no retry, no visibility. This queue gives it the same resilience
 // everything else already has, without weakening that security boundary.
 let auditPushQueue = JSON.parse(localStorage.getItem('zeeshop_audit_push_queue')||'[]');
-function saveAuditPushQueue(){ localStorage.setItem('zeeshop_audit_push_queue', JSON.stringify(auditPushQueue)); }
+function saveAuditPushQueue(){ try{ localStorage.setItem('zeeshop_audit_push_queue', JSON.stringify(auditPushQueue)); }catch(_e){ showStorageBanner(); } }
 async function pushAuditEntry(entry){
   const { data: sessionData } = await window.sb.auth.getSession();
   const token = sessionData?.session?.access_token;
@@ -1445,6 +1468,17 @@ function logAudit(action,details){
 }
 
 let route = "dashboard";
+let goodsTab = 'active';     // 'active' | 'hidden' (hidden tab is owner-only)
+let goodsFilter = 'all';     // 'all' | 'low' | 'out'
+// An item with no flag is active (every item created before this feature). Hidden items stay in sales history, receipts
+// and returns — they just stop appearing for sale, in search/scan, and in stock alerts.
+function isGoodActive(g){ return !g || g.isActive !== false; }
+// First-in-first-out: earliest expiry first; among equal expiries (e.g. "no expiry"), the batch received first.
+function batchFIFO(a, b){
+  const d = new Date(a.expiryDate) - new Date(b.expiryDate);
+  if(d) return d;
+  return (Date.parse(a.createdAt || '') || 0) - (Date.parse(b.createdAt || '') || 0);
+}
 let cart = []; // {goodId, variantId (optional), qty, note}
 let toastTimer=null;
 
@@ -1615,6 +1649,7 @@ window.addEventListener('load', ()=>{ setTimeout(()=>syncSettingsWithServer(true
 setInterval(()=>{ if(Object.keys(spLoad()).length) syncSettingsWithServer(true); }, 15000);
 
 function render(){
+  if(route !== 'goods'){ goodsFilter = 'all'; goodsTab = 'active'; }    // filters apply only while you are on Goods
   applySettingsPending();
   save();
   const app = document.getElementById('app');
@@ -3243,8 +3278,114 @@ async function submitOpenJoinFlow(){
 /* ============================================================
    MAIN SHELL: topbar + routed screen + bottom nav
    ============================================================ */
+/* ============================================================
+   ADD STOCK / HIDE / REACTIVATE
+   - Add Stock always creates a NEW batch (never edits an old one), so first-in-first-out stays correct and every
+     delivery has its own cost and expiry.
+   - Nothing is ever deleted. "Hide" (discontinue) is the only way an item leaves the selling list; sales history,
+     receipts and returns keep working, and only the owner can hide or reactivate.
+   ============================================================ */
+function hideControlsHtml(g){
+  if(isGoodActive(g)){
+    return `<div class="section-head"><h3>Discontinue</h3></div>
+      <p class="subtle" style="margin-bottom:8px;">Stopped selling this item? Hide it. It disappears from the selling list and stock alerts, but stays in past sales and receipts. Items are never deleted.</p>
+      <button class="btn btn-outline" id="hide-good-btn">Hide / Discontinue Item</button>`;
+  }
+  return `<div class="section-head"><h3>Hidden item</h3></div>
+    <button class="btn btn-primary" id="reactivate-good-btn">Reactivate Item</button>`;
+}
+function reactivateGood(gid){
+  const g = state.goods.find(x=>x.id===gid);
+  if(!g || !isMaster()) return;
+  g.isActive = true; g.deactivatedAt = null; g.deactivationReason = '';
+  enqueueSync('goods','update', { id: g.id, is_active: true, deactivated_at: null, deactivated_by: null, deactivation_reason: null });
+  logAudit('item_reactivated', `${g.name} is active again`);
+  toast(g.name + ' is active again ✅');
+}
+function openAddStockModal(gid){
+  const g = state.goods.find(x=>x.id===gid);
+  if(!g) return;
+  if(!canDo('canAddGoods')){ toast("You don't have permission to add stock."); return; }
+  if(!isGoodActive(g) && !isMaster()){ toast(`${g.name} is hidden. Ask the owner to reactivate it before adding stock.`); return; }
+  const newest = [...g.batches].sort(batchFIFO).pop();
+  const lastCost = (newest && newest.costPrice) || g.costPrice || '';
+  openSheet(`
+    <div class="sheet-head"><h3>Add Stock</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
+    <p class="subtle" style="margin-bottom:12px;">${escapeHtml(g.name)} · ${totalStock(g)} in stock now</p>
+    <div class="field"><label>Quantity received</label><input id="as-qty" type="number" inputmode="numeric" min="1" step="1" placeholder="e.g. 24"></div>
+    <div class="field"><label>Cost price per unit <span class="subtle">(optional)</span></label><input id="as-cost" type="number" inputmode="decimal" min="0" value="${escAttr(lastCost)}"></div>
+    <div class="field"><label>Expiry date <span class="subtle">(optional — leave blank if it doesn't expire)</span></label><input id="as-expiry" type="date"></div>
+    ${!isGoodActive(g) ? `<div class="zs-note zs-note-amber" style="margin-bottom:12px;">This item is hidden. After adding stock you can choose to reactivate it.</div>` : ''}
+    <div class="subtle" id="as-err" style="color:var(--red);min-height:18px;margin-bottom:6px;"></div>
+    <button class="btn btn-primary" id="as-submit">Add Stock</button>
+  `);
+  document.getElementById('as-submit').addEventListener('click', ()=>{
+    const err = (m)=>{ document.getElementById('as-err').textContent = m; };
+    const qty = Number(document.getElementById('as-qty').value);
+    const costRaw = document.getElementById('as-cost').value;
+    const cost = costRaw === '' ? null : Number(costRaw);
+    const expiry = document.getElementById('as-expiry').value;
+    if(!Number.isInteger(qty) || qty<1 || qty>1000000){ err('Enter a whole number of 1 or more.'); return; }
+    if(cost!==null && (!Number.isFinite(cost) || cost<0)){ err('Enter a valid cost price, or leave it blank.'); return; }
+    if(expiry && expiry < todayISO()){ err('That expiry date has already passed.'); return; }
+    const batch = { id: uid('batch'), qtyRemaining: qty, expiryDate: expiry || '2099-12-31', costPrice: cost!==null ? cost : (g.costPrice||0),
+      batchNo: 'B'+Math.floor(Math.random()*9000+1000), auctionActive:false, auctionPrice:null, auctionDiscount:null, createdAt: new Date().toISOString() };
+    g.batches.push(batch);
+    enqueueSync('good_batches','insert', {
+      id: batch.id, good_id: g.id, batch_no: batch.batchNo, qty_remaining: batch.qtyRemaining,
+      expiry_date: batch.expiryDate, cost_price: batch.costPrice,
+      auction_active: false, auction_price: null, auction_discount: null
+    });
+    if(cost!==null && cost!==g.costPrice){            // same rule the supplier restock uses: latest purchase cost going forward
+      g.costPrice = cost;
+      enqueueSync('goods','update', { id: g.id, cost_price: g.costPrice });
+    }
+    logAudit('stock_added', `Added ${qty} × ${g.name}${cost!==null?' at '+fmtMoney(cost):''}${expiry?' (expires '+expiry+')':''}`);
+    closeSheet();
+    if(!isGoodActive(g) && isMaster() && confirm(`${g.name} is hidden. Reactivate it now so it can be sold?`)){ reactivateGood(g.id); }
+    toast('Stock added ✅');
+    render(); openGoodDetail(g.id);
+  });
+}
+const HIDE_REASONS = ['Discontinued', 'Damaged', 'Recalled', 'Expired', 'Lost / missing', 'Other'];
+function openHideGoodModal(gid){
+  const g = state.goods.find(x=>x.id===gid);
+  if(!g) return;
+  if(!isMaster()){ toast('Only the owner can hide an item.'); return; }
+  const stock = totalStock(g);
+  openSheet(`
+    <div class="sheet-head"><h3>Hide ${escapeHtml(g.name)}?</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
+    <p class="subtle" style="margin-bottom:12px;">It will stop showing for sale, in search and scanning, and in stock alerts. Past sales and receipts keep it. You can reactivate it any time from the Hidden tab.</p>
+    <div class="field"><label>Reason</label><select id="hg-reason">${HIDE_REASONS.map(r=>`<option>${r}</option>`).join('')}</select></div>
+    ${stock>0 ? `<div class="zs-note zs-note-amber" style="margin-bottom:12px;"><b>${stock} unit(s) are still in stock.</b> Hiding writes them off: the count goes to 0 and each batch gets a permanent entry in the stock history, so the loss is on record. Sell them first if you can.</div>` : ''}
+    <button class="btn btn-primary" id="hg-confirm">${stock>0 ? `Write off ${stock} &amp; Hide` : 'Hide Item'}</button>
+    <button class="btn btn-outline" id="hg-cancel" style="margin-top:8px;">Cancel</button>
+  `);
+  document.getElementById('hg-cancel').addEventListener('click', closeSheet);
+  document.getElementById('hg-confirm').addEventListener('click', ()=>{
+    const reason = document.getElementById('hg-reason').value;
+    const left = totalStock(g);
+    if(left>0){
+      (g.batches||[]).filter(b=>b.qtyRemaining>0).forEach(b=>{
+        const oldQty = b.qtyRemaining; b.qtyRemaining = 0;
+        enqueueSync('good_batches','update', { id: b.id, qty_remaining: 0 });
+        const adj = { id: uid('adj'), businessId: business().id, shopId: g.shopId, goodId: g.id, goodName: g.name, batchId: b.id,
+          oldQty, newQty: 0, difference: -oldQty, reason: 'Written off — '+reason, adjustedByUserId: state.sessionUserId, adjustedAt: new Date().toISOString() };
+        state.stockAdjustments.unshift(adj);
+        enqueueSync('stock_adjustments','insert', { id: adj.id, business_id: adj.businessId, shop_id: adj.shopId, good_id: adj.goodId, good_name: adj.goodName,
+          batch_id: adj.batchId, old_qty: oldQty, new_qty: 0, difference: -oldQty, reason: adj.reason, adjusted_by_user_id: adj.adjustedByUserId });
+      });
+      (g.variants||[]).filter(v=>v.qty>0).forEach(v=>{ const was = v.qty; v.qty = 0; enqueueSync('good_variants','update', { id: v.id, qty: 0 }); logAudit('stock_written_off', `${g.name} (${v.label}): ${was} written off — ${reason}`); });
+    }
+    g.isActive = false; g.deactivatedAt = new Date().toISOString(); g.deactivationReason = reason;
+    enqueueSync('goods','update', { id: g.id, is_active: false, deactivated_at: g.deactivatedAt, deactivated_by: state.sessionUserId, deactivation_reason: reason });
+    logAudit('item_hidden', `${g.name} hidden (${reason})${left>0?` — ${left} unit(s) written off`:''}`);
+    closeSheet(); toast(g.name + ' is hidden ✅'); render();
+  });
+}
+
 function alertCounts(){
-  const shopGoods = state.goods.filter(g=>g.shopId===state.currentShopId);
+  const shopGoods = state.goods.filter(g=>g.shopId===state.currentShopId && isGoodActive(g));
   let expiring=0;
   shopGoods.forEach(g=> g.batches.forEach(b=>{
     if(b.qtyRemaining<=0) return;
@@ -3525,7 +3666,7 @@ function saveNewLocation(isWarehouse){
 function screenDashboard(){
   const u = currentUser();
   const alerts = alertCounts();
-  const goods = state.goods.filter(g=>g.shopId===state.currentShopId);
+  const goods = state.goods.filter(g=>g.shopId===state.currentShopId && isGoodActive(g));
   const outStock = goods.filter(g=>totalStock(g)<=0);
 
   return `
@@ -3544,11 +3685,11 @@ function screenDashboard(){
       ${alerts.expiring>0?`<div class="card" style="display:flex;align-items:center;gap:10px;" data-goto="goods">
         <div style="font-size:20px;">⏰</div><div style="flex:1;"><b>${alerts.expiring} item(s)</b> expiring within 14 days</div>
       </div>`:''}
-      ${alerts.lowStock>0?`<div class="card" style="display:flex;align-items:center;gap:10px;" data-goto="goods">
+      ${alerts.lowStock>0?`<div class="card" style="display:flex;align-items:center;gap:10px;cursor:pointer;" data-goods-filter="low">
         <div style="font-size:20px;">${ICON_TREND_DOWN}</div><div style="flex:1;"><b>${alerts.lowStock} item(s)</b> running low — worth restocking soon</div>
       </div>`:''}
-      ${outStock.length>0?`<div class="card" style="display:flex;align-items:center;gap:10px;" data-goto="goods">
-        <div style="font-size:20px;">${ICON_INBOX_EMPTY}</div><div style="flex:1;"><b>${outStock.length} item(s)</b> out of stock</div>
+      ${outStock.length>0?`<div class="card" style="display:flex;align-items:center;gap:10px;cursor:pointer;" data-goods-filter="out">
+        <div style="font-size:20px;">${ICON_INBOX_EMPTY}</div><div style="flex:1;"><b>${outStock.length} item(s)</b> out of stock — tap to restock or hide</div>
       </div>`:''}
       ${alerts.dueSoon>0 && isMaster()?`<div class="card" style="display:flex;align-items:center;gap:10px;" data-goto="credit">
         <div style="font-size:20px;">${ICON_CARD}</div><div style="flex:1;"><b>${alerts.dueSoon} customer(s)</b> owe you, due within 2 days</div>
@@ -4045,7 +4186,7 @@ function screenNewSale(){
   if(currentShop()?.isWarehouse){
     return `<h2 class="screen-title">${t('sale_title')}</h2><div class="empty"><div class="ic">${ICON_BOX}</div><b>This is a warehouse</b>${escapeHtml(currentShop().name)} is set up for holding stock only, not selling directly. Switch to a shop using the dropdown at the top, or move stock here to a shop first under More → Warehouse.</div>`;
   }
-  const goods = state.goods.filter(g=>g.shopId===state.currentShopId &&
+  const goods = state.goods.filter(g=>g.shopId===state.currentShopId && isGoodActive(g) &&
     (!saleSearch || g.name.toLowerCase().includes(saleSearch.toLowerCase()) || (g.barcode && g.barcode===saleSearch.trim())));
   const bd = cartBreakdown();
   const customers = state.customers.filter(c=>c.businessId===business().id);
@@ -4207,7 +4348,7 @@ function activePrice(g){
   return g.basePrice; // base price; auction price applied at cart line level via batch
 }
 function fifoBatch(g){
-  const valid = g.batches.filter(b=>b.qtyRemaining>0 && !isExpired(b)).sort((a,b)=>new Date(a.expiryDate)-new Date(b.expiryDate));
+  const valid = g.batches.filter(b=>b.qtyRemaining>0 && !isExpired(b)).sort(batchFIFO);
   return valid[0];
 }
 function isExpired(b){ return daysBetween(todayISO(), b.expiryDate) < 0; }
@@ -4233,6 +4374,7 @@ function tryAddByBarcode(code){
   if(!code) return;
   const g = state.goods.find(x=>x.shopId===state.currentShopId && x.barcode===code);
   if(!g){ saleSearch = code; toast("No item matches that barcode — showing search results."); refreshMain(); return; }
+  if(!isGoodActive(g)){ toast(g.name + ' is hidden (discontinued), so it can\'t be sold.'); return; }
   if(g.hasVariants){ openVariantPickerModal(g.id); return; }
   const stock = totalStock(g);
   const existing = cart.find(c=>c.goodId===g.id && !c.variantId);
@@ -4362,6 +4504,10 @@ function bindRouteEvents(){
 
   document.querySelectorAll('[data-goto]').forEach(el=>{
     el.addEventListener('click', ()=>{ route=el.dataset.goto; render(); });
+  });
+  // Dashboard alert cards open Goods already filtered (active items only) to what needs attention.
+  document.querySelectorAll('[data-goods-filter]').forEach(el=>{
+    el.addEventListener('click', ()=>{ goodsTab='active'; goodsFilter=el.dataset.goodsFilter; route='goods'; render(); });
   });
 }
 function refreshMain(){
@@ -4799,10 +4945,58 @@ function receiptText(s,shop,cust){
 /* ============================================================
    GOODS / STOCK / EXPIRY / AUCTION
    ============================================================ */
+function goodRowHtml(g){
+  const stock = totalStock(g);
+  const hidden = !isGoodActive(g);
+  let flag='', pill='';
+  if(!g.hasVariants && !hidden){
+    const nextBatch = g.batches.filter(b=>b.qtyRemaining>0).sort(batchFIFO)[0];
+    if(nextBatch){
+      const d = daysBetween(todayISO(), nextBatch.expiryDate);
+      if(d<0){ flag='background:var(--red)'; pill=`<span class="pill pill-red">EXPIRED</span>`; }
+      else if(d<=7){ flag='background:var(--red)'; pill = nextBatch.auctionActive? `<span class="pill pill-amber">AUCTION -${nextBatch.auctionDiscount||30}%</span>` : `<span class="pill pill-red">${d}d left</span>`; }
+      else if(d<=14){ flag='background:var(--marigold)'; pill=`<span class="pill pill-amber">${d}d left</span>`; }
+    }
+  }
+  if(hidden) pill = `<span class="pill pill-gray">HIDDEN</span>`;
+  else if(stock<=0) pill = `<span class="pill pill-gray">OUT OF STOCK</span>`;
+  else if(!pill && stock<=(g.reorderLevel||5)) pill = `<span class="pill pill-amber">LOW STOCK</span>`;
+  const subLine = g.hasVariants ? `${(g.variants||[]).length} size/color option(s) · ${stock} total in stock`
+    : g.spec ? `${escapeHtml(g.specLabel||'Spec')}: ${escapeHtml(g.spec)} · ${stock} in stock`
+    : g.dimension && g.dimension.value ? `${escapeHtml(g.dimension.value)} ${escapeHtml(g.dimension.unit||'')} · ${stock} in stock`
+    : `${stock} in stock${isMaster()?(' · cost '+fmtMoney(g.costPrice)):''}`;
+  return `
+  <div class="card" style="display:flex;gap:0;padding:0;overflow:hidden;${hidden?'opacity:.75;':''}">
+    <div class="expiry-flag" style="${flag}"></div>
+    <div style="padding:13px 14px;flex:1;display:flex;align-items:center;gap:12px;" data-good-detail="${g.id}">
+      <div class="thumb">${g.emoji||'🛍️'}</div>
+      <div class="info" style="flex:1;">
+        <div class="t1">${escapeHtml(g.name)}</div>
+        <div class="t2">${subLine}</div>
+      </div>
+      <div class="right">
+        <div style="font-weight:800;">${fmtMoney(g.basePrice)}</div>
+        ${pill}
+      </div>
+    </div>
+  </div>`;
+}
 function screenGoods(){
   const u = currentUser();
-  const goods = state.goods.filter(g=>g.shopId===state.currentShopId);
+  const all = state.goods.filter(g=>g.shopId===state.currentShopId);
+  const activeList = all.filter(isGoodActive);
+  const hiddenList = all.filter(g=>!isGoodActive(g));
+  const showTabs = isMaster();                                   // only the owner can see / reactivate hidden items
+  const tab = (showTabs && goodsTab==='hidden') ? 'hidden' : 'active';
+  const lowList = activeList.filter(g=>{ const s=totalStock(g); return s>0 && s<=(g.reorderLevel||5); });
+  const outList = activeList.filter(g=>totalStock(g)<=0);
+  const shown = tab==='hidden' ? hiddenList : goodsFilter==='low' ? lowList : goodsFilter==='out' ? outList : activeList;
   const bizTypeSet = businessTypeIsSet();
+  const chip = (key, label, n) => `<button type="button" class="btn btn-sm ${goodsFilter===key?'btn-dark':'btn-outline'}" data-goods-chip="${key}" aria-pressed="${goodsFilter===key}">${label} (${n})</button>`;
+  const emptyMsg = tab==='hidden' ? `<div class="empty"><div class="ic">${ICON_BOX}</div><b>No hidden items</b>Items you discontinue show up here, so you can review or reactivate them.</div>`
+    : goodsFilter==='out' ? `<div class="empty"><div class="ic">${ICON_CHECK_CIRCLE}</div><b>Nothing is out of stock</b>Every active item has stock.</div>`
+    : goodsFilter==='low' ? `<div class="empty"><div class="ic">${ICON_CHECK_CIRCLE}</div><b>Nothing is running low</b>Stock levels look healthy.</div>`
+    : `<div class="empty"><div class="ic">${ICON_BOX}</div><b>No goods yet</b>Tap + to add your first item.</div>`;
   return `
     <h2 class="screen-title">Goods &amp; Stock</h2>
     ${(isMaster() && !bizTypeSet) ? `
@@ -4811,47 +5005,26 @@ function screenGoods(){
       <div style="flex:1;"><b>Set your Business Type</b><div class="t2">Get the right fields when adding goods — go to Settings to set it.</div></div>
       <div>›</div>
     </div>` : ''}
-    ${isMaster()?`<button class="btn btn-outline btn-sm" id="bulk-add-btn" style="margin-bottom:12px;">${ICON_FILE} Bulk Add via CSV</button>`:''}
-    ${goods.length===0? `<div class="empty"><div class="ic">${ICON_BOX}</div><b>No goods yet</b>Tap + to add your first item.</div>` :
-    goods.map(g=>{
-      const stock = totalStock(g);
-      let flag='', pill='';
-      if(!g.hasVariants){
-        const nextBatch = g.batches.filter(b=>b.qtyRemaining>0).sort((a,b)=>new Date(a.expiryDate)-new Date(b.expiryDate))[0];
-        if(nextBatch){
-          const d = daysBetween(todayISO(), nextBatch.expiryDate);
-          if(d<0){ flag='background:var(--red)'; pill=`<span class="pill pill-red">EXPIRED</span>`; }
-          else if(d<=7){ flag='background:var(--red)'; pill = nextBatch.auctionActive? `<span class="pill pill-amber">AUCTION -${nextBatch.auctionDiscount||30}%</span>` : `<span class="pill pill-red">${d}d left</span>`; }
-          else if(d<=14){ flag='background:var(--marigold)'; pill=`<span class="pill pill-amber">${d}d left</span>`; }
-        }
-      }
-      if(stock<=0) pill = `<span class="pill pill-gray">OUT OF STOCK</span>`;
-      else if(!pill && stock<=(g.reorderLevel||5)) pill = `<span class="pill pill-amber">LOW STOCK</span>`;
-      const subLine = g.hasVariants ? `${(g.variants||[]).length} size/color option(s) · ${stock} total in stock`
-        : g.spec ? `${g.specLabel||'Spec'}: ${escapeHtml(g.spec)} · ${stock} in stock`
-        : g.dimension && g.dimension.value ? `${escapeHtml(g.dimension.value)} ${escapeHtml(g.dimension.unit||'')} · ${stock} in stock`
-        : `${stock} in stock${isMaster()?(' · cost '+fmtMoney(g.costPrice)):''}`;
-      return `
-      <div class="card" style="display:flex;gap:0;padding:0;overflow:hidden;">
-        <div class="expiry-flag" style="${flag}"></div>
-        <div style="padding:13px 14px;flex:1;display:flex;align-items:center;gap:12px;" data-good-detail="${g.id}">
-          <div class="thumb">${g.emoji||'🛍️'}</div>
-          <div class="info" style="flex:1;">
-            <div class="t1">${g.name}</div>
-            <div class="t2">${subLine}</div>
-          </div>
-          <div class="right">
-            <div style="font-weight:800;">${fmtMoney(g.basePrice)}</div>
-            ${pill}
-          </div>
-        </div>
-      </div>`;
-    }).join('')}
+    ${showTabs ? `<div style="display:flex;gap:8px;margin-bottom:10px;" role="tablist">
+      <button type="button" role="tab" aria-selected="${tab==='active'}" class="btn btn-sm ${tab==='active'?'btn-dark':'btn-outline'}" data-goods-tab="active" style="flex:1;">Active Goods (${activeList.length})</button>
+      <button type="button" role="tab" aria-selected="${tab==='hidden'}" class="btn btn-sm ${tab==='hidden'?'btn-dark':'btn-outline'}" data-goods-tab="hidden" style="flex:1;">Hidden / Inactive (${hiddenList.length})</button>
+    </div>` : ''}
+    ${tab==='active' ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      ${chip('all','All',activeList.length)}${chip('low','Low stock',lowList.length)}${chip('out','Out of stock',outList.length)}
+    </div>` : ''}
+    ${isMaster() && tab==='active' ?`<button class="btn btn-outline btn-sm" id="bulk-add-btn" style="margin-bottom:12px;">${ICON_FILE} Bulk Add via CSV</button>`:''}
+    ${shown.length===0 ? emptyMsg : shown.map(goodRowHtml).join('')}
   `;
 }
 function bindGoodsEvents(){
   document.querySelectorAll('[data-good-detail]').forEach(el=>{
     el.addEventListener('click', ()=>openGoodDetail(el.dataset.goodDetail));
+  });
+  document.querySelectorAll('[data-goods-tab]').forEach(el=>{
+    el.addEventListener('click', ()=>{ goodsTab = el.dataset.goodsTab; goodsFilter = 'all'; refreshMain(); });
+  });
+  document.querySelectorAll('[data-goods-chip]').forEach(el=>{
+    el.addEventListener('click', ()=>{ goodsFilter = (goodsFilter===el.dataset.goodsChip) ? 'all' : el.dataset.goodsChip; refreshMain(); });
   });
   const bulkBtn = document.getElementById('bulk-add-btn');
   if(bulkBtn) bulkBtn.addEventListener('click', openBulkAddModal);
@@ -5149,7 +5322,8 @@ function openGoodDetail(gid){
   const extraInfo = g.spec ? `<div class="t2" style="margin-bottom:10px;">${g.specLabel||'Spec'}: ${escapeHtml(g.spec)}</div>`
     : (g.dimension && g.dimension.value) ? `<div class="t2" style="margin-bottom:10px;">${escapeHtml(g.dimension.value)} ${escapeHtml(g.dimension.unit||'')}</div>` : '';
   openSheet(`
-    <div class="sheet-head"><h3>${g.name}</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
+    <div class="sheet-head"><h3>${escapeHtml(g.name)}</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
+    ${!isGoodActive(g) ? `<div class="zs-note zs-note-amber" style="margin-bottom:12px;"><b>Hidden item.</b> It is not shown for sale or in stock alerts. Past sales and receipts still include it.${g.deactivationReason?`<br>Reason: ${escapeHtml(g.deactivationReason)}${g.deactivatedAt?' · '+fmtDate(g.deactivatedAt.slice(0,10)):''}`:''}</div>` : ''}
     <div class="stat-grid">
       <div class="stat-box"><div class="lbl">In Stock</div><div class="val">${totalStock(g)}</div></div>
       <div class="stat-box"><div class="lbl">Price</div><div class="val" id="price-display">${fmtMoney(g.basePrice)}</div></div>
@@ -5161,18 +5335,19 @@ function openGoodDetail(gid){
       <button class="btn btn-outline" id="save-price" style="margin-bottom:14px;">Save Changes</button>
     ` : `<button class="btn btn-outline" id="try-edit-price" style="margin-bottom:6px;">${ICON_PENCIL} Edit Price</button>`}
     <div id="lock-msg"></div>
+    ${(!g.hasVariants && canDo('canAddGoods')) ? `<button class="btn btn-primary" id="add-stock-btn" style="margin-bottom:14px;">＋ Add Stock</button>` : ''}
 
     ${g.hasVariants ? `
     <div class="section-head"><h3>Sizes / Colors</h3></div>
     ${(g.variants||[]).map(v=>`<div class="list-row">
         <div class="thumb">${v.qty<=0?ICON_INBOX_EMPTY:ICON_BOX}</div>
         <div class="info"><div class="t1">${escapeHtml(v.label)}</div><div class="t2">${v.qty} in stock</div></div>
-        ${canEditPrice?`<button class="btn btn-sm btn-outline" data-add-variant-stock="${v.id}">＋ Add Stock</button>`:''}
+        ${canDo('canAddGoods')?`<button class="btn btn-sm btn-outline" data-add-variant-stock="${v.id}">＋ Add Stock</button>`:''}
       </div>`).join('')}
     ${canEditPrice?`<button class="btn btn-outline btn-sm" id="add-new-variant-btn" style="margin-top:10px;">＋ Add Another Size/Color</button>`:''}
     ` : `
     <div class="section-head"><h3>Batches (FIFO order)</h3></div>
-    ${g.batches.sort((a,b)=>new Date(a.expiryDate)-new Date(b.expiryDate)).map(b=>{
+    ${[...g.batches].sort(batchFIFO).map(b=>{
       const d = daysBetween(todayISO(), b.expiryDate);
       const expired = d<0;
       return `<div class="list-row">
@@ -5187,11 +5362,24 @@ function openGoodDetail(gid){
       </div>`;
     }).join('')}
     `}
+    ${isMaster() ? hideControlsHtml(g) : ''}
   `);
+  const addStockBtn = document.getElementById('add-stock-btn');
+  if(addStockBtn) addStockBtn.addEventListener('click', ()=>openAddStockModal(gid));
+  const hideBtn = document.getElementById('hide-good-btn');
+  if(hideBtn) hideBtn.addEventListener('click', ()=>openHideGoodModal(gid));
+  const reactivateBtn = document.getElementById('reactivate-good-btn');
+  if(reactivateBtn) reactivateBtn.addEventListener('click', ()=>{ reactivateGood(gid); openGoodDetail(gid); });
   const savePrice = document.getElementById('save-price');
   if(savePrice) savePrice.addEventListener('click', ()=>{
-    g.basePrice = Number(document.getElementById('edit-price').value||g.basePrice);
-    g.costPrice = Number(document.getElementById('edit-cost').value||g.costPrice);
+    if(!isMaster()){ toast('Only the owner can change prices.'); return; }
+    const np = Number(document.getElementById('edit-price').value||g.basePrice);
+    const nc = Number(document.getElementById('edit-cost').value||g.costPrice);
+    if(!Number.isFinite(np) || np<0 || !Number.isFinite(nc) || nc<0){ toast('Enter valid prices.'); return; }
+    if(np===g.basePrice && nc===g.costPrice){ toast('No change to save.'); return; }
+    g.basePrice = np; g.costPrice = nc;
+    // This used to stay on the phone only — and the next sync pull then wrote the OLD server price back over it.
+    enqueueSync('goods','update', { id: g.id, base_price: g.basePrice, cost_price: g.costPrice });
     logAudit('price_edit', g.name+' price set to '+fmtMoney(g.basePrice));
     toast('Saved ✅'); closeSheet(); render();
   });
@@ -5202,9 +5390,12 @@ function openGoodDetail(gid){
   });
   document.querySelectorAll('[data-toggle-auction]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
+      if(!isMaster()){ toast('Only the owner can run an auction.'); return; }
       const b = g.batches.find(x=>x.id===btn.dataset.toggleAuction);
       b.auctionActive = !b.auctionActive;
       if(b.auctionActive){ b.auctionDiscount = currentShop().auctionDiscountDefault||30; b.auctionPrice = Math.round(g.basePrice*(1-b.auctionDiscount/100)); }
+      else { b.auctionPrice = null; }
+      enqueueSync('good_batches','update', { id: b.id, auction_active: b.auctionActive, auction_price: b.auctionPrice, auction_discount: b.auctionDiscount });
       logAudit('auction_toggled', (b.auctionActive?'Started':'Stopped')+' auction on '+g.name+' batch '+b.batchNo);
       openGoodDetail(gid);
     });
@@ -5212,8 +5403,10 @@ function openGoodDetail(gid){
   document.querySelectorAll('[data-add-variant-stock]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const v = g.variants.find(x=>x.id===btn.dataset.addVariantStock);
+      if(!isGoodActive(g) && !isMaster()){ toast(`${g.name} is hidden. Ask the owner to reactivate it first.`); return; }
       const add = Number(prompt(`Add how many units to "${v.label}"?`, '0')||0);
-      if(add<=0) return;
+      if(!(add>0)) return;
+      if(!Number.isInteger(add)){ toast('Enter a whole number.'); return; }
       v.qty += add;
       // Same missing-sync bug as everywhere else found this session — this
       // stayed local-only, so added variant stock never reached other devices.
@@ -5264,7 +5457,7 @@ function openStockCorrectionModal(goodId, batchId){
   const updateDiff = ()=>{
     const actual = Number(actualInput.value||0);
     const diff = actual - b.qtyRemaining;
-    diffLabel.textContent = diff===0 ? '' : diff>0 ? `This will increase stock by ${diff}.` : `This will reduce stock by ${Math.abs(diff)}.`;
+    diffLabel.textContent = diff===0 ? '' : diff>0 ? (isMaster() ? `This will increase stock by ${diff}.` : `Only the owner can raise stock with a count. Use "＋ Add Stock" for goods you received.`) : `This will reduce stock by ${Math.abs(diff)}.`;
     diffLabel.style.color = diff<0 ? 'var(--red)' : diff>0 ? 'var(--green)' : 'var(--text-dim)';
   };
   actualInput.addEventListener('input', updateDiff);
@@ -5275,6 +5468,7 @@ function openStockCorrectionModal(goodId, batchId){
     const oldQty = b.qtyRemaining;
     const diff = actual - oldQty;
     if(diff===0){ toast('No change to record.'); closeSheet(); return; }
+    if(diff>0 && !isMaster()){ toast('Only the owner can raise stock with a count. To add stock you received, use "＋ Add Stock".'); return; }
     const reason = document.getElementById('sc-reason').value.trim();
     b.qtyRemaining = actual;
     enqueueSync('good_batches','update', { id: b.id, qty_remaining: b.qtyRemaining });
@@ -11045,7 +11239,7 @@ function screenWarehouse(){
       <button class="btn btn-primary" id="create-warehouse-btn" style="width:100%;margin-top:14px;">＋ Create Warehouse</button>`;
   }
 
-  const goods = state.goods.filter(g=>g.shopId===activeWh.id);
+  const goods = state.goods.filter(g=>g.shopId===activeWh.id && isGoodActive(g));
   const withStock = goods.filter(g=>totalStock(g)>0);
   const lowStock = goods.filter(g=>{ const s=totalStock(g); return s>0 && s<=(g.reorderLevel||5); }).length;
   const shops = state.shops.filter(s=>!s.isWarehouse);
@@ -11085,7 +11279,7 @@ function bindWarehouseEvents(){
 
 function openStockTransferModal(){
   const warehouse = currentShop();
-  const goods = state.goods.filter(g=>g.shopId===warehouse.id && totalStock(g)>0);
+  const goods = state.goods.filter(g=>g.shopId===warehouse.id && isGoodActive(g) && totalStock(g)>0);
   const shops = state.shops.filter(s=>!s.isWarehouse);
   if(goods.length===0){ toast('Nothing in stock here to move.'); return; }
   openSheet(`
@@ -11111,11 +11305,13 @@ function submitStockTransfer(){
   if(!g){ toast('Item not found.'); return; }
   const available = totalStock(g);
   if(qty<=0 || qty>available){ toast(`Enter a quantity between 1 and ${available}.`); return; }
+  const hiddenDest = state.goods.find(x=>x.shopId===destShopId && x.name.toLowerCase()===g.name.toLowerCase());
+  if(hiddenDest && !isGoodActive(hiddenDest)){ toast(`${g.name} is hidden at the destination shop. Reactivate it there first, so the stock isn't moved into an item nobody can see.`); return; }
 
   // Deduct FEFO across the warehouse's batches — same pattern used at sale
   // time, so a transfer behaves exactly like stock actually leaving.
   let remaining = qty;
-  const sourceBatches = g.batches.filter(b=>b.qtyRemaining>0).sort((a,b)=>new Date(a.expiryDate)-new Date(b.expiryDate));
+  const sourceBatches = g.batches.filter(b=>b.qtyRemaining>0).sort(batchFIFO);
   const movedFrom = []; // {batch, qtyTaken, costPrice, expiryDate}
   for(const b of sourceBatches){
     if(remaining<=0) break;
@@ -11186,7 +11382,7 @@ function bindSuppliersEvents(){
   document.querySelectorAll('[data-supplier-detail]').forEach(el=>el.addEventListener('click', ()=>openSupplierDetail(el.dataset.supplierDetail)));
 }
 function openAddSupplierModal(){
-  const goods = state.goods.filter(g=>g.shopId===state.currentShopId && !g.hasVariants);
+  const goods = state.goods.filter(g=>g.shopId===state.currentShopId && !g.hasVariants && isGoodActive(g));
   openSheet(`
     <div class="sheet-head"><h3>Add Supplier</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <div class="field"><label>Name / Business</label><input id="sup-name"></div>
@@ -11349,7 +11545,7 @@ function openSupplierDetail(supplierId){
   }));
 }
 function openLogRestockModal(supplierId){
-  const goods = state.goods.filter(g=>g.shopId===state.currentShopId && !g.hasVariants);
+  const goods = state.goods.filter(g=>g.shopId===state.currentShopId && !g.hasVariants && isGoodActive(g));
   openSheet(`
     <div class="sheet-head"><h3>Log a Restock</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <p class="subtle" style="margin-bottom:10px;">For items with sizes/colors, add stock to a specific variant from Goods → tap the item → Add Stock instead.</p>

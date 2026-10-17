@@ -1,7 +1,7 @@
 // supabase/functions/send-bill-pin-otp/index.ts
 //
 // Generates a 6-digit code, stores its hash (5-minute expiry) in
-// bill_pin_reset_otp_codes, and asks Termii to email it — same pattern,
+// bill_pin_reset_otp_codes, and emails it (ZeeShop-branded; Termii as a fallback) — same pattern,
 // same Termii call, same secrets as send-reset-otp and send-signup-otp,
 // just a separate table so a code from one flow can never be reused in
 // another.
@@ -29,6 +29,19 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+// Preferred sender: our own ZeeShop-branded email (notify-email). Returns true only if it really went out.
+async function sendBrandedCode(email: string, code: string, purpose: "signup" | "reset" | "bill_pin"): Promise<boolean> {
+  try {
+    const res = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/notify-email`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+      body: JSON.stringify({ type: "otp", to: email, data: { code, purpose, minutes: 5 } }),
+    });
+    const j = await res.json().catch(() => ({}));
+    return res.ok && j.ok === true;
+  } catch (_e) { return false; }
+}
 
 async function sha256(text: string): Promise<string> {
   const data = new TextEncoder().encode(text);
@@ -75,7 +88,7 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: "Please wait a minute before requesting another code." }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const code = String(100000 + (crypto.getRandomValues(new Uint32Array(1))[0] % 900000));   // cryptographically random
     const codeHash = await sha256(code);
     const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
 
@@ -87,20 +100,27 @@ Deno.serve(async (req) => {
     });
     if (dbError) throw new Error("Could not save the code: " + dbError.message);
 
-    const termiiRes = await fetch(`${TERMII_BASE_URL}/api/email/otp/send`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        api_key: TERMII_API_KEY,
-        email_address: caller.email,
-        code,
-        emailConfigurationId: TERMII_EMAIL_CONFIG_ID,
-      }),
-    });
-    const termiiData = await termiiRes.json();
-    console.log("Termii response:", JSON.stringify(termiiData));
-    if (!termiiRes.ok || termiiData.code !== "ok") {
-      throw new Error("Termii could not send the email: " + JSON.stringify(termiiData));
+    // Preferred: a ZeeShop-branded email. Fallback: Termii's own template, so a sender problem (SMTP not approved yet,
+    // provider down) can never lock someone out of signing up or resetting. Termii's template says "10 minutes";
+    // the code really lasts 5.
+    const delivered = await sendBrandedCode(caller.email, code, "bill_pin");
+    if (!delivered) {
+      console.warn("Branded code email failed — falling back to Termii's template.");
+      const termiiRes = await fetch(`${TERMII_BASE_URL}/api/email/otp/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_key: TERMII_API_KEY,
+          email_address: caller.email,
+          code,
+          emailConfigurationId: TERMII_EMAIL_CONFIG_ID,
+        }),
+      });
+      const termiiData = await termiiRes.json();
+      console.log("Termii response:", JSON.stringify(termiiData));
+      if (!termiiRes.ok || termiiData.code !== "ok") {
+        throw new Error("Termii could not send the email: " + JSON.stringify(termiiData));
+      }
     }
 
     // Masked, not the full address — this response reaches the browser,

@@ -27,7 +27,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
 const SQUAD_SECRET_KEY = Deno.env.get("SQUAD_SECRET_KEY") || "";
-const SQUAD_BASE_URL = (Deno.env.get("SQUAD_BASE_URL") || "https://sandbox-api-d.squadco.com").replace(/\/+$/, "");
+const SQUAD_BASE_URL = (Deno.env.get("SQUAD_BASE_URL") || "https://api-d.squadco.com").replace(/\/+$/, "");
 
 const ok = (body: Record<string, unknown> = { ok: true }) =>
   new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });

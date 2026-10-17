@@ -15,9 +15,10 @@
 // Needs squad-virtual-account.sql. The BVN and date of birth are forwarded to Squad and never stored or logged.
 //
 // Secrets (Supabase → Edge Functions → Secrets):
-//   SQUAD_SECRET_KEY    sandbox_sk_… or sq_sk_… (never put this in app.html)
-//   SQUAD_PUBLIC_KEY    sandbox_pk_… or sq_pk_… (not needed for the hosted checkout used here; kept for config completeness)
-//   SQUAD_BASE_URL      https://sandbox-api-d.squadco.com (default)  |  https://api-d.squadco.com (live)
+//   SQUAD_SECRET_KEY    your Squad secret key (never put this in app.html, and never paste it in chat)
+//   SQUAD_PUBLIC_KEY    your Squad public key (not needed for the hosted checkout used here; kept for config completeness)
+//   SQUAD_BASE_URL      https://api-d.squadco.com (LIVE, the default)  |  https://sandbox-api-d.squadco.com (testing only)
+//                       The URL and the keys must match: live keys only work on the live URL, sandbox keys only on the sandbox URL.
 //   SQUAD_CALLBACK_URL  where Squad sends the person back, e.g. https://yourapp.com/  (?squad_ref=… is added)
 //   MIN_DEPOSIT / MAX_DEPOSIT  optional, ₦ (defaults 100 / 1,000,000)
 // Run squad-setup.sql first.
@@ -31,7 +32,7 @@ const corsHeaders = {
 
 const SQUAD_SECRET_KEY = Deno.env.get("SQUAD_SECRET_KEY") || "";
 const SQUAD_PUBLIC_KEY = Deno.env.get("SQUAD_PUBLIC_KEY") || ""; // eslint-disable-line @typescript-eslint/no-unused-vars
-const SQUAD_BASE_URL = (Deno.env.get("SQUAD_BASE_URL") || "https://sandbox-api-d.squadco.com").replace(/\/+$/, "");
+const SQUAD_BASE_URL = (Deno.env.get("SQUAD_BASE_URL") || "https://api-d.squadco.com").replace(/\/+$/, "");
 const SQUAD_CALLBACK_URL = Deno.env.get("SQUAD_CALLBACK_URL") || "";
 const SQUAD_BENEFICIARY_ACCOUNT = Deno.env.get("SQUAD_BENEFICIARY_ACCOUNT") || ""; // optional fallback, see header
 const MIN_DEPOSIT = Number(Deno.env.get("MIN_DEPOSIT")) || 100;

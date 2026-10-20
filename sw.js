@@ -1,7 +1,7 @@
 // ZeeShop — basic service worker for PWA installability and offline shell caching
-// Bumped to v2: the old worker kept sync-engine.js cache-first FOREVER, so phones never received sync fixes.
+// v4 = the service worker no longer caches API data (see the fetch handler). v3 = new app icon (icons are cached cache-first, so they only change when this name changes). Earlier, v2: the old worker kept sync-engine.js cache-first FOREVER, so phones never received sync fixes.
 // Bump this number again whenever you want every device to drop its cached files.
-const CACHE_NAME = "zeeshop-cache-v2";
+const CACHE_NAME = "zeeshop-cache-v4";
 const CORE_ASSETS = [
   "/app.html",
   "/manifest.json",
@@ -31,6 +31,13 @@ self.addEventListener("activate", (event) => {
 // fall back to cache when offline. Cache-first for static assets.
 self.addEventListener("fetch", (event) => {
   const { request } = event;
+
+  // The service worker only ever handles this site's OWN GET requests (pages, scripts, icons). Everything else —
+  // calls to Supabase, Squad, Flutterwave, Termii and any POST — goes straight to the network, untouched.
+  // Previously every request passed through the cache-first rule below, so a data request such as
+  // /rest/v1/shops?... was answered from the first copy ever saved and NEVER refreshed: the same device kept
+  // showing old shop settings while another device (with no saved copy) showed the new ones.
+  if (request.method !== "GET" || new URL(request.url).origin !== self.location.origin) return;
 
   if (request.mode === "navigate") {
     event.respondWith(

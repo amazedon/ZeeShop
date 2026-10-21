@@ -3279,6 +3279,218 @@ async function submitOpenJoinFlow(){
    MAIN SHELL: topbar + routed screen + bottom nav
    ============================================================ */
 /* ============================================================
+   ITEM SALES — the "Total Sold" box and the Item Sales History sheet
+   - "Sold" is NET: units sold minus units returned. Voided sales are never counted.
+   - Only the owner sees every cashier's sales; everyone else sees only the sales they made (enforced on the server;
+     the on-device fallback applies the same rule).
+   - Stock transfers / warehouse movements are NOT sales: they never create sale records, so they can never appear here.
+   - The totals and the list come from the server when online (complete, whatever this phone holds), and from the sales
+     stored on this device when offline (marked as possibly incomplete).
+   ============================================================ */
+const ITEM_SALES_PAGE = 50;
+const SALES_RANGES = [['today','Today'], ['7d','7 Days'], ['30d','30 Days'], ['all','All']];
+let itemSalesCache = {};      // gid -> { at, net }
+let itemSalesView = null;     // the open history sheet's state
+function canSeeSold(){ return isMaster() || canDo('canSell'); }
+function fmtQty(n){ const x = Number(n) || 0; return (Math.round(x * 100) / 100).toLocaleString(); }
+function sameName(a, b){ return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase(); }
+function salesSince(range){
+  const t = new Date(); const start = new Date(t.getFullYear(), t.getMonth(), t.getDate());          // local midnight
+  if(range === 'today') return start.toISOString();
+  if(range === '7d')    return new Date(start.getTime() - 6 * 864e5).toISOString();                   // today + the 6 days before
+  if(range === '30d')   return new Date(start.getTime() - 29 * 864e5).toISOString();
+  return null;
+}
+// The same product exists as a separate item in each shop/warehouse (transfers match by name), so "all locations"
+// means every item with this name.
+function itemGoodIds(g, loc){
+  if(loc === 'this' || !g) return [g.id];
+  const same = state.goods.filter(x => sameName(x.name, g.name));
+  if(loc === 'all') return same.map(x => x.id);
+  return same.filter(x => x.shopId === loc).map(x => x.id);
+}
+function itemLocations(g){
+  const seen = new Set(), out = [];
+  state.goods.forEach(x => {
+    if(!sameName(x.name, g.name) || seen.has(x.shopId)) return;
+    seen.add(x.shopId);
+    const sh = state.shops.find(s => s.id === x.shopId);
+    if(sh) out.push({ id: sh.id, name: sh.name, isWarehouse: !!sh.isWarehouse });
+  });
+  return out;
+}
+function saleTimeOf(sale){ return Date.parse(sale.createdAt || '') || Date.parse((sale.date || '') + 'T00:00:00') || 0; }
+// Lines of past sales from what is stored on THIS device.
+function localItemSalesLines(goodIds, sinceISO){
+  const ids = new Set(goodIds), owner = isMaster(), me = state.sessionUserId;
+  const since = sinceISO ? Date.parse(sinceISO) : null; const out = [];
+  for(const sale of state.sales){
+    if(!owner && sale.soldByUserId !== me) continue;
+    const t = saleTimeOf(sale);
+    if(since !== null && t < since) continue;
+    for(const it of (sale.items || [])){
+      if(!ids.has(it.goodId)) continue;
+      const qty = Number(it.qty) || 0, unit = Number(it.priceUsed) || 0;
+      out.push({ lineId: it.saleItemId || (sale.id + ':' + out.length), saleId: sale.id, soldAt: sale.createdAt || (sale.date ? sale.date + 'T00:00:00' : null),
+        hasTime: !!sale.createdAt, shopId: sale.shopId, cashierId: sale.soldByUserId, qty, returned: Number(it.returnedQty) || 0, unitPrice: unit,
+        lineAmount: qty * unit, variantLabel: it.variantLabel || '', status: sale.status, discount: Number(sale.discount) || 0, t });
+    }
+  }
+  out.sort((a, b) => (b.t - a.t) || (a.lineId < b.lineId ? 1 : -1));
+  return out;
+}
+function summarizeSaleLines(lines){
+  let net = 0, gross = 0, returned = 0; const sales = new Set();
+  for(const l of lines){ if(l.status === 'voided') continue; net += l.qty - l.returned; gross += l.qty; returned += l.returned; sales.add(l.saleId); }
+  return { net, gross, returned, sales: sales.size };
+}
+async function itemSalesRpc(name, args){
+  const token = await bigisubAuthToken();
+  if(!token) throw new Error('not signed in');
+  const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), 15000);
+  try{
+    const res = await fetch(`${SITE_CONTENT_URL}/rest/v1/rpc/${name}`, {
+      method: 'POST', cache: 'no-store', signal: ctrl.signal,
+      headers: { 'Content-Type': 'application/json', 'apikey': SITE_CONTENT_ANON_KEY, 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify(args),
+    });
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    return await res.json();
+  } finally { clearTimeout(timer); }
+}
+function mapServerSaleRow(r){
+  return { lineId: r.line_id, saleId: r.sale_id, soldAt: r.sold_at, hasTime: true, shopId: r.shop_id, shopName: r.shop_name, isWarehouse: !!r.is_warehouse,
+    cashierId: r.cashier_id, cashierName: r.cashier_name, qty: Number(r.qty) || 0, returned: Number(r.returned_qty) || 0, unitPrice: Number(r.unit_price) || 0,
+    lineAmount: Number(r.line_amount) || 0, variantLabel: r.variant_label || '', status: r.sale_status, discount: Number(r.sale_discount) || 0, t: Date.parse(r.sold_at) || 0 };
+}
+// The small box on the item sheet: this device's number first, then the server's (complete) number.
+function refreshSoldBox(gid){
+  const put = (n) => { const el = document.getElementById('sold-val'), box = document.getElementById('sold-box'); if(el && box && box.dataset.gid === gid) el.textContent = fmtQty(n); };
+  const hit = itemSalesCache[gid];
+  if(hit && Date.now() - hit.at < 60000){ put(hit.net); return; }
+  if(!navigator.onLine) return;
+  itemSalesRpc('item_sales_summary', { p_good_ids: [gid], p_since: null }).then(rows => {
+    const r = Array.isArray(rows) ? rows[0] : null; if(!r) return;
+    itemSalesCache[gid] = { at: Date.now(), net: Number(r.net_units) || 0 };
+    put(itemSalesCache[gid].net);
+  }).catch(() => { /* keep this device's number */ });
+}
+function openItemSalesHistory(gid){
+  const g = state.goods.find(x => x.id === gid); if(!g || !canSeeSold()) return;
+  const locs = isMaster() ? itemLocations(g) : [];
+  itemSalesView = { gid, loc: 'this', range: 'all', lines: [], done: false, loading: false, source: '', error: '', summary: null, localAll: [], req: 0 };
+  const thisShop = state.shops.find(s => s.id === g.shopId);
+  openSheet(`
+    <div class="sheet-head"><h3>Item Sales History</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
+    <button type="button" class="btn btn-outline btn-sm" id="is-back" style="margin-bottom:10px;">‹ Back to item</button>
+    <div class="t1" style="margin-bottom:2px;">${escapeHtml(g.name)}</div>
+    ${locs.length > 1 ? `<div class="field" style="margin:8px 0;"><label for="is-loc">Location</label><select id="is-loc">
+        <option value="this">This location — ${escapeHtml(thisShop ? thisShop.name : '')}</option>
+        <option value="all">All locations (${locs.length})</option>
+        ${locs.filter(l => l.id !== g.shopId).map(l => `<option value="${l.id}">${escapeHtml(l.name)}${l.isWarehouse ? ' (warehouse)' : ''}</option>`).join('')}
+      </select></div>` : `<div class="t2 subtle" style="margin-bottom:8px;">${escapeHtml(thisShop ? thisShop.name : '')}</div>`}
+    <div id="is-chips" style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px;"></div>
+    <div id="is-summary" class="zs-note zs-note-info" style="margin-bottom:10px;"></div>
+    <div id="is-note"></div>
+    <div id="is-list"></div>
+    <div id="is-more" style="margin-top:10px;"></div>
+  `);
+  document.getElementById('is-back').addEventListener('click', () => { itemSalesView = null; openGoodDetail(gid); });
+  const sel = document.getElementById('is-loc');
+  if(sel) sel.addEventListener('change', () => { itemSalesView.loc = sel.value; loadItemSales(true); });
+  paintItemSales();
+  loadItemSales(true);
+}
+async function loadItemSales(reset){
+  const v = itemSalesView; if(!v) return;
+  const g = state.goods.find(x => x.id === v.gid); if(!g) return;
+  if(v.loading && !reset) return;
+  const myReq = ++v.req; v.loading = true; v.error = '';
+  if(reset){ v.lines = []; v.done = false; v.summary = null; v.source = ''; v.localAll = []; }
+  paintItemSales();
+  const ids = itemGoodIds(g, v.loc), since = salesSince(v.range);
+  try{
+    if(!navigator.onLine) throw new Error('offline');
+    if(reset){
+      const sum = await itemSalesRpc('item_sales_summary', { p_good_ids: ids, p_since: since });
+      if(myReq !== v.req) return;
+      const r = Array.isArray(sum) ? sum[0] : null;
+      if(!r) throw new Error('no summary');
+      v.summary = { net: Number(r.net_units) || 0, gross: Number(r.units_sold) || 0, returned: Number(r.units_returned) || 0, sales: Number(r.sales_count) || 0 };
+    }
+    const last = v.lines[v.lines.length - 1];
+    const rows = await itemSalesRpc('item_sales_history', { p_good_ids: ids, p_since: since, p_limit: ITEM_SALES_PAGE,
+      p_before_ts: last ? last.soldAt : null, p_before_id: last ? last.lineId : null });
+    if(myReq !== v.req) return;
+    v.source = 'server';
+    v.lines.push(...(Array.isArray(rows) ? rows : []).map(mapServerSaleRow));
+    v.done = !Array.isArray(rows) || rows.length < ITEM_SALES_PAGE;
+  }catch(e){
+    if(myReq !== v.req) return;
+    if(reset){                                        // could not reach the server: use what this device holds
+      v.source = 'local'; v.localAll = localItemSalesLines(ids, since);
+      v.summary = summarizeSaleLines(v.localAll);
+      v.lines = v.localAll.slice(0, ITEM_SALES_PAGE); v.done = v.localAll.length <= ITEM_SALES_PAGE;
+    }else if(v.source === 'local'){
+      v.lines.push(...v.localAll.slice(v.lines.length, v.lines.length + ITEM_SALES_PAGE)); v.done = v.lines.length >= v.localAll.length;
+    }else{
+      v.error = "Couldn't load more. Check your connection and try again.";
+    }
+  }finally{
+    if(myReq === v.req){ v.loading = false; paintItemSales(); }
+  }
+}
+function salePayLabel(status){
+  if(status === 'paid') return ['Paid', 'pill-green'];
+  if(status === 'partial') return ['Part payment', 'pill-amber'];
+  if(status === 'credit') return ['Credit', 'pill-amber'];
+  if(status === 'voided') return ['Voided', 'pill-gray'];
+  return [String(status || '—'), 'pill-gray'];
+}
+function itemSalesRowHtml(l){
+  const cashier = l.cashierName || (() => { const u = state.users.find(x => x.id === l.cashierId); return u ? (`${u.firstName || ''} ${u.lastName || ''}`.trim() || u.username) : ''; })() || 'Unknown staff';
+  const shop = l.shopName || (() => { const sh = state.shops.find(x => x.id === l.shopId); return sh ? sh.name : ''; })();
+  const isWh = l.isWarehouse != null ? l.isWarehouse : !!(state.shops.find(x => x.id === l.shopId) || {}).isWarehouse;
+  const [label, cls] = salePayLabel(l.status);
+  const voided = l.status === 'voided';
+  return `
+    <div class="list-row" style="${voided ? 'opacity:.6;' : ''}">
+      <div class="info">
+        <div class="t1">${l.soldAt ? escapeHtml(fmtDateTimeFull(l.soldAt)) : '—'}${l.hasTime ? '' : ' <span class="subtle">(time not recorded)</span>'}</div>
+        <div class="t2">${escapeHtml(cashier)} · Qty ${fmtQty(l.qty)}${l.returned ? ` (${fmtQty(l.returned)} returned)` : ''}${l.variantLabel ? ' · ' + escapeHtml(l.variantLabel) : ''}</div>
+        <div class="t2" style="margin-top:4px;"><span class="pill ${cls}">${escapeHtml(label)}</span>
+          ${l.discount > 0 ? ` <span class="pill pill-amber" title="A discount was applied to the whole sale">Discount on sale (${fmtMoney(l.discount)})</span>` : ''}
+          ${shop ? ` <span class="subtle">${escapeHtml(shop)}${isWh ? ' · warehouse' : ''}</span>` : ''}</div>
+      </div>
+      <div class="right"><div style="font-weight:800;${voided ? 'text-decoration:line-through;' : ''}">${fmtMoney(l.lineAmount)}</div><div class="subtle" style="font-size:11px;">${fmtQty(l.qty)} × ${fmtMoney(l.unitPrice)}</div></div>
+    </div>`;
+}
+function paintItemSales(){
+  const v = itemSalesView; if(!v) return;
+  const chips = document.getElementById('is-chips'); if(!chips) return;      // the sheet was closed
+  chips.innerHTML = SALES_RANGES.map(([k, label]) =>
+    `<button type="button" class="btn btn-sm ${v.range === k ? 'btn-dark' : 'btn-outline'}" style="width:auto;" data-is-range="${k}" aria-pressed="${v.range === k}">${label}</button>`).join('');
+  chips.querySelectorAll('[data-is-range]').forEach(b => b.addEventListener('click', () => { if(v.range === b.dataset.isRange) return; v.range = b.dataset.isRange; loadItemSales(true); }));
+  const sum = document.getElementById('is-summary');
+  sum.innerHTML = v.summary
+    ? `<b>Net sold: ${fmtQty(v.summary.net)} unit(s)</b> · ${v.summary.sales} sale(s)${v.summary.returned ? ` · ${fmtQty(v.summary.returned)} returned` : ''}<div class="subtle" style="font-size:11.5px;margin-top:2px;">Units sold minus returns. Voided sales and stock transfers are not counted.</div>`
+    : (v.loading ? 'Loading…' : '—');
+  const note = document.getElementById('is-note');
+  note.innerHTML = [
+    !isMaster() ? `<div class="subtle" style="font-size:12px;margin-bottom:8px;">Showing the sales you made.</div>` : '',
+    v.source === 'local' ? `<div class="zs-note zs-note-amber" style="margin-bottom:8px;font-size:12.5px;">You're offline or the server didn't answer, so this shows only the sales stored on this device — it may be incomplete.</div>` : '',
+  ].join('');
+  const list = document.getElementById('is-list');
+  list.innerHTML = v.lines.length ? v.lines.map(itemSalesRowHtml).join('')
+    : (v.loading ? '' : `<div class="empty" style="padding:18px 0;"><b>No sales in this period</b></div>`);
+  const more = document.getElementById('is-more');
+  more.innerHTML = (v.error ? `<div class="subtle" style="color:var(--red);margin-bottom:6px;">${escapeHtml(v.error)}</div>` : '')
+    + ((!v.done && v.lines.length) ? `<button type="button" class="btn btn-outline" id="is-load-more" ${v.loading ? 'disabled' : ''}>${v.loading ? 'Loading…' : (v.error ? 'Try again' : 'Load more')}</button>` : '');
+  const lm = document.getElementById('is-load-more');
+  if(lm) lm.addEventListener('click', () => loadItemSales(false));
+}
+
+/* ============================================================
    ADD STOCK / HIDE / REACTIVATE
    - Add Stock always creates a NEW batch (never edits an old one), so first-in-first-out stays correct and every
      delivery has its own cost and expiry.
@@ -3522,8 +3734,10 @@ function syncSaleInsert(sale){
     items_subtotal: sale.itemsSubtotal, discount: sale.discount, tax_amount: sale.taxAmount,
     tax_pct: sale.taxPct, subtotal: sale.subtotal, paid_amount: sale.paidAmount,
     balance: sale.balance, due_date: sale.dueDate || null, status: sale.status,
-    sold_by_user_id: sale.soldByUserId, receipt_sent: sale.receiptSent, date: sale.date
+    sold_by_user_id: sale.soldByUserId, receipt_sent: sale.receiptSent, date: sale.date,
+    sold_at: sale.createdAt || new Date().toISOString()      // when it was MADE (a queued offline sale reaches the server later)
   });
+  itemSalesCache = {};                                       // "Sold" totals are recomputed after a new sale
   sale.items.forEach(item=>{
     // The id is generated here and ALSO written back onto the local item
     // (not just the push payload) — without that, nothing later (like
@@ -4992,7 +5206,7 @@ function screenGoods(){
   const outList = activeList.filter(g=>totalStock(g)<=0);
   const shown = tab==='hidden' ? hiddenList : goodsFilter==='low' ? lowList : goodsFilter==='out' ? outList : activeList;
   const bizTypeSet = businessTypeIsSet();
-  const chip = (key, label, n) => `<button type="button" class="btn btn-sm ${goodsFilter===key?'btn-dark':'btn-outline'}" data-goods-chip="${key}" aria-pressed="${goodsFilter===key}">${label} (${n})</button>`;
+  const chip = (key, label, n) => `<button type="button" class="btn btn-sm ${goodsFilter===key?'btn-dark':'btn-outline'}" style="width:auto;" data-goods-chip="${key}" aria-pressed="${goodsFilter===key}">${label} (${n})</button>`;
   const emptyMsg = tab==='hidden' ? `<div class="empty"><div class="ic">${ICON_BOX}</div><b>No hidden items</b>Items you discontinue show up here, so you can review or reactivate them.</div>`
     : goodsFilter==='out' ? `<div class="empty"><div class="ic">${ICON_CHECK_CIRCLE}</div><b>Nothing is out of stock</b>Every active item has stock.</div>`
     : goodsFilter==='low' ? `<div class="empty"><div class="ic">${ICON_CHECK_CIRCLE}</div><b>Nothing is running low</b>Stock levels look healthy.</div>`
@@ -5324,9 +5538,10 @@ function openGoodDetail(gid){
   openSheet(`
     <div class="sheet-head"><h3>${escapeHtml(g.name)}</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     ${!isGoodActive(g) ? `<div class="zs-note zs-note-amber" style="margin-bottom:12px;"><b>Hidden item.</b> It is not shown for sale or in stock alerts. Past sales and receipts still include it.${g.deactivationReason?`<br>Reason: ${escapeHtml(g.deactivationReason)}${g.deactivatedAt?' · '+fmtDate(g.deactivatedAt.slice(0,10)):''}`:''}</div>` : ''}
-    <div class="stat-grid">
+    <div class="stat-grid" ${canSeeSold() ? 'style="grid-template-columns:repeat(3,1fr);"' : ''}>
       <div class="stat-box"><div class="lbl">In Stock</div><div class="val">${totalStock(g)}</div></div>
       <div class="stat-box"><div class="lbl">Price</div><div class="val" id="price-display">${fmtMoney(g.basePrice)}</div></div>
+      ${canSeeSold() ? `<button type="button" class="stat-box" id="sold-box" data-gid="${g.id}" aria-label="Total sold — tap to see the sales history" style="text-align:left;cursor:pointer;font:inherit;"><div class="lbl">Total Sold ›</div><div class="val" id="sold-val">${fmtQty(summarizeSaleLines(localItemSalesLines([g.id], null)).net)}</div></button>` : ''}
     </div>
     ${extraInfo}
     ${canEditPrice? `
@@ -5364,6 +5579,8 @@ function openGoodDetail(gid){
     `}
     ${isMaster() ? hideControlsHtml(g) : ''}
   `);
+  const soldBox = document.getElementById('sold-box');
+  if(soldBox){ soldBox.addEventListener('click', ()=>openItemSalesHistory(gid)); refreshSoldBox(gid); }
   const addStockBtn = document.getElementById('add-stock-btn');
   if(addStockBtn) addStockBtn.addEventListener('click', ()=>openAddStockModal(gid));
   const hideBtn = document.getElementById('hide-good-btn');

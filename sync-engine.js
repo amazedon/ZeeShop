@@ -347,12 +347,38 @@ async function pullSync(){
     // correct, already-saved server data every time). That mismatch (works
     // after a full logout/clear, not on a plain refresh) is the signature
     // of a caching bug, not a sync bug — the save itself was already fine.
+    // The server answers at most ~1,000 rows per request (Supabase's default). Downloading a table in ONE request
+    // therefore silently dropped everything past the first 1,000 sales / sale lines, and in no particular order, so
+    // a second device could show a different (partial) history. Now: page through with a Range header, in a stable
+    // order. If the server refuses the ordered request (e.g. a table without an id column) fall back to the old
+    // single request so nothing that worked before can stop working.
+    async function fetchPaged(baseUrl){
+      const PAGE = 1000, MAX_PAGES = 100;                          // safety cap: 100,000 rows per table
+      const sep = baseUrl.includes('?') ? '&' : '?';
+      const rows = [];
+      for(let page = 0; page < MAX_PAGES; page++){
+        const from = page * PAGE, to = from + PAGE - 1;
+        let res;
+        try{
+          res = await fetch(`${baseUrl}${sep}order=id`, { headers: Object.assign({}, headers, { 'Range-Unit': 'items', 'Range': `${from}-${to}` }), cache: 'no-store' });
+        }catch(e){ if(page === 0) return []; break; }              // network trouble mid-way: keep what we already have
+        if(!res.ok && res.status !== 206){
+          if(page === 0){                                          // not accepted: the old behaviour
+            try{ const r2 = await fetch(baseUrl, { headers, cache: 'no-store' }); return r2.ok ? await r2.json() : []; }catch(e){ return []; }
+          }
+          break;
+        }
+        const batch = await res.json();
+        if(!Array.isArray(batch)) break;
+        for(const row of batch) rows.push(row);
+        if(batch.length < PAGE) break;
+      }
+      return rows;
+    }
     async function fetchTable(table, scoped){
       try{
         const filter = (scoped && bizId) ? `&business_id=eq.${bizId}` : '';
-        const res = await fetch(`${SYNC_SUPABASE_URL}/rest/v1/${table}?select=*${filter}`, { headers, cache: 'no-store' });
-        if(!res.ok) return [];
-        return await res.json();
+        return await fetchPaged(`${SYNC_SUPABASE_URL}/rest/v1/${table}?select=*${filter}`);
       }catch(e){ return []; }
     }
 
@@ -411,9 +437,7 @@ async function pullSync(){
     async function fetchByShop(table){
       if(myShopIds.length===0) return [];
       try{
-        const res = await fetch(`${SYNC_SUPABASE_URL}/rest/v1/${table}?select=*&shop_id=in.(${myShopIds.join(',')})`, { headers, cache: 'no-store' });
-        if(!res.ok) return [];
-        return await res.json();
+        return await fetchPaged(`${SYNC_SUPABASE_URL}/rest/v1/${table}?select=*&shop_id=in.(${myShopIds.join(',')})`);
       }catch(e){ return []; }
     }
 
@@ -604,23 +628,29 @@ async function pullSync(){
       id:r.id, businessId:r.business_id, customerId:r.customer_id, userId:null, type:r.channel, timestamp:r.sent_at
     }));
 
+    const itemsBySale = new Map();
+    saleItems.forEach(si=>{ let a = itemsBySale.get(si.sale_id); if(!a){ a = []; itemsBySale.set(si.sale_id, a); } a.push(si); });
+    const localSalesById = new Map(state.sales.map(x=>[x.id, x]));
     sales.forEach(r=>{
-      const remoteItems = saleItems.filter(si=>si.sale_id===r.id).map(si=>({
+      const remoteItems = (itemsBySale.get(r.id) || []).map(si=>({
         saleItemId:si.id, goodId:si.good_id, batchId:si.batch_id, variantId:si.variant_id, variantLabel:si.variant_label||'',
         qty:si.qty, priceUsed:si.price_used, note:si.note||'', returnedQty:si.returned_qty||0
       }));
-      const existing = state.sales.find(x=>x.id===r.id);
+      const existing = localSalesById.get(r.id);
       if(!existing){
-        state.sales.push({
+        const fresh = {
           id:r.id, shopId:r.shop_id, customerId:r.customer_id, walkInName:r.walk_in_name||'',
           walkInPhone:r.walk_in_phone||'', note:r.note||'', itemsSubtotal:r.items_subtotal, discount:r.discount,
           taxAmount:r.tax_amount, taxPct:r.tax_pct, subtotal:r.subtotal, paidAmount:r.paid_amount,
           balance:r.balance, dueDate:r.due_date, status:r.status, soldByUserId:r.sold_by_user_id,
-          receiptSent:r.receipt_sent, date:r.date, items: remoteItems
-        });
+          receiptSent:r.receipt_sent, date:r.date, items: remoteItems,
+          createdAt: r.sold_at || r.created_at || null          // when the sale was made (falls back to server time for old sales)
+        };
+        state.sales.push(fresh); localSalesById.set(r.id, fresh);
         changed = true;
         return;
       }
+      if(!existing.createdAt && (r.sold_at || r.created_at)) existing.createdAt = r.sold_at || r.created_at;     // quiet backfill
       // A sale already exists locally once created, but its financial
       // fields change afterward — a credit payment collected, a return
       // processed, a void — each pushed as its own 'sales' update. Refresh

@@ -104,7 +104,7 @@ const RULES: Record<string, { insert?: Rule; update?: Rule }> = {
     update: { cols: ["id", "qty"], qtyField: "qty", increasePerms: ["can_void_return", "can_add_goods"], decreasePerms: SELL_OR_RETURN },
   },
   sales: {
-    insert: { perm: "can_sell", cols: ["balance", "customer_id", "date", "discount", "due_date", "id", "items_subtotal", "note", "paid_amount", "receipt_sent", "shop_id", "sold_by_user_id", "status", "subtotal", "tax_amount", "tax_pct", "walk_in_name", "walk_in_phone"] },
+    insert: { perm: "can_sell", cols: ["balance", "customer_id", "date", "discount", "due_date", "id", "items_subtotal", "note", "paid_amount", "receipt_sent", "shop_id", "sold_at", "sold_by_user_id", "status", "subtotal", "tax_amount", "tax_pct", "walk_in_name", "walk_in_phone"] },
     update: { perm: ["can_record_cash", "can_void_return", "can_sell_credit"], cols: ["balance", "id", "paid_amount", "status", "subtotal"] },
   },
   sale_items: {

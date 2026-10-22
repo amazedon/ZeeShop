@@ -1,7 +1,7 @@
 // ZeeShop — basic service worker for PWA installability and offline shell caching
-// v4 = the service worker no longer caches API data (see the fetch handler). v3 = new app icon (icons are cached cache-first, so they only change when this name changes). Earlier, v2: the old worker kept sync-engine.js cache-first FOREVER, so phones never received sync fixes.
+// v5 = native push banners with deep link to Messages. v4 = the service worker no longer caches API data (see the fetch handler). v3 = new app icon (icons are cached cache-first, so they only change when this name changes). Earlier, v2: the old worker kept sync-engine.js cache-first FOREVER, so phones never received sync fixes.
 // Bump this number again whenever you want every device to drop its cached files.
-const CACHE_NAME = "zeeshop-cache-v4";
+const CACHE_NAME = "zeeshop-cache-v5";
 const CORE_ASSETS = [
   "/app.html",
   "/manifest.json",
@@ -87,30 +87,58 @@ self.addEventListener("fetch", (event) => {
 
 /* ============================================================
    PUSH NOTIFICATIONS
-   ============================================================ */
-self.addEventListener("push", (event) => {
-  let data = { title: "ZeeShop", body: "You have a new update.", url: "/app.html" };
-  try{ if(event.data) data = { ...data, ...event.data.json() }; }catch(e){ /* fall back to defaults */ }
+   ============================================================
+   Payload sent by the server: { title, body, url, tag }.
+   Shows a real OS notification (status-bar banner + lock screen) with icon, title, text and vibration.
+   Tapping it focuses the open PWA and tells it to open More -> Messages from ZeeShop (postMessage), or opens the app
+   at /app.html#messages when it is closed. */
+const MESSAGES_URL = "/app.html#messages";
 
-  event.waitUntil(
-    self.registration.showNotification(data.title, {
+self.addEventListener("push", (event) => {
+  let data = { title: "ZeeShop", body: "You have a new message.", url: MESSAGES_URL, tag: "zeeshop-message" };
+  try { if (event.data) data = { ...data, ...event.data.json() }; }
+  catch (e) { try { if (event.data) data.body = event.data.text() || data.body; } catch (_e) { /* keep defaults */ } }
+
+  event.waitUntil((async () => {
+    await self.registration.showNotification(data.title, {
       body: data.body,
       icon: "/icon-192.png",
       badge: "/icon-192.png",
-      data: { url: data.url || "/app.html" }
-    })
-  );
+      tag: data.tag || "zeeshop-message",   // same tag replaces the previous banner instead of stacking
+      renotify: true,                       // ...but still buzzes for the new one
+      vibrate: [180, 90, 180],
+      requireInteraction: false,
+      timestamp: Date.now(),
+      data: { url: data.url || MESSAGES_URL },
+      actions: [{ action: "open", title: "Open" }]
+    });
+    // Let any open window refresh its unread dot right away.
+    const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    wins.forEach((c) => c.postMessage({ type: "ZEESHOP_PUSH_RECEIVED" }));
+  })());
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const targetUrl = (event.notification.data && event.notification.data.url) || "/app.html";
-  event.waitUntil(
-    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
-      for (const client of clientList) {
-        if (client.url.includes("app.html") && "focus" in client) return client.focus();
+  const targetUrl = (event.notification.data && event.notification.data.url) || MESSAGES_URL;
+  event.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const client of wins) {
+      if (client.url.includes("app.html") && "focus" in client) {
+        await client.focus();
+        client.postMessage({ type: "ZEESHOP_OPEN_MESSAGES" });   // already running: no reload, just navigate in-app
+        return;
       }
-      if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
+    }
+    if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
+  })());
+});
+
+// The browser rotated or dropped this device's push subscription — ask an open page to re-register it.
+self.addEventListener("pushsubscriptionchange", (event) => {
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((wins) => {
+      wins.forEach((c) => c.postMessage({ type: "ZEESHOP_RESUBSCRIBE" }));
     })
   );
 });

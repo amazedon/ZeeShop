@@ -153,7 +153,9 @@ const DELETABLE_TABLES = new Set(["shop_notes"]);      // everything else is his
 const COLUMN_ALLOWLIST: Record<string, Set<string>> = {
   businesses: new Set(["id", "name", "business_type", "registration_number", "country", "currency", "timezone", "language",
     "tax_name", "tax_percent", "logo_data_url", "setup_complete"]),
-  app_users: new Set(["id", "username", "first_name", "last_name", "phone", "email", "password_hash", "is_active"]),
+  // "email" is deliberately NOT here: login emails are locked and can only be changed by a Super Admin
+  // (super-admin function -> override_owner_contact). Anything a client sends for it is dropped.
+  app_users: new Set(["id", "username", "first_name", "last_name", "phone", "password_hash", "is_active"]),
 };
 
 // For child tables with no business_id/shop_id of their own — how to

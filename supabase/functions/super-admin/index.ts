@@ -730,11 +730,21 @@ Deno.serve(async (req: Request) => {
         changes.push("password");
       }
       if (new_email && new_email !== ownerRow.email) {
+        // Emails are locked at the database level (see email-lock-migration.sql). A Super Admin change is the ONLY
+        // path through: open a short-lived allowance for this one login, change it, then close the allowance.
+        const emailNorm = String(new_email).trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailNorm)) return json({ error: "That is not a valid email address." }, 400);
+        const { data: taken } = await admin.from("app_users").select("id").ilike("email", emailNorm).neq("id", ownerRow.id).limit(1);
+        if (taken && taken.length) return json({ error: "Another account already uses that email." }, 409);
         if (ownerRow.auth_user_id) {
-          const { error: authErr } = await admin.auth.admin.updateUserById(ownerRow.auth_user_id, { email: new_email });
+          await admin.from("email_change_allowed").upsert({
+            auth_user_id: ownerRow.auth_user_id, expires_at: new Date(Date.now() + 2 * 60 * 1000).toISOString(),
+          });
+          const { error: authErr } = await admin.auth.admin.updateUserById(ownerRow.auth_user_id, { email: emailNorm, email_confirm: true });
+          await admin.from("email_change_allowed").delete().eq("auth_user_id", ownerRow.auth_user_id);
           if (authErr) return json({ error: "Could not update login email: " + authErr.message }, 500);
         }
-        updatePayload.email = new_email;
+        updatePayload.email = emailNorm;
         changes.push(`email (${ownerRow.email || "none"} → ${new_email})`);
       }
       if (new_phone && new_phone !== ownerRow.phone) {

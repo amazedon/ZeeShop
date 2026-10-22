@@ -1757,6 +1757,7 @@ function render(){
   bindShellEvents();
   bindPasswordToggles();
   updateSyncDot();
+  if(typeof notifBoot === 'function'){ try{ notifBoot(); }catch(_e){} }
 }
 
 // Reflects window.__zeeshopSyncStatus (written by sync-engine.js) as a small
@@ -3597,6 +3598,11 @@ function openHideGoodModal(gid){
 }
 
 function alertCounts(){
+  const raw = alertCountsRaw();
+  if(typeof inAppAlertsOn === 'function' && !inAppAlertsOn()) return Object.assign({}, raw, { expiring:0, dueSoon:0, overdue:0, lowStock:0 });
+  return raw;
+}
+function alertCountsRaw(){
   const shopGoods = state.goods.filter(g=>g.shopId===state.currentShopId && isGoodActive(g));
   let expiring=0;
   shopGoods.forEach(g=> g.batches.forEach(b=>{
@@ -3647,7 +3653,7 @@ function renderShell(){
     <div class="bottomnav">
       ${navItems.map(n=>`
         <button class="nav-item ${route===n.id?'active':''}" data-route="${n.id}">
-          <div class="ic">${n.ic}</div><div>${n.label}</div>
+          <div class="ic">${n.ic}${n.id==='more'?`<i class="nz-dot nz-dot-nav ${annUnreadCount()?'on':''}" data-notif-dot></i>`:''}</div><div>${n.label}</div>
         </button>`).join('')}
     </div>
     ${route==='goods' && (isMaster()|| (isStaff() && u.canAddGoods)) ? `<button class="fab" id="fab-add-good">＋</button>` : ''}
@@ -3911,7 +3917,7 @@ function screenDashboard(){
     ` : `<div class="empty"><div class="ic">${ICON_CHECK_CIRCLE}</div><b>${t('dash_all_clear')}</b>${t('dash_no_alerts')}</div>`}
 
     ${promoSliderBlock()}
-    ${messagesRowHtml()}
+    ${notifPromptCard()}
 
     ${utilityTilesBlock()}
 
@@ -4016,143 +4022,442 @@ function initPromoSlider(){
   }));
 }
 
-// ---- Announcements (broadcasts posted from Super Admin → Notifications) ----
-let annList = (()=>{ try{ return JSON.parse(localStorage.getItem('zeeshop_ann_cache')||'[]'); }catch(_e){ return []; } })();
-let annFetchedAt = 0;
-function annSeenIds(){ try{ return JSON.parse(localStorage.getItem('zeeshop_seen_ann')||'[]'); }catch(_e){ return []; } }
-function annMarkSeen(id){ const ids = annSeenIds(); if(!ids.includes(id)){ ids.push(id); try{ localStorage.setItem('zeeshop_seen_ann', JSON.stringify(ids.slice(-100))); }catch(_e){} } }
-async function loadAnnouncements(){
-  annFetchedAt = Date.now();
-  try{
-    const { data } = await window.sb.auth.getSession();
-    const tok = data?.session?.access_token || SITE_CONTENT_ANON_KEY; // signed-in token lets a message sent to just this business through
-    const r = await fetch(`${SITE_CONTENT_URL}/rest/v1/announcements?select=id,title,body,created_at&order=created_at.desc&limit=20`, {
-      headers: { apikey: SITE_CONTENT_ANON_KEY, Authorization: 'Bearer ' + tok }, cache: 'no-store'
-    });
-    if(!r.ok) return;
-    const fresh = await r.json();
-    if(!Array.isArray(fresh)) return;
-    const changed = JSON.stringify(fresh) !== JSON.stringify(annList);
-    annList = fresh;
-    try{ localStorage.setItem('zeeshop_ann_cache', JSON.stringify(fresh)); }catch(_e){}
-    if(route==='dashboard'){ if(changed) render(); showUnseenAnnouncement(); }
-  }catch(_e){ /* offline: keep what we have */ }
+/* ===================== Notification Manager =====================
+   One place for: in-app inbox (Messages from ZeeShop, under More), unread dots, the two-switch Notifications
+   panel, and Web Push registration for EVERY signed-in person (owner, staff, PIN users, viewers).
+   - Server calls go through the register-push Edge Function (service role), so a staff device never hits an RLS wall.
+   - Preferences are kept per person on this device (works offline) and synced to Supabase; an explicit OFF is stored
+     server-side and is never overridden by auto-enable.
+   - Default is ON: silently registered when the browser permission is already granted, otherwise a clear in-app
+     prompt on Home (a browser only shows its permission dialog after a tap).                                    */
+(function(){
+  const st = document.createElement('style');
+  st.textContent = `
+    :root{--nz-red:#FF3040;--nz-on:#12B76A;--nz-glass:rgba(255,255,255,.72);}
+    .nav-item .ic{position:relative;}
+    .nz-dot{position:absolute;top:-3px;right:-5px;width:11px;height:11px;border-radius:50%;background:var(--nz-red);border:2px solid #fff;box-shadow:0 0 0 0 rgba(255,48,64,.55);display:none;}
+    .nz-dot.on{display:block;animation:nzPop .42s cubic-bezier(.2,1.6,.4,1) both,nzRing 1.6s ease-out .45s 2;}
+    .nz-dot-inline{position:static;display:none;flex:0 0 auto;margin-left:2px;}
+    .nz-dot-inline.on{display:inline-block;}
+    @keyframes nzPop{from{transform:scale(0)}to{transform:scale(1)}}
+    @keyframes nzRing{0%{box-shadow:0 0 0 0 rgba(255,48,64,.5)}100%{box-shadow:0 0 0 9px rgba(255,48,64,0)}}
+    .nz-badge{background:linear-gradient(135deg,#FF4D5E,#E0162B);color:#fff;font-size:11px;font-weight:800;min-width:20px;height:20px;padding:0 6px;border-radius:10px;display:none;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(224,22,43,.35);}
+    .nz-badge.on{display:inline-flex;}
+    .nz-row{display:flex;align-items:center;gap:12px;padding:12px;margin:0 0 10px;border-radius:16px;cursor:pointer;background:linear-gradient(135deg,rgba(255,255,255,.9),rgba(241,245,252,.8));border:1px solid rgba(18,33,59,.07);box-shadow:0 4px 18px rgba(18,33,59,.07),inset 0 1px 0 #fff;transition:transform .15s ease,box-shadow .15s ease;}
+    .nz-row:active{transform:scale(.985);box-shadow:0 2px 8px rgba(18,33,59,.08);}
+    .nz-tile{width:42px;height:42px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:20px;flex:0 0 auto;background:linear-gradient(145deg,#1B2F52,#0F3D3E);color:#fff;box-shadow:0 4px 12px rgba(15,61,62,.28);}
+    .nz-row .nz-main{flex:1;min-width:0;}
+    .nz-row .nz-t1{font-weight:800;font-size:15px;color:var(--ink-text);display:flex;align-items:center;gap:8px;}
+    .nz-row .nz-t2{font-size:12.5px;color:var(--text-dim);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .nz-chev{color:var(--text-dim);font-size:20px;}
+    .nz-overlay{position:fixed;inset:0;z-index:9998;background:rgba(10,18,36,.38);-webkit-backdrop-filter:blur(10px) saturate(140%);backdrop-filter:blur(10px) saturate(140%);display:flex;align-items:flex-end;justify-content:center;animation:nzFade .22s ease both;}
+    .nz-overlay.closing{animation:nzFadeOut .18s ease both;}
+    .nz-sheet{width:100%;max-width:480px;max-height:88vh;overflow:auto;border-radius:28px 28px 0 0;background:linear-gradient(165deg,rgba(255,255,255,.9),rgba(243,246,252,.78));-webkit-backdrop-filter:blur(24px) saturate(170%);backdrop-filter:blur(24px) saturate(170%);border:1px solid rgba(255,255,255,.75);border-bottom:none;box-shadow:0 -14px 50px rgba(18,33,59,.25),inset 0 1px 0 #fff;padding:10px 18px calc(22px + env(safe-area-inset-bottom));animation:nzUp .34s cubic-bezier(.2,.9,.25,1) both;}
+    .nz-overlay.closing .nz-sheet{animation:nzDown .18s ease both;}
+    .nz-grab{width:42px;height:5px;border-radius:3px;background:rgba(18,33,59,.16);margin:2px auto 14px;}
+    .nz-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;}
+    .nz-head h3{font-size:20px;letter-spacing:-.02em;margin:0;}
+    .nz-x{width:34px;height:34px;border-radius:50%;border:none;background:rgba(18,33,59,.07);color:var(--ink-text);font-size:18px;cursor:pointer;transition:background .15s;}
+    .nz-x:active{background:rgba(18,33,59,.14);}
+    @keyframes nzFade{from{opacity:0}to{opacity:1}} @keyframes nzFadeOut{to{opacity:0}}
+    @keyframes nzUp{from{transform:translateY(60px);opacity:0}to{transform:none;opacity:1}} @keyframes nzDown{to{transform:translateY(40px);opacity:0}}
+    .nz-opt{display:flex;align-items:center;gap:14px;padding:14px;border-radius:18px;margin-bottom:10px;background:rgba(255,255,255,.7);border:1px solid rgba(18,33,59,.07);box-shadow:0 3px 14px rgba(18,33,59,.06),inset 0 1px 0 #fff;}
+    .nz-opt .nz-main{flex:1;min-width:0;}
+    .nz-opt .nz-t1{font-weight:800;font-size:15px;color:var(--ink-text);}
+    .nz-opt .nz-t2{font-size:12.5px;line-height:1.4;color:var(--text-dim);margin-top:3px;}
+    .nz-status{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;margin-top:7px;padding:3px 9px;border-radius:20px;background:#EEF1F6;color:#475069;}
+    .nz-status::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor;}
+    .nz-status.ok{background:#E3F8EE;color:#0B8A52;} .nz-status.warn{background:#FFF0D2;color:#9A5B00;} .nz-status.bad{background:#FFE6E8;color:#C21F2E;}
+    .nz-switch{position:relative;flex:0 0 auto;width:54px;height:32px;border-radius:16px;border:none;padding:0;cursor:pointer;background:#CDD3DF;box-shadow:inset 0 1px 3px rgba(18,33,59,.22);transition:background .28s ease,box-shadow .28s ease;}
+    .nz-switch::after{content:"";position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:13px;background:#fff;box-shadow:0 2px 6px rgba(18,33,59,.3);transition:transform .32s cubic-bezier(.3,1.5,.5,1),width .15s ease;}
+    .nz-switch[aria-checked="true"]{background:linear-gradient(135deg,#1ED48A,#0CA060);box-shadow:inset 0 1px 3px rgba(0,60,30,.25),0 0 0 4px rgba(18,183,106,.14);}
+    .nz-switch[aria-checked="true"]::after{transform:translateX(22px);}
+    .nz-switch:active::after{width:31px;} .nz-switch[aria-checked="true"]:active::after{transform:translateX(17px);}
+    .nz-switch:focus-visible,.nz-x:focus-visible,.nz-row:focus-visible{outline:3px solid rgba(242,169,59,.7);outline-offset:2px;}
+    .nz-switch[disabled]{opacity:.55;cursor:wait;}
+    .nz-msg{position:relative;padding:14px 14px 14px 18px;margin-bottom:10px;border-radius:16px;background:rgba(255,255,255,.78);border:1px solid rgba(18,33,59,.07);box-shadow:0 3px 14px rgba(18,33,59,.06),inset 0 1px 0 #fff;overflow:hidden;}
+    .nz-msg.new::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:linear-gradient(180deg,#FF4D5E,#E0162B);}
+    .nz-msg .nz-mt{font-weight:800;font-size:15px;color:var(--ink-text);display:flex;gap:8px;align-items:center;justify-content:space-between;}
+    .nz-msg .nz-new{font-size:10.5px;font-weight:800;color:#fff;background:var(--nz-red);padding:2px 8px;border-radius:10px;}
+    .nz-msg .nz-when{font-size:11.5px;color:var(--text-dim);margin:2px 0 8px;}
+    .nz-msg .nz-body{font-size:14.5px;line-height:1.5;white-space:pre-wrap;color:var(--text);}
+    .nz-empty{text-align:center;padding:34px 10px;color:var(--text-dim);} .nz-empty .e{font-size:34px;margin-bottom:6px;}
+    .nz-prompt{display:flex;align-items:center;gap:12px;padding:14px;margin:0 0 14px;border-radius:20px;color:#fff;background:linear-gradient(135deg,rgba(27,47,82,.96),rgba(15,61,62,.94));box-shadow:0 10px 28px rgba(15,61,62,.32),inset 0 1px 0 rgba(255,255,255,.18);animation:nzUp .4s cubic-bezier(.2,.9,.25,1) both;}
+    .nz-prompt .nz-t1{font-weight:800;font-size:15px;color:#fff;} .nz-prompt .nz-t2{font-size:12.5px;color:rgba(255,255,255,.78);margin-top:2px;line-height:1.4;}
+    .nz-prompt .nz-go{flex:0 0 auto;border:none;border-radius:12px;padding:10px 14px;font-weight:800;font-size:13px;background:var(--marigold);color:var(--ink);cursor:pointer;transition:transform .12s;}
+    .nz-prompt .nz-go:active{transform:scale(.95);}
+    .nz-prompt .nz-later{background:none;border:none;color:rgba(255,255,255,.7);font-size:12px;cursor:pointer;padding:4px 0 0;}
+    @media (prefers-reduced-motion:reduce){.nz-overlay,.nz-sheet,.nz-dot.on,.nz-prompt{animation:none!important;}.nz-switch,.nz-switch::after,.nz-row{transition:none!important;}}
+  `;
+  document.head.appendChild(st);
+})();
+
+// ---------- per-person preferences on this device ----------
+const NOTIF_LS = 'zeeshop_notif_v2';
+function npAll(){ try{ return JSON.parse(localStorage.getItem(NOTIF_LS)||'{}'); }catch(_e){ return {}; } }
+function np(){
+  const uid = state.sessionUserId;
+  let legacyOff = false; try{ legacyOff = localStorage.getItem('zeeshop_push_optout') === '1'; }catch(_e){}
+  return Object.assign({ push: !legacyOff, inapp: true, lastRead: null, serverKey: null, pending: {} }, (npAll()[uid]||{}));
 }
-function annCloseModal(){ const m = document.getElementById('ann-modal'); if(m) m.remove(); }
-function showUnseenAnnouncement(){
-  if(document.getElementById('ann-modal')) return;
-  const next = annList.find(a=>!annSeenIds().includes(a.id));
-  if(!next) return;
-  const ov = document.createElement('div'); ov.className = 'ann-overlay'; ov.id = 'ann-modal';
-  ov.innerHTML = `<div class="ann-box">
-    <div style="font-size:26px;margin-bottom:4px;">📣</div>
-    <h3>${escapeHtml(next.title)}</h3>
-    <div class="ann-date">${escapeHtml(new Date(next.created_at).toLocaleDateString())}</div>
-    <div class="ann-body">${escapeHtml(next.body)}</div>
-    <button class="btn btn-primary" id="ann-ok" style="margin-top:16px;">Got it</button>
-  </div>`;
-  document.body.appendChild(ov);
-  document.getElementById('ann-ok').addEventListener('click', ()=>{ annMarkSeen(next.id); annCloseModal(); showUnseenAnnouncement(); });
+function npSet(patch){
+  const uid = state.sessionUserId; if(!uid) return;
+  const all = npAll(); all[uid] = Object.assign(np(), patch);
+  try{ localStorage.setItem(NOTIF_LS, JSON.stringify(all)); }catch(_e){}
 }
-function openMessagesList(){
-  if(document.getElementById('ann-modal')) return;
-  const ov = document.createElement('div'); ov.className = 'ann-overlay'; ov.id = 'ann-modal';
-  ov.innerHTML = `<div class="ann-box">
-    <h3>📣 Messages from ZeeShop</h3>
-    ${annList.map(a=>`<div class="ann-item"><div style="font-weight:800;">${escapeHtml(a.title)}</div><div class="ann-date">${escapeHtml(new Date(a.created_at).toLocaleDateString())}</div><div class="ann-body">${escapeHtml(a.body)}</div></div>`).join('')}
-    <button class="btn btn-outline" id="ann-close" style="margin-top:14px;">Close</button>
-  </div>`;
-  document.body.appendChild(ov);
-  document.getElementById('ann-close').addEventListener('click', ()=>{ annList.forEach(a=>annMarkSeen(a.id)); annCloseModal(); });
-}
-function messagesRowHtml(){
-  if(!annList.length) return '';
-  const unseen = annList.filter(a=>!annSeenIds().includes(a.id)).length;
-  return `<div class="card" data-open-messages style="display:flex;align-items:center;gap:10px;cursor:pointer;">
-    <div style="font-size:20px;">📣</div>
-    <div style="flex:1;"><b>Messages from ZeeShop</b>${unseen?` <span class="pill" style="background:var(--marigold);color:var(--ink);">${unseen} new</span>`:''}</div>
-    <div style="color:var(--text-dim);">›</div>
-  </div>`;
+function inAppAlertsOn(){ return np().inapp !== false; }
+function laterOf(a, b){ const x = a?Date.parse(a):0, y = b?Date.parse(b):0; return (y>x ? b : a) || null; }
+
+// ---------- server calls (register-push) ----------
+async function pushApi(action, extra){
+  const { data } = await window.sb.auth.getSession();
+  const tok = data && data.session && data.session.access_token;
+  if(!tok) throw new Error('no-session');
+  const r = await fetch(`${SITE_CONTENT_URL}/functions/v1/register-push`, {
+    method:'POST',
+    headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+tok, 'apikey': SITE_CONTENT_ANON_KEY },
+    body: JSON.stringify(Object.assign({ action, app_user_id: state.sessionUserId }, extra||{}))
+  });
+  const j = await r.json().catch(()=>({}));
+  if(!r.ok || j.error) throw new Error(j.error || 'request failed');
+  return j;
 }
 
-// ---- Notifications ON by default ----
-// Every device is signed up for notifications automatically. They stay on
-// until the PERSON turns them off in Settings (that choice is remembered
-// and never overridden). The phone/browser itself still has to grant
-// permission, which no app can force — so when it hasn't been granted we show
-// a clear "Turn On" card on Home, or how to unblock it.
-let pushDeviceState = null;        // 'on' | 'default' | 'denied' | 'off' | 'unsupported' | null (not checked yet)
+// ---------- inbox data ----------
+const ANN_POPUP = false;   // set true to also pop each new message up as a dialog on Home (old behaviour)
+let annList = (()=>{ try{ return JSON.parse(localStorage.getItem('zeeshop_ann_cache')||'[]'); }catch(_e){ return []; } })();
+let annFetchedAt = 0;
+function annUnreadCount(){
+  const lr = np().lastRead; const t = lr ? Date.parse(lr) : 0;
+  return annList.filter(a=>Date.parse(a.created_at) > t).length;
+}
+async function loadAnnouncements(){
+  annFetchedAt = Date.now();
+  let fresh = null;
+  try{ const j = await pushApi('inbox'); if(Array.isArray(j.messages)) fresh = j.messages; }catch(_e){}
+  if(!fresh){
+    try{
+      const { data } = await window.sb.auth.getSession();
+      const tok = (data && data.session && data.session.access_token) || SITE_CONTENT_ANON_KEY;
+      const r = await fetch(`${SITE_CONTENT_URL}/rest/v1/announcements?select=id,title,body,created_at&order=created_at.desc&limit=30`, {
+        headers:{ apikey: SITE_CONTENT_ANON_KEY, Authorization:'Bearer '+tok }, cache:'no-store'
+      });
+      if(r.ok){ const j = await r.json(); if(Array.isArray(j)) fresh = j; }
+    }catch(_e){ /* offline: keep what we have */ }
+  }
+  if(!fresh) return;
+  const changed = JSON.stringify(fresh) !== JSON.stringify(annList);
+  annList = fresh;
+  try{ localStorage.setItem('zeeshop_ann_cache', JSON.stringify(fresh)); }catch(_e){}
+  // First ever sync on this device: don't flag old history as unread — only messages from now on.
+  if(!np().lastRead){ npSet({ lastRead: new Date().toISOString() }); pushApi('mark_read').catch(()=>{}); }
+  if(changed) refreshNotifUI();
+  if(ANN_POPUP && route==='dashboard') showUnseenAnnouncement();
+}
+function refreshNotifUI(){
+  const n = annUnreadCount();
+  document.querySelectorAll('[data-notif-dot]').forEach(el=>el.classList.toggle('on', n>0));
+  document.querySelectorAll('[data-notif-count]').forEach(el=>{ el.textContent = n>9?'9+':String(n); el.classList.toggle('on', n>0); });
+  const sub = document.querySelector('[data-inbox-sub]');
+  if(sub) sub.textContent = annList.length ? annList[0].title : 'No messages yet';
+}
+function notifRelTime(iso){
+  const mins = Math.floor((Date.now()-Date.parse(iso))/60000);
+  if(isNaN(mins)) return '';
+  if(mins < 1) return 'Just now'; if(mins < 60) return mins+'m ago';
+  const h = Math.floor(mins/60); if(h < 24) return h+'h ago';
+  const d = Math.floor(h/24); if(d < 7) return d+'d ago';
+  return new Date(iso).toLocaleDateString();
+}
+
+// ---------- More → "Messages from ZeeShop" row ----------
+function messagesRowHtml(){
+  const n = annUnreadCount();
+  return `<div class="nz-row" data-open-inbox role="button" tabindex="0">
+    <div class="nz-tile">📣</div>
+    <div class="nz-main">
+      <div class="nz-t1">Messages from ZeeShop <i class="nz-dot nz-dot-inline ${n?'on':''}" data-notif-dot></i></div>
+      <div class="nz-t2" data-inbox-sub>${annList.length ? escapeHtml(annList[0].title) : 'No messages yet'}</div>
+    </div>
+    <span class="nz-badge ${n?'on':''}" data-notif-count>${n>9?'9+':n}</span>
+    <div class="nz-chev">›</div>
+  </div>`;
+}
+function nzClose(id){
+  const o = document.getElementById(id); if(!o) return;
+  o.classList.add('closing'); setTimeout(()=>o.remove(), 190);
+}
+function nzOverlay(id, inner){
+  if(document.getElementById(id)) return null;
+  const ov = document.createElement('div'); ov.className = 'nz-overlay'; ov.id = id;
+  ov.innerHTML = `<div class="nz-sheet" role="dialog" aria-modal="true"><div class="nz-grab"></div>${inner}</div>`;
+  ov.addEventListener('click', e=>{ if(e.target === ov) nzClose(id); });
+  document.body.appendChild(ov);
+  return ov;
+}
+function openInbox(){
+  const lr = np().lastRead; const t = lr ? Date.parse(lr) : 0;
+  const cards = annList.length ? annList.map(a=>{
+    const isNew = Date.parse(a.created_at) > t;
+    return `<div class="nz-msg ${isNew?'new':''}">
+      <div class="nz-mt"><span>${escapeHtml(a.title)}</span>${isNew?'<span class="nz-new">New</span>':''}</div>
+      <div class="nz-when">${escapeHtml(notifRelTime(a.created_at))}</div>
+      <div class="nz-body">${escapeHtml(a.body)}</div>
+    </div>`;
+  }).join('') : `<div class="nz-empty"><div class="e">📭</div><b>No messages yet</b><div style="font-size:13px;margin-top:4px;">Updates from ZeeShop will appear here.</div></div>`;
+  const ov = nzOverlay('nz-inbox', `<div class="nz-head"><h3>Messages from ZeeShop</h3><button class="nz-x" aria-label="Close" id="nz-inbox-x">✕</button></div>${cards}`);
+  if(!ov) return;
+  document.getElementById('nz-inbox-x').addEventListener('click', ()=>nzClose('nz-inbox'));
+  // Opening the inbox clears the unread dot — on this device now, and on every other device via the server.
+  npSet({ lastRead: new Date().toISOString() });
+  refreshNotifUI();
+  pushApi('mark_read').catch(()=>{});
+  if(annFetchedAt && Date.now()-annFetchedAt > 30000) loadAnnouncements();
+}
+// kept for the optional popup mode
+function showUnseenAnnouncement(){ /* disabled unless ANN_POPUP = true; the unread dot + push banner replace it */ }
+
+// ---------- push state ----------
+let pushDeviceState = null;        // 'on' | 'default' | 'denied' | 'off' | 'unsupported' | 'ios-install' | null
 let pushEnsureRunning = false;
-function pushOptedOut(){ try{ return localStorage.getItem('zeeshop_push_optout') === '1'; }catch(_e){ return false; } }
+function isIOS(){ return /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1); }
+function isStandalone(){ return window.navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches); }
+function pushSupported(){ return ('serviceWorker' in navigator) && ('PushManager' in window) && ('Notification' in window); }
+function abToB64Url(buf){ const b = new Uint8Array(buf); let s=''; b.forEach(c=>s+=String.fromCharCode(c)); return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
+
+async function subscribeThisDevice(interactive){
+  if(!pushSupported()) return false;
+  let permission = Notification.permission;
+  if(permission !== 'granted'){
+    if(!interactive) return false;
+    permission = await Notification.requestPermission();
+  }
+  if(permission !== 'granted') return false;
+  const reg = await navigator.serviceWorker.ready;
+  // The SERVER's key is the source of truth, so rotating keys never needs an app.html edit.
+  let key = np().serverKey || VAPID_PUBLIC_KEY;
+  try{ const c = await pushApi('config'); if(c.vapid_public_key){ key = c.vapid_public_key; npSet({ serverKey: key }); } }catch(_e){}
+  let sub = await reg.pushManager.getSubscription();
+  // Auto-resubscribe: a subscription made with a different key can never be reached by the current server key.
+  if(sub && sub.options && sub.options.applicationServerKey && abToB64Url(sub.options.applicationServerKey) !== key){
+    try{ await sub.unsubscribe(); }catch(_e){}
+    sub = null;
+  }
+  if(!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey: urlBase64ToUint8Array(key) });
+  try{
+    await pushApi('subscribe', { subscription: sub.toJSON(), vapid_key: key });
+    const p = Object.assign({}, np().pending); delete p.push; npSet({ pending: p });
+  }catch(_e){
+    return false;       // permission is granted but the server could not be reached — retried when back online
+  }
+  return true;
+}
+
 async function ensurePushOn(){
   if(pushEnsureRunning) return;
   pushEnsureRunning = true;
   const before = pushDeviceState;
   try{
-    if(!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)){ pushDeviceState = 'unsupported'; return; }
-    if(pushOptedOut()){ pushDeviceState = 'off'; return; }
-    const perm = Notification.permission;
-    if(perm === 'denied'){ pushDeviceState = 'denied'; return; }
-    if(perm === 'granted'){
-      const ok = await enablePushNotifications(true);      // quietly (re)subscribe this device
+    if(isIOS() && !isStandalone()){ pushDeviceState = 'ios-install'; return; }
+    if(!pushSupported()){ pushDeviceState = 'unsupported'; return; }
+    if(!np().push){
+      pushDeviceState = 'off';
+      // This device may still hold the previous person's subscription (shared device): release it.
+      try{
+        const reg = await navigator.serviceWorker.ready; const sub = await reg.pushManager.getSubscription();
+        if(sub){ const ep = sub.endpoint; await sub.unsubscribe(); pushApi('unsubscribe', { endpoint: ep }).catch(()=>{}); }
+      }catch(_e){}
+      return;
+    }
+    if(Notification.permission === 'denied'){ pushDeviceState = 'denied'; return; }
+    if(Notification.permission === 'granted'){
+      const ok = await subscribeThisDevice(false);
       pushDeviceState = ok ? 'on' : 'default';
       return;
     }
-    pushDeviceState = 'default';
-    // A brand-new account gets one automatic ask. Browsers sometimes ignore an
-    // ask that didn't come from a tap; the Home card below covers that case.
-    let fresh = false;
-    try{ fresh = localStorage.getItem('zeeshop_new_signup') === '1' && localStorage.getItem('zeeshop_push_autoasked') !== '1'; }catch(_e){}
-    if(fresh){
-      try{ localStorage.setItem('zeeshop_push_autoasked', '1'); }catch(_e){}
-      const ok = await enablePushNotifications(true);
-      pushDeviceState = ok ? 'on' : (Notification.permission === 'denied' ? 'denied' : 'default');
-    }
+    pushDeviceState = 'default';     // not asked yet → the Home prompt card does the (tap-driven) ask
   }catch(_e){
-    /* leave the state as it was */
+    /* keep the previous state */
   }finally{
     pushEnsureRunning = false;
-    if(pushDeviceState !== before && route==='dashboard') render();
+    if(pushDeviceState !== before) notifRefreshAll();
   }
 }
-function pushPromptCard(){
-  if(pushOptedOut()) return '';
-  if(pushDeviceState === 'default'){
-    return `<div class="card" style="display:flex;align-items:center;gap:12px;">
-      <div style="font-size:22px;">🔔</div>
-      <div style="flex:1;"><b>Turn on notifications</b><div class="subtle" style="font-size:12.5px;">Get shop alerts and important updates from ZeeShop.</div></div>
-      <button class="btn btn-primary btn-sm" id="push-turn-on" style="width:auto;">Turn On</button>
-    </div>`;
+async function turnPushOn(){
+  if(isIOS() && !isStandalone()){ pushDeviceState = 'ios-install'; return false; }
+  let ok = false;
+  try{ ok = await subscribeThisDevice(true); }catch(_e){ ok = false; }
+  if(Notification.permission === 'denied'){ pushDeviceState = 'denied'; }
+  else if(ok){ npSet({ push:true }); pushDeviceState = 'on'; try{ localStorage.removeItem('zeeshop_push_optout'); }catch(_e){} }
+  else if(Notification.permission === 'granted'){ npSet({ push:true, pending:Object.assign({}, np().pending, {push:true}) }); pushDeviceState = 'default'; }
+  else pushDeviceState = 'default';
+  return ok;
+}
+async function turnPushOff(){
+  // The person chose this: it is stored on the server and respected on every sign-in until THEY turn it back on.
+  npSet({ push:false });
+  pushDeviceState = 'off';
+  let endpoint = null;
+  try{
+    if(pushSupported()){
+      const reg = await navigator.serviceWorker.ready; const sub = await reg.pushManager.getSubscription();
+      if(sub){ endpoint = sub.endpoint; await sub.unsubscribe(); }
+    }
+  }catch(_e){}
+  try{ await pushApi('unsubscribe', { endpoint }); const p = Object.assign({}, np().pending); delete p.push; npSet({ pending:p }); }
+  catch(_e){ npSet({ pending: Object.assign({}, np().pending, { push:false }) }); }
+}
+async function setInAppAlerts(on){
+  npSet({ inapp: !!on });
+  try{ await pushApi('set_prefs', { inapp_alerts_enabled: !!on }); const p = Object.assign({}, np().pending); delete p.inapp; npSet({ pending:p }); }
+  catch(_e){ npSet({ pending: Object.assign({}, np().pending, { inapp: !!on }) }); }
+}
+
+// ---------- boot (runs once after sign-in / person switch) ----------
+let notifBootKey = null;
+let pendingOpenMessages = (location.hash === '#messages');
+async function notifBoot(){
+  const uid = state.sessionUserId; if(!uid) return;
+  if(pendingOpenMessages){
+    pendingOpenMessages = false;
+    try{ history.replaceState(null, '', location.pathname + location.search); }catch(_e){}
+    setTimeout(()=>{ if(route !== 'more'){ route = 'more'; render(); } openInbox(); }, 60);
   }
-  if(pushDeviceState === 'denied'){
-    return `<div class="card" style="display:flex;align-items:center;gap:12px;">
-      <div style="font-size:22px;">🔕</div>
-      <div style="flex:1;"><b>Notifications are blocked</b><div class="subtle" style="font-size:12.5px;">Allow notifications for this site in your browser settings, then tap Check again.</div></div>
-      <button class="btn btn-outline btn-sm" id="push-check-again" style="width:auto;">Check again</button>
-    </div>`;
-  }
+  const k = uid + ':' + Math.floor(Date.now()/(30*60*1000));
+  if(notifBootKey === k) return;
+  notifBootKey = k;
+  try{
+    // 1) send anything chosen while offline, 2) then adopt the server's saved choices
+    const pend = np().pending || {};
+    if(pend.push === false) await turnPushOff();
+    if(typeof pend.inapp === 'boolean') await setInAppAlerts(pend.inapp);
+    const s = await pushApi('get_state');
+    const stillPending = np().pending || {};
+    const patch = { serverKey: s.vapid_public_key || np().serverKey, lastRead: laterOf(np().lastRead, s.last_messages_read_at) };
+    if(!('push' in stillPending)) patch.push = s.push_enabled !== false;
+    if(!('inapp' in stillPending)) patch.inapp = s.inapp_alerts_enabled !== false;
+    npSet(patch);
+  }catch(_e){ /* offline or no session: local values keep working */ }
+  loadAnnouncements();
+  await ensurePushOn();
+  notifRefreshAll();
+}
+function notifRefreshAll(){
+  refreshNotifUI();
+  const prompt = document.getElementById('nz-prompt-slot');
+  if(prompt) prompt.innerHTML = notifPromptInner();
+  const sheet = document.getElementById('nz-settings-body'); if(sheet) sheet.innerHTML = notifSettingsInner();
+  const sum = document.getElementById('nz-settings-summary'); if(sum) sum.textContent = notifSummaryText();
+  bindNotifPrompt(); bindNotifSettings();
+  if(typeof alertCounts === 'function'){ const b = document.getElementById('alerts-btn'); if(b){ const a = alertCounts(); b.setAttribute('data-count', a.expiring+a.dueSoon+a.overdue+a.lowStock); } }
+}
+
+// ---------- Home prompt (only after sign-in; never on the login screen) ----------
+let nzPromptHidden = false;
+function notifPromptInner(){
+  if(nzPromptHidden || !np().push) return '';
+  if(pushDeviceState === 'default') return `<div class="nz-prompt"><div style="font-size:26px;">🔔</div>
+      <div style="flex:1;"><div class="nz-t1">Stay in the loop</div><div class="nz-t2">Get shop alerts and updates from ZeeShop, even when the app is closed.</div><button class="nz-later" id="nz-later">Not now</button></div>
+      <button class="nz-go" id="nz-turn-on">Turn on</button></div>`;
+  if(pushDeviceState === 'denied') return `<div class="nz-prompt"><div style="font-size:26px;">🔕</div>
+      <div style="flex:1;"><div class="nz-t1">Notifications are blocked</div><div class="nz-t2">Allow notifications for ZeeShop in your phone or browser settings, then tap Check again.</div></div>
+      <button class="nz-go" id="nz-check-again">Check again</button></div>`;
+  if(pushDeviceState === 'ios-install') return `<div class="nz-prompt"><div style="font-size:26px;">📲</div>
+      <div style="flex:1;"><div class="nz-t1">Add ZeeShop to your Home Screen</div><div class="nz-t2">On iPhone, tap Share, then “Add to Home Screen”, and open ZeeShop from there to get notifications.</div><button class="nz-later" id="nz-later">Got it</button></div></div>`;
   return '';
+}
+function notifPromptCard(){ return `<div id="nz-prompt-slot">${notifPromptInner()}</div>`; }
+function bindNotifPrompt(){
+  const on = document.getElementById('nz-turn-on');
+  if(on && !on._b){ on._b = 1; on.addEventListener('click', async ()=>{ on.disabled = true; await turnPushOn(); notifRefreshAll(); }); }
+  const again = document.getElementById('nz-check-again');
+  if(again && !again._b){ again._b = 1; again.addEventListener('click', async ()=>{ pushDeviceState = null; await ensurePushOn(); notifRefreshAll(); }); }
+  const later = document.getElementById('nz-later');
+  if(later && !later._b){ later._b = 1; later.addEventListener('click', ()=>{ nzPromptHidden = true; notifRefreshAll(); }); }
 }
 function bindHomeExtras(){
   initPromoSlider();
   if(Date.now() - promoFetchedAt > 5*60*1000) loadPromoBanners();
-  if(Date.now() - annFetchedAt > 5*60*1000) loadAnnouncements();
-  else if(annList.length) setTimeout(showUnseenAnnouncement, 300);
+  bindNotifPrompt();
+}
+
+// ---------- Settings → Notifications (two independent switches) ----------
+function notifSummaryText(){
+  const p = pushDeviceState === 'on' ? 'Push on' : 'Push off';
+  return `${p} · Alerts ${inAppAlertsOn() ? 'on' : 'off'}`;
+}
+function notifSettingsCard(){
+  return `<div class="nz-row" id="open-notif-settings" role="button" tabindex="0">
+    <div class="nz-tile">🔔</div>
+    <div class="nz-main"><div class="nz-t1">Notifications</div><div class="nz-t2" id="nz-settings-summary">${escapeHtml(notifSummaryText())}</div></div>
+    <div class="nz-chev">›</div></div>`;
+}
+function notifSettingsInner(){
+  const pushOn = pushDeviceState === 'on';
+  const msgs = {
+    on:['ok','On for this device'], off:['','Off'], default:['warn','Waiting for permission'],
+    denied:['bad','Blocked in browser settings'], unsupported:['bad','Not supported on this browser'], 'ios-install':['warn','Add to Home Screen first']
+  };
+  const m = msgs[pushDeviceState] || ['',''];
+  const owner = (typeof isMaster === 'function') && isMaster();
+  return `
+    <div class="nz-opt">
+      <div class="nz-tile">📲</div>
+      <div class="nz-main"><div class="nz-t1">Push notifications</div>
+        <div class="nz-t2">Banners on your lock screen and status bar, even when ZeeShop is closed.</div>
+        ${m[1] ? `<span class="nz-status ${m[0]}">${m[1]}</span>` : ''}</div>
+      <button class="nz-switch" role="switch" id="nz-sw-push" aria-label="Push notifications" aria-checked="${pushOn}"></button>
+    </div>
+    <div class="nz-opt">
+      <div class="nz-tile" style="background:linear-gradient(145deg,#D98E1E,#F2A93B);">📦</div>
+      <div class="nz-main"><div class="nz-t1">In-app alerts &amp; warnings</div>
+        <div class="nz-t2">Low stock, goods about to expire, and overdue customer credit. ${owner ? 'Applies to your whole business.' : 'Applies to your view only.'}</div></div>
+      <button class="nz-switch" role="switch" id="nz-sw-inapp" aria-label="In-app alerts and warnings" aria-checked="${inAppAlertsOn()}"></button>
+    </div>`;
+}
+function openNotifSettings(){
+  const ov = nzOverlay('nz-settings', `<div class="nz-head"><h3>Notifications</h3><button class="nz-x" aria-label="Close" id="nz-settings-x">✕</button></div><div id="nz-settings-body">${notifSettingsInner()}</div>`);
+  if(!ov) return;
+  document.getElementById('nz-settings-x').addEventListener('click', ()=>nzClose('nz-settings'));
+  bindNotifSettings();
   if(pushDeviceState === null) ensurePushOn();
-  const row = document.querySelector('[data-open-messages]');
-  if(row) row.addEventListener('click', openMessagesList);
-  bindPushCardEvents();
 }
-function bindPushCardEvents(){
-  const on = document.getElementById('push-turn-on');
-  if(on) on.addEventListener('click', async ()=>{
-    const ok = await enablePushNotifications();   // this tap lets the browser show its permission prompt
-    pushDeviceState = ok ? 'on' : (Notification.permission === 'denied' ? 'denied' : 'default');
-    render();
+function bindNotifSettings(){
+  const sp = document.getElementById('nz-sw-push');
+  if(sp && !sp._b){ sp._b = 1; sp.addEventListener('click', async ()=>{
+    sp.disabled = true;
+    if(sp.getAttribute('aria-checked') === 'true') await turnPushOff();
+    else{
+      const ok = await turnPushOn();
+      if(!ok && pushDeviceState === 'denied') toast('Notifications are blocked — allow them in your browser settings.');
+    }
+    notifRefreshAll();
+  }); }
+  const si = document.getElementById('nz-sw-inapp');
+  if(si && !si._b){ si._b = 1; si.addEventListener('click', async ()=>{
+    si.disabled = true;
+    await setInAppAlerts(si.getAttribute('aria-checked') !== 'true');
+    notifRefreshAll(); render();      // re-draw so alert cards and the bell count appear/disappear immediately
+    // re-open handled by render(): the sheet lives outside #app, so it stays open
+  }); }
+}
+
+// ---------- deep link + service-worker messages + resume ----------
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.addEventListener('message', (e)=>{
+    const t = e.data && e.data.type;
+    if(t === 'ZEESHOP_OPEN_MESSAGES'){
+      if(!state.sessionUserId){ pendingOpenMessages = true; return; }
+      if(route !== 'more'){ route = 'more'; render(); }
+      loadAnnouncements().finally(openInbox);
+    }else if(t === 'ZEESHOP_PUSH_RECEIVED'){ loadAnnouncements(); }
+    else if(t === 'ZEESHOP_RESUBSCRIBE'){ pushDeviceState = null; ensurePushOn(); }
   });
-  const again = document.getElementById('push-check-again');
-  if(again) again.addEventListener('click', async ()=>{ pushDeviceState = null; await ensurePushOn(); render(); });
 }
+window.addEventListener('hashchange', ()=>{ if(location.hash === '#messages'){ pendingOpenMessages = true; if(state.sessionUserId) notifBoot(); } });
+document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible' && state.sessionUserId && Date.now()-annFetchedAt > 60000) loadAnnouncements(); });
+window.addEventListener('online', ()=>{ if(state.sessionUserId){ notifBootKey = null; notifBoot(); } });
+
 
 // Quick-access icon tiles for the three most common bill-payment purchases,
 // plus a "More" tile into the full Bill Payments hub (Cable, Betting,
@@ -6018,6 +6323,7 @@ function screenMore(){
   ].filter(i=>i.show);
   return `
     <h2 class="screen-title">${t('more_title')}</h2>
+    ${messagesRowHtml()}
     ${items.map(i=>`
       <div class="list-row" data-goto="${i.id}" style="cursor:pointer;">
         <div class="thumb">${i.ic}</div><div class="info"><div class="t1">${i.label}</div></div>
@@ -6037,6 +6343,8 @@ function screenMore(){
   `;
 }
 function bindMoreEvents(){
+  const inboxRow = document.querySelector('[data-open-inbox]');
+  if(inboxRow){ inboxRow.addEventListener('click', openInbox); inboxRow.addEventListener('keydown', e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openInbox(); } }); }
   const shareAppBtn = document.getElementById('do-share-app');
   if(shareAppBtn) shareAppBtn.addEventListener('click', async ()=>{
     const shareData = {
@@ -7278,7 +7586,7 @@ function screenProfile(){
       <div class="avatar ${u.role==='master'?'oga':''}" style="width:56px;height:56px;font-size:20px;margin:0 auto 14px;">${initials(u.firstName,u.lastName)}</div>
       ${nameFieldsHTML}
       <div class="field"><label>Phone</label><input id="pf-phone" value="${escAttr(u.phone||'')}" placeholder="0802 730 0375 or +234..."></div>
-      ${u.role==='master'?`<div class="field"><label>Email</label><input id="pf-email" type="email" value="${escAttr(u.email||'')}"></div>`:''}
+      ${u.role==='master'?`<div class="field" id="pf-email-wrap"><label>Email <span class="subtle">🔒 locked</span></label><input id="pf-email" type="email" value="${escAttr(u.email||'')}" disabled style="opacity:0.7;"><div class="subtle" style="font-size:12.5px;margin:6px 0 8px;">Please contact admin to change your email address.</div><button type="button" class="btn btn-outline btn-sm" id="pf-email-contact" style="width:auto;">Contact Admin</button></div>`:''}
       ${u.role==='master' ? `
       <div class="field"><label>Username</label><input id="pf-username" value="${escAttr(u.username)}"></div>
       ` : `
@@ -7320,6 +7628,26 @@ function screenProfile(){
   `;
 }
 function bindProfileEvents(){
+  // Locked email: tapping the field (or the button) takes the person to Contact Us; the field itself shows a small pop-up first.
+  const emailWrap = document.getElementById('pf-email-wrap');
+  if(emailWrap){
+    const goContact = ()=>{ if(typeof nzClose==='function') nzClose('nz-email-lock'); route='contact-us'; render(); };
+    const cbtn = document.getElementById('pf-email-contact'); if(cbtn) cbtn.addEventListener('click', goContact);
+    const fld = document.getElementById('pf-email');
+    if(fld){
+      const hit = document.createElement('div'); hit.style.cssText = 'position:absolute;inset:0;cursor:pointer;';
+      fld.parentNode.insertBefore(hit, fld.nextSibling); fld.parentNode.style.position = 'relative';
+      hit.style.top = fld.offsetTop+'px'; hit.style.height = fld.offsetHeight+'px'; hit.style.bottom = 'auto';
+      hit.addEventListener('click', ()=>{
+        const ov = nzOverlay('nz-email-lock', `<div class="nz-head"><h3>Email is locked 🔒</h3><button class="nz-x" aria-label="Close" id="nz-el-x">✕</button></div>
+          <p style="font-size:14.5px;line-height:1.5;margin:0 0 16px;color:var(--text);">Please contact admin to change your email address.</p>
+          <button class="btn btn-primary" id="nz-el-go">Contact Us</button>`);
+        if(!ov) return;
+        document.getElementById('nz-el-x').addEventListener('click', ()=>nzClose('nz-email-lock'));
+        document.getElementById('nz-el-go').addEventListener('click', goContact);
+      });
+    }
+  }
   const saveBtn = document.getElementById('save-profile-btn');
   if(saveBtn) saveBtn.addEventListener('click', ()=>{
     const u = currentUser();
@@ -7355,7 +7683,7 @@ function bindProfileEvents(){
     const phoneRaw = document.getElementById('pf-phone').value.trim();
     const newPhone = phoneRaw ? '+'+toIntlDigits(phoneRaw) : '';
     const emailField = document.getElementById('pf-email');
-    const newEmail = emailField ? emailField.value.trim() : u.email;
+    const newEmail = u.email;   // locked: the email can never be changed from inside the app (only a Super Admin can)
     // Notify the OLD email BEFORE applying the change locally or queuing
     // it to the server — the notify function looks up whatever email is
     // on file right now, so this ordering is what makes sure it reaches
@@ -7370,7 +7698,7 @@ function bindProfileEvents(){
     // up by name elsewhere in the app).
     enqueueSettings('app_users', {
       id: u.id, username: u.username, first_name: u.firstName, last_name: u.lastName,
-      phone: u.phone, email: u.email
+      phone: u.phone
     });
     // Specific old → new audit entries for the sensitive fields, instead of
     // one generic "profile updated" line that told you nothing if you ever
@@ -7463,7 +7791,6 @@ function screenSettings(){
   const b = business();
   return `
     ${subHeader("Settings")}
-    ${pushPromptCard()}
 
     <div class="section-head"><h3>Appearance</h3></div>
     <div class="card">
@@ -7484,13 +7811,7 @@ function screenSettings(){
       ` : ''}
       ${isMaster()?`<button class="btn btn-outline btn-sm" id="upgrade-plan" style="margin-top:10px;">View Plans</button>`:''}
     </div>
-    <div class="card">
-      <div class="settings-row" style="justify-content:space-between;display:flex;border-bottom:none;padding:0;">
-        <div class="info"><div class="t1">Notifications</div><div class="t2">Alerts for low stock, expiring goods, and overdue credit</div></div>
-        <span class="pill" style="background:${b.pushEnabled?'var(--green-bg)':'var(--paper-dim)'};color:${b.pushEnabled?'var(--green)':'var(--text-dim)'};">${b.pushEnabled?'ON':'OFF'}</span>
-      </div>
-      <button class="btn btn-outline btn-sm" id="toggle-push" style="margin-top:10px;">${b.pushEnabled?'Turn Off Notifications':'Enable Notifications'}</button>
-    </div>
+    ${notifSettingsCard()}
 
     ${isMaster()?`
     <div class="section-head"><h3>Shop &amp; Receipts</h3></div>
@@ -7562,8 +7883,6 @@ function screenSettings(){
   `;
 }
 function bindSettingsEvents(){
-  bindPushCardEvents();
-  if(pushDeviceState === null) ensurePushOn();
   bindBizTypeSelect('set-biztype');
   if(isMaster() && !billPinStatusLoaded) bpLoadPinStatus();
   const pinInput = document.getElementById('bp-pin-input');
@@ -7625,11 +7944,8 @@ function bindSettingsEvents(){
   if(upg) upg.addEventListener('click', ()=>openPlansSheet());
   const disAR = document.getElementById('disable-autorenew');
   if(disAR) disAR.addEventListener('click', ()=>disableAutoRenew());
-  const togglePush = document.getElementById('toggle-push');
-  if(togglePush) togglePush.addEventListener('click', async ()=>{
-    if(business().pushEnabled){ await disablePushNotifications(); }
-    else{ await enablePushNotifications(); render(); }
-  });
+  const openNotif = document.getElementById('open-notif-settings');
+  if(openNotif){ openNotif.addEventListener('click', openNotifSettings); openNotif.addEventListener('keydown', e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openNotifSettings(); } }); }
   const saveShop = document.getElementById('save-shop-settings');
   if(saveShop) saveShop.addEventListener('click', ()=>{
     const s = currentShop();
@@ -7871,86 +8187,6 @@ function urlBase64ToUint8Array(base64String){
   const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
   const rawData = atob(base64);
   return Uint8Array.from([...rawData].map(c=>c.charCodeAt(0)));
-}
-
-/**
- * Asks for notification permission and subscribes this device, saving
- * the subscription to Supabase so the alert/broadcast Edge Functions
- * can reach it later. Needs internet + a live session (same as any
- * other server-touching action) — silently no-ops without either.
- */
-async function enablePushNotifications(silent){
-  const say = (m)=>{ if(!silent) toast(m); };
-  if(!('serviceWorker' in navigator) || !('PushManager' in window)){
-    say('Push notifications aren\'t supported on this browser.');
-    return false;
-  }
-  try{
-    let permission = Notification.permission;
-    if(permission !== 'granted') permission = await Notification.requestPermission();
-    if(permission !== 'granted'){ say('Notifications permission was not granted.'); return false; }
-
-    const reg = await navigator.serviceWorker.ready;
-    let sub = await reg.pushManager.getSubscription();
-    if(!sub){
-      sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
-      });
-    }
-
-    const { data: sessionData } = await window.sb.auth.getSession();
-    if(!sessionData.session){ say('Please log in online once first, then try again.'); return false; }
-
-    const subJson = sub.toJSON();
-    await fetch(`${SITE_CONTENT_URL}/rest/v1/push_subscriptions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type':'application/json', 'Authorization':'Bearer '+sessionData.session.access_token,
-        'apikey': SITE_CONTENT_ANON_KEY, 'Prefer':'return=minimal,resolution=merge-duplicates'
-      },
-      body: JSON.stringify({
-        business_id: business().id, user_id: state.sessionUserId,
-        endpoint: subJson.endpoint, p256dh: subJson.keys.p256dh, auth_key: subJson.keys.auth, is_active: true
-      })
-    });
-    business().pushEnabled = true;
-    save();
-    try{ localStorage.removeItem('zeeshop_push_optout'); }catch(_e){}
-    pushDeviceState = 'on';
-    say('Notifications enabled ✅');
-    return true;
-  }catch(e){
-    say('Could not enable notifications — please try again.');
-    return false;
-  }
-}
-
-async function disablePushNotifications(){
-  // The person chose this, so notifications stay off on this device until THEY turn them on again.
-  try{ localStorage.setItem('zeeshop_push_optout', '1'); }catch(_e){}
-  pushDeviceState = 'off';
-  try{
-    if('serviceWorker' in navigator){
-      const reg = await navigator.serviceWorker.ready;
-      const sub = await reg.pushManager.getSubscription();
-      if(sub){
-        const { data: sessionData } = await window.sb.auth.getSession();
-        if(sessionData.session){
-          await fetch(`${SITE_CONTENT_URL}/rest/v1/push_subscriptions?endpoint=eq.${encodeURIComponent(sub.endpoint)}`, {
-            method: 'DELETE',
-            headers: { 'Authorization':'Bearer '+sessionData.session.access_token, 'apikey': SITE_CONTENT_ANON_KEY }
-          }).catch(()=>{});
-        }
-        await sub.unsubscribe();
-      }
-    }
-    business().pushEnabled = false;
-    save(); render();
-    toast('Notifications turned off.');
-  }catch(e){
-    toast('Could not turn off notifications — check your connection and try again.');
-  }
 }
 
 async function disableAutoRenew(){
@@ -11281,7 +11517,8 @@ function bindContactUsEvents(){
 const FAQ_GROUPS = [
   { category: "Getting Started", items: [
     { q:"How do I create my business account?", a:"Tap Create One Free on the login screen, fill in your business and owner details, then verify your email. You can reset your password later using an emailed code, so there's no code you need to keep safe to get back in." },
-    { q:"I forgot my password — what do I do?", a:"Tap Forgot Password on the login screen and enter your username or email. We'll send a 6-digit code to your email on file — enter it to set a new password. If your account has no email on file, you'll need to create a new account." },
+    { q:"Can I install ZeeShop on my phone like a normal app?", a:"Yes. On Android (Chrome), open the browser menu and tap Install app or Add to Home Screen. On iPhone (Safari), tap Share, then Add to Home Screen, and open ZeeShop from that icon. Installed this way it opens full-screen and works offline — and on iPhone it's also required for push notifications." },
+    { q:"I forgot my password — what do I do?", a:"Tap Forgot Password on the login screen and enter your username or email. We'll send a 6-digit code to the email on your account — enter it to set a new password. Because your email is locked for security (see Account Security below), the code can only ever go to the address you signed up with. If your account has no email on file, you'll need to create a new account." },
     { q:"How do multiple staff use the same device?", a:"Each staff member gets their own PIN. After the business owner logs in once, everyone unlocks their own profile with their PIN from the user-select screen — no need to log in with a password every time." },
     { q:"How do I add a new staff member?", a:"Go to More → Staff → Generate Join Code. Share the code with them; they open ZeeShop on their device, tap Join Business, and enter it. The code expires after a set number of minutes." },
     { q:"A staff member already has an account — how do they sign in on a second phone?", a:"On the new phone, tap Join Business and enter the business's Connect Code (from the Owner's Staff screen) — the app recognizes it's a reconnect and asks for their phone number and PIN instead of name details. This signs them into their existing account — it does not create a new one, so their sales history and activity stay attached to them." },
@@ -11362,12 +11599,31 @@ const FAQ_GROUPS = [
     { q:"Is there a built-in calculator?", a:"Yes — go to More → Calculator for quick math without leaving the app." },
   ]},
   { category: "Notifications & Data", items: [
-    { q:"What do the alerts on the bell icon mean?", a:"The bell shows counts for stock expiring soon, low/out-of-stock items, and credit sales that are overdue or due soon — tap it to jump straight to the relevant screen." },
-    { q:"Can I turn notifications on or off?", a:"Yes — go to Settings and use Enable/Turn Off Notifications." },
+    { q:"What do the alerts on the bell icon mean?", a:"The bell shows counts for stock expiring soon, low/out-of-stock items, and credit sales that are overdue or due soon — tap it to jump straight to the relevant screen. These come from In-app Alerts & Warnings; if you turn that switch off in Settings → Notifications, the bell count and the alert cards on Home are hidden." },
+    { q:"Can I turn notifications on or off?", a:"Yes. Go to More → Settings → Notifications. There are two separate switches: Push Notifications (banners on your phone, even when ZeeShop is closed) and In-app Alerts & Warnings (low stock, expiring goods, overdue credit). Both are on by default for everyone who signs in, and they stay on until you switch them off yourself — your choice is saved to your account, so it's remembered after you sign out or change phones." },
+    { q:"What are \"Messages from ZeeShop\"?", a:"Announcements and updates sent to you by the ZeeShop team. Open them from More → Messages from ZeeShop. They're saved there even if push notifications are off or you missed the banner, so you can always read them later." },
+    { q:"What does the red dot on More mean?", a:"You have an unread message from ZeeShop. The dot shows on the More icon at the bottom and next to Messages from ZeeShop inside More. It disappears as soon as you open your messages — on all your devices, not just the one you're holding." },
+    { q:"What's the difference between the two notification switches?", a:"Push Notifications controls banners sent to your phone's lock screen and status bar by ZeeShop. In-app Alerts & Warnings controls the low-stock, expiring-goods, and overdue-credit warnings inside the app. The Owner's choice for In-app Alerts applies to the whole business; a staff member's choice only changes what they see themselves." },
+    { q:"Do my staff get notifications too?", a:"Yes — everyone who signs in, Owner, staff, or viewer, gets messages and (once allowed on their phone) push notifications. Each person controls their own Push switch. If several people share one phone, notifications go to whoever last opened ZeeShop on it." },
+    { q:"Why am I not getting push notifications?", a:"Check these in order: (1) More → Settings → Notifications — is Push Notifications on? (2) Did you tap Allow when your phone or browser asked? If it says Blocked, allow notifications for ZeeShop in your phone or browser settings, then tap Check again. (3) On iPhone, ZeeShop must be added to your Home Screen first. (4) Make sure your phone isn't in a battery-saver mode that blocks notifications. You'll always still see the message under More → Messages from ZeeShop." },
     { q:"Is my data backed up anywhere?", a:"Yes. Whenever your device is online, everything syncs to the cloud automatically in the background — you don't need to do anything for this to happen. It also works fully offline; anything you do while offline is saved on your device and syncs the moment you're back online." },
     { q:"How do I export my data?", a:"Go to Settings → Export Data to download your business data as a spreadsheet." },
     { q:"How do I delete my business account?", a:"Go to Settings → Delete Business. This locks everyone (including you) out of the account immediately, and your data is permanently deleted within 30 days, per GDPR. This can't be undone once the 30 days pass — contact support right away if you tap it by mistake." },
     { q:"Why does the app say my account is suspended or scheduled for deletion?", a:"You'll see a lock screen explaining which one it is and why. A suspension means it's been paused — contact support to find out why. A scheduled deletion means someone on the account requested it — contact support immediately if that wasn't intentional." },
+  ]},
+  { category: "Account Security", items: [
+    { q:"Can I change my email address?", a:"Not from inside the app. For your protection, the email on your account is locked and can only be changed by ZeeShop Support (a Super Admin) after they confirm it's really you. Please contact admin through More → Contact Us, and be ready to verify your business and account details." },
+    { q:"Why is my email locked?", a:"Your email is where password-reset and Payment PIN codes are sent. If someone got into your account on an unlocked phone and could swap the email, they could take it over completely. Locking it means a stolen session alone can't do that. You'll also be notified at your current email if someone tries to change your phone number." },
+    { q:"How do I keep my account safe?", a:"Use a strong password and don't share it or your PIN. Set a Bill Payments PIN in Settings → Security. Use More → Lock / Switch User whenever you hand your phone to someone, and Log Out on any shared or borrowed device. Never read out a 6-digit code to anyone — ZeeShop will never ask for it. Changing your profile details always asks for your current password (Owner) or PIN (staff)." },
+    { q:"What is Lock / Switch User?", a:"More → Lock / Switch User takes you back to the PIN screen without signing the business out, so another person can unlock their own profile. It's the quickest way to protect the app when you step away. Log Out is different: it fully signs the business out of that device." },
+    { q:"What is the Bill Payments PIN?", a:"A 4-digit PIN, set by the Owner under Settings → Security, that's asked for before every airtime, data, electricity, or other bill payment — so nobody using an unlocked phone can spend your Bill Wallet. If you forget it, tap Reset Payment PIN; we email a 6-digit code to the email on your account (valid for 5 minutes) and you choose a new PIN." },
+    { q:"Can I change my phone number or username?", a:"The Owner can change their phone number and username under More → My Profile — you'll need to enter your current password to confirm. Staff can change their phone number with their current PIN; a staff username can't be changed, and a staff name change needs the Owner's approval. Your email can't be changed in the app (see above)." },
+  ]},
+  { category: "Bill Payments", items: [
+    { q:"What can I pay for with Bill Payments?", a:"Airtime, Data Bundles, Cable TV, Electricity, Betting wallet funding, Result Checker PINs, and Internet (Smile and Spectranet). Find them under More → Bill Payments, or tap the Airtime, Data, or Electricity tiles on Home." },
+    { q:"How do I fund my Bill Wallet?", a:"Tap Fund Wallet on Home or inside Bill Payments and follow the steps. You can also transfer from any bank app to your wallet's account details for instant funding. Deposit fees depend on how you fund it — a dedicated account gives you lower deposit fees." },
+    { q:"Where can I see my past bill payments?", a:"Open More → Bill Payments → Transaction History. It lists every purchase with its status, so you can see what went through and what's still pending." },
+    { q:"Who is allowed to make bill payments?", a:"The Owner always can. Staff need the Bill Payments permission, which the Owner turns on for them under More → Staff. Viewers can't make bill payments." },
   ]},
   { category: "Plans & Billing", items: [
     { q:"What's the difference between the Free, Pro, and Boss plans?", a:"Free covers up to 2 shops, 100 goods, 50 customers, and 2 staff. Pro raises that to 3 shops, 1,000 goods, unlimited customers, and 5 staff. Boss removes every limit. Cloud sync, offline support, and everything else in this FAQ work the same on every plan — the plans only affect these limits." },

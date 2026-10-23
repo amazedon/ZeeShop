@@ -380,7 +380,7 @@ Deno.serve(async (req: Request) => {
     if (!businessId) return json({ error: `Your account (app_users.id = ${caller.id}) has no business_id set — it isn't linked to a business on the server yet. This can happen if this account was created/updated locally and hasn't finished syncing. Try again once the device shows fully synced (check the sync status dot), or check that row's business_id directly in Supabase.` }, 404);
     const { data: biz, error: bizErr } = await admin
       .from("businesses")
-      .select("id, name, currency, country, bill_wallet_balance, bill_payments_pin_hash, psa_account_reference, psa_account_number, psa_bank_name, psa_status, psa_last_synced_at")
+      .select("id, name, currency, country, bill_wallet_balance, bill_payments_pin_hash, psa_account_reference, psa_account_number, psa_bank_name, psa_account_name, psa_status, psa_last_synced_at")
       .eq("id", businessId)
       .maybeSingle();
     if (bizErr) return json({ error: bizErr.message }, 500);
@@ -391,9 +391,20 @@ Deno.serve(async (req: Request) => {
 
     // ---------- read-only reference/lookups ----------
     if (action === "my_wallet_summary") {
+      // Older accounts were created before we saved the account name: ask Flutterwave for it ONCE, then keep it.
+      let psaName: string | null = (biz as any).psa_account_name || null;
+      if (!psaName && biz.psa_account_reference && FLW_SECRET_KEY) {
+        try {
+          const nr = await fetch(`https://api.flutterwave.com/v3/payout-subaccounts/${biz.psa_account_reference}`, { headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` } });
+          const nd = await nr.json().catch(() => null);
+          const nm = nd?.data?.account_name ? String(nd.data.account_name) : "";
+          if (nr.ok && nm) { psaName = nm; await admin.from("businesses").update({ psa_account_name: nm }).eq("id", businessId); }
+        } catch (_e) { /* show no name rather than fail the screen */ }
+      }
       return json({
         wallet_balance: Number(biz.bill_wallet_balance || 0), currency,
         psa_account_number: biz.psa_account_number || null, psa_bank_name: biz.psa_bank_name || null, psa_status: biz.psa_status || null,
+        psa_account_name: psaName,
         // Added to electricity amounts so the screen can show ONE final total (never labelled as a fee).
         bill_fees: (await loadPricing(admin)).fees,
         bill_pin_set: !!biz.bill_payments_pin_hash,
@@ -618,7 +629,7 @@ Deno.serve(async (req: Request) => {
     // sync_psa_wallet below if a notice is ever missed) — NOT here.
     if (action === "get_or_create_psa_account") {
       if (biz.psa_account_number && biz.psa_status === "active") {
-        return json({ account_number: biz.psa_account_number, bank_name: biz.psa_bank_name, status: biz.psa_status }, 200);
+        return json({ account_number: biz.psa_account_number, bank_name: biz.psa_bank_name, account_name: (biz as any).psa_account_name || null, status: biz.psa_status }, 200);
       }
       if (!FLW_SECRET_KEY) return json({ error: "Account setup isn't configured yet." }, 500);
 
@@ -634,22 +645,24 @@ Deno.serve(async (req: Request) => {
         ? `${ownerEmail.split("@")[0].split("+")[0]}+${tag}@${ownerEmail.split("@")[1]}`
         : `business-${businessId}@zeeshop.app`;
 
+      // The name on the account = the business name, cleaned so Flutterwave never rejects it for odd characters/emoji.
+      const cleanName = String(biz.name || "").normalize("NFKD").replace(/[^\p{L}\p{N} &.'-]/gu, " ").replace(/\s+/g, " ").trim().slice(0, 60) || "ZeeShop Business";
+      // Send a phone number only when it is a real Nigerian number (a shared placeholder can be refused as a duplicate).
+      let phoneDigits = String(caller.phone || "").replace(/[\s()-]/g, "");
+      if (phoneDigits.startsWith("+")) phoneDigits = phoneDigits.slice(1);
+      if (phoneDigits.startsWith("234") && phoneDigits.length === 13) phoneDigits = "0" + phoneDigits.slice(3);
+      const validPhone = /^0\d{10}$/.test(phoneDigits) ? phoneDigits : null;
+      const createBody: Record<string, unknown> = { account_name: cleanName, email: uniqueEmail, country: "NG" };
+      if (validPhone) createBody.mobilenumber = validPhone;
       const flwRes = await fetch("https://api.flutterwave.com/v3/payout-subaccounts", {
         method: "POST",
         headers: { Authorization: `Bearer ${FLW_SECRET_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          account_name: biz.name || "ZeeShop Business",
-          email: uniqueEmail,
-          mobilenumber: caller.phone || "08000000000",
-          // Hardcoded: Flutterwave needs the 2-letter code and every service
-          // here is Nigeria-only (biz.country may hold the full name).
-          country: "NG",
-        }),
+        body: JSON.stringify(createBody),
       });
       const flwData = await flwRes.json().catch(() => null);
       let acct = flwData?.data;
       if (!flwRes.ok || flwData?.status !== "success" || !acct?.account_reference) {
-        console.error("Flutterwave payout-subaccount create failed:", flwRes.status, flwData?.message);
+        console.error("Flutterwave payout-subaccount create failed:", flwRes.status, JSON.stringify(flwData)?.slice(0, 500), "| name:", cleanName, "| email:", uniqueEmail, "| phone sent:", !!validPhone);
         // Recovery: this business's OWN sub-account may already exist (created
         // earlier, then our copy of the number was lost). Match ONLY on this
         // business's unique email. The owner's plain email is used only when the
@@ -706,6 +719,7 @@ Deno.serve(async (req: Request) => {
       const { data: saved, error: saveErr } = await admin.from("businesses").update({
         psa_account_reference: acct.account_reference, psa_account_number: accountNumber,
         psa_bank_name: bankName || "Bank", psa_status: "active",
+        psa_account_name: String(acct.account_name || cleanName),
       }).eq("id", businessId).is("psa_account_number", null).select("id");
       if (saveErr) {
         console.error("PSA save failed:", saveErr.code, saveErr.message);
@@ -717,7 +731,7 @@ Deno.serve(async (req: Request) => {
         return json({ error: "Could not save your account. Please try again." }, 500);
       }
 
-      return json({ account_number: accountNumber, bank_name: bankName || "Bank", status: "active" }, 200);
+      return json({ account_number: accountNumber, bank_name: bankName || "Bank", account_name: String(acct.account_name || cleanName), status: "active" }, 200);
     }
 
     // Catch-up check for the permanent account. The webhook is the fast path,

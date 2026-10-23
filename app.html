@@ -11447,6 +11447,173 @@ function bindBillHistoryEvents(){
    ============================================================ */
 const SITE_CONTENT_URL = 'https://beypnkzrgqrkjttsxlju.supabase.co';
 const SITE_CONTENT_ANON_KEY = 'sb_publishable_m_MrYeKVF4HgUG5i5v_THg_LPbvmUK5';
+
+/* ============================================================
+   EMAIL OTP via Termii (Edge Function: send-termii-otp)
+   The code is created and checked on the SERVER; this file only asks for one and submits what the person typed.
+   ============================================================ */
+const otpFnUrl = () => `${SITE_CONTENT_URL}/functions/v1/send-termii-otp`;
+const otpState = { loading: false, error: null, retryAfter: 0 };
+
+function setOtpState(patch, onState) {
+  Object.assign(otpState, patch);
+  if (typeof onState === 'function') { try { onState({ ...otpState }); } catch (_e) {} }
+}
+
+async function callOtpFn(payload) {
+  if (!navigator.onLine) return { success: false, error: 'You are offline. Connect to the internet to get a code.' };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
+  try {
+    const res = await fetch(otpFnUrl(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SITE_CONTENT_ANON_KEY,
+        'Authorization': 'Bearer ' + SITE_CONTENT_ANON_KEY,   // works before sign-in (signup / recovery)
+      },
+      body: JSON.stringify(payload),
+      signal: ctrl.signal,
+    });
+    const data = await res.json().catch(() => null);
+    if (!data || typeof data.success !== 'boolean') return { success: false, error: 'Unexpected reply from the server. Please try again.' };
+    return data;
+  } catch (e) {
+    return { success: false, error: e && e.name === 'AbortError' ? 'The request took too long. Please try again.' : "Couldn't reach the server. Check your internet connection and try again." };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Ask the server to email a 6-digit code. Returns { success, error?, retry_after? }. */
+async function sendOtp(userEmail, onState, purpose) {
+  const email = String(userEmail || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    const error = 'Please enter a valid email address.';
+    setOtpState({ loading: false, error }, onState);
+    return { success: false, error };
+  }
+  if (otpState.loading) return { success: false, error: 'Please wait…' };
+  setOtpState({ loading: true, error: null }, onState);
+  const out = await callOtpFn({ action: 'send', email, purpose: purpose || 'signup' });
+  setOtpState({ loading: false, error: out.success ? null : out.error, retryAfter: out.retry_after || 0 }, onState);
+  return out;
+}
+
+/** Check the code the user typed. Returns { success, error? }. */
+async function verifyOtp(userEmail, code, onState) {
+  const email = String(userEmail || '').trim().toLowerCase();
+  const clean = String(code || '').replace(/\D/g, '');
+  if (clean.length !== 6) {
+    const error = 'Enter the 6-digit code.';
+    setOtpState({ loading: false, error }, onState);
+    return { success: false, error };
+  }
+  if (otpState.loading) return { success: false, error: 'Please wait…' };
+  setOtpState({ loading: true, error: null }, onState);
+  const out = await callOtpFn({ action: 'verify', email, code: clean });
+  setOtpState({ loading: false, error: out.success ? null : out.error }, onState);
+  return out;
+}
+
+// ---------- Email verification dialog (uses sendOtp / verifyOtp above) ----------
+// Usage:  const ok = await openEmailOtpDialog({ email: 'owner@shop.com', purpose: 'verify-email' });
+//         if(ok){ ...email is verified... }
+(function(){
+  const st = document.createElement('style');
+  st.textContent = `
+    .zs-spin{display:inline-block;width:15px;height:15px;border:2.5px solid rgba(18,33,59,.25);border-top-color:currentColor;border-radius:50%;animation:zsSpin .7s linear infinite;vertical-align:-2px;margin-right:8px;}
+    @keyframes zsSpin{to{transform:rotate(360deg)}}
+    .zs-msg{font-size:13.5px;line-height:1.45;border-radius:12px;padding:10px 12px;margin:0 0 12px;}
+    .zs-msg.err{background:#FFE6E8;color:#B3182A;border:1px solid #FFC9CE;} .zs-msg.ok{background:#E3F8EE;color:#0B7A49;border:1px solid #BDEBD3;}
+    .zs-code{letter-spacing:.5em;text-align:center;font-size:22px;font-weight:800;}
+    @media (prefers-reduced-motion:reduce){.zs-spin{animation-duration:2s;}}
+  `;
+  document.head.appendChild(st);
+})();
+
+function openEmailOtpDialog(opts){
+  opts = opts || {};
+  return new Promise((resolve)=>{
+    const id = 'zs-otp-dialog';
+    const ov = nzOverlay(id, `<div class="nz-head"><h3>Verify your email</h3><button class="nz-x" id="zs-otp-x" aria-label="Close">✕</button></div><div id="zs-otp-body"></div>`);
+    if(!ov){ resolve(false); return; }
+    let step = 1, email = String(opts.email || '').trim(), err = '', ok = '', busy = false, cooldown = 0, timer = null, finished = false;
+    const $ = (sel)=> ov.querySelector(sel);
+    const finish = (result)=>{ if(finished) return; finished = true; clearInterval(timer); obs.disconnect(); nzClose(id); resolve(result); };
+    const obs = new MutationObserver(()=>{ if(!document.getElementById(id)) finish(false); });   // closed by tapping outside
+    obs.observe(document.body, { childList:true });
+    $('#zs-otp-x').addEventListener('click', ()=> finish(false));
+
+    const startCooldown = (secs)=>{
+      cooldown = Math.max(0, Math.floor(secs || 0)); clearInterval(timer);
+      if(!cooldown) return;
+      timer = setInterval(()=>{ cooldown--; if(cooldown <= 0) clearInterval(timer); paint(); }, 1000);
+    };
+    const msgHtml = ()=> err ? `<div class="zs-msg err" role="alert">${escapeHtml(err)}</div>` : (ok ? `<div class="zs-msg ok" role="status">${escapeHtml(ok)}</div>` : '');
+    const btnLabel = (text, loadingText)=> busy ? `<span class="zs-spin"></span>${loadingText}` : text;
+
+    function paint(){
+      const b = $('#zs-otp-body'); if(!b) return;
+      if(step === 1){
+        b.innerHTML = `${msgHtml()}
+          <div class="field"><label>Email address</label><input id="zs-otp-email" type="email" inputmode="email" autocomplete="email" value="${escAttr(email)}" ${opts.lockEmail?'readonly':''} placeholder="you@example.com"></div>
+          <button class="btn btn-primary" id="zs-otp-send" ${busy?'disabled':''}>${btnLabel('Send Verification Code','Sending…')}</button>`;
+        $('#zs-otp-send').addEventListener('click', doSend);
+        $('#zs-otp-email').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); doSend(); } });
+      }else{
+        b.innerHTML = `${msgHtml()}
+          <p class="subtle" style="margin:0 0 12px;">We sent a 6-digit code to <b>${escapeHtml(email)}</b>. It expires in 10 minutes.</p>
+          <div class="field"><label>Verification code</label><input id="zs-otp-code" class="zs-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="······" ${busy?'disabled':''}></div>
+          <button class="btn btn-primary" id="zs-otp-verify" ${busy?'disabled':''} style="margin-bottom:10px;">${btnLabel('Verify OTP','Verifying…')}</button>
+          <div style="display:flex;justify-content:space-between;gap:10px;">
+            <a href="#" id="zs-otp-resend" style="color:var(--marigold-dark);font-weight:800;${(busy||cooldown)?'opacity:.5;pointer-events:none;':''}">${cooldown ? `Resend in ${cooldown}s` : 'Resend code'}</a>
+            <a href="#" id="zs-otp-change" style="color:var(--text-dim);font-weight:700;">Change email</a>
+          </div>`;
+        const code = $('#zs-otp-code');
+        code.addEventListener('input', ()=>{ code.value = code.value.replace(/\D/g,'').slice(0,6); });
+        code.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); doVerify(); } });
+        $('#zs-otp-verify').addEventListener('click', doVerify);
+        $('#zs-otp-resend').addEventListener('click', e=>{ e.preventDefault(); doSend(); });
+        $('#zs-otp-change').addEventListener('click', e=>{ e.preventDefault(); step = 1; err = ''; ok = ''; paint(); });
+        if(!busy) code.focus();
+      }
+    }
+
+    async function doSend(){
+      if(busy) return;
+      const field = $('#zs-otp-email');
+      if(field) email = field.value.trim();            // always trimmed before it is sent
+      busy = true; err = ''; ok = ''; paint();
+      const r = await sendOtp(email, null, opts.purpose);
+      busy = false;
+      if(r.success){ step = 2; ok = 'Code sent ✅ Check your inbox (and spam folder).'; startCooldown(r.retry_after || 60); }
+      else { err = r.error || 'Could not send the code.'; if(r.retry_after && r.retry_after <= 120) startCooldown(r.retry_after); }
+      paint();
+    }
+    async function doVerify(){
+      if(busy) return;
+      const code = ($('#zs-otp-code') || {}).value || '';
+      busy = true; err = ''; ok = ''; paint();
+      const r = await verifyOtp(email, code);
+      busy = false;
+      if(r.success){
+        ok = 'Email verified ✅'; paint(); toast('Email verified ✅');
+        try{ if(typeof opts.onVerified === 'function') await opts.onVerified(email); }catch(_e){}
+        setTimeout(()=> finish(true), 700);
+        return;
+      }
+      err = r.error || 'Incorrect code.'; paint();
+    }
+    paint();
+  });
+}
+
+// Make the helpers reachable from anywhere (inline handlers, console, other scripts).
+window.sendOtp = sendOtp;
+window.verifyOtp = verifyOtp;
+window.openEmailOtpDialog = openEmailOtpDialog;
+
 // Explicit auth options (rather than relying on library defaults) so the
 // session that staff/owner get at login is reliably cached and kept fresh —
 // this is what lets sync push/pull keep working across app restarts without

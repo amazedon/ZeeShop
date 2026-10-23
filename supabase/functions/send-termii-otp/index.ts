@@ -15,8 +15,10 @@
 //
 // Secrets (Edge Functions -> Secrets):
 //   TERMII_API_KEY            required
-//   TERMII_TEMPLATE_ID        required (the template you created in Termii; ID is on the Termii dashboard)
-//   TERMII_OTP_VAR            optional, default "otp"  (the {{variable}} name your template uses for the code)
+//   TERMII_TEMPLATE_ID        OPTIONAL. Set it to use a template you built in Termii (POST /api/templates/send-email).
+//                             Leave it unset/blank to use Termii's default Email Token route (POST /api/email/otp/send),
+//                             which needs no template: { api_key, email_address, code, email_configuration_id }.
+//   TERMII_OTP_VAR            optional, default "otp"; only used in template mode (the {{variable}} name for the code)
 //   TERMII_EXTRA_VARS         optional JSON for other template variables, e.g. {"company_name":"ZeeShop"}
 //   TERMII_EMAIL_CONFIG_ID    optional, defaults to 01a04442-c633-7ad5-8100-1bab0ab67914
 //   TERMII_BASE_URL           optional, defaults to https://api.ng.termii.com
@@ -86,6 +88,18 @@ function extraVars(): Record<string, string> {
 }
 
 async function sendViaTermii(apiKey: string, templateId: string, email: string, code: string): Promise<boolean> {
+  // No template configured -> Termii's default Email Token route (no template needed).
+  if (!templateId) {
+    const r = await fetch(`${TERMII_BASE_URL}/api/email/otp/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key: apiKey, email_address: email, code, email_configuration_id: EMAIL_CONFIG_ID }),
+    });
+    const d = await r.json().catch(() => null);
+    const good = r.ok && (d?.code === "ok" || /success/i.test(String(d?.message || "")));
+    if (!good) console.error("Termii email/otp/send failed:", r.status, JSON.stringify(d)?.slice(0, 400));
+    return good;
+  }
   const res = await fetch(`${TERMII_BASE_URL}/api/templates/send-email`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -126,7 +140,7 @@ Deno.serve(async (req: Request) => {
       const code = String(body.otpCode);
       const templateId = String(body.templateId || defaultTemplate);
       if (!/^\d{4,8}$/.test(code)) return reply(cors, { success: false, error: "otpCode must be 4 to 8 digits." }, 400);
-      if (!apiKey || !templateId) return reply(cors, { success: false, error: "Email service is not configured." }, 500);
+      if (!apiKey) return reply(cors, { success: false, error: "Email service is not configured." }, 500);
       const ok = await sendViaTermii(apiKey, templateId, email, code);
       return ok ? reply(cors, { success: true }) : reply(cors, { success: false, error: "Could not send the email. Please try again." }, 502);
     }
@@ -160,8 +174,8 @@ Deno.serve(async (req: Request) => {
     }
 
     // ---- send ----
-    if (!apiKey || !defaultTemplate) {
-      console.error("send-termii-otp: missing secret(s):", !apiKey ? "TERMII_API_KEY" : "", !defaultTemplate ? "TERMII_TEMPLATE_ID" : "");
+    if (!apiKey) {
+      console.error("send-termii-otp: missing secret TERMII_API_KEY");
       return reply(cors, { success: false, error: "Email service is not configured yet. Please contact support." }, 500);
     }
 

@@ -9713,7 +9713,7 @@ async function bpLoadWallet(){
     billWalletBalance = r.wallet_balance; billCurrency = r.currency || 'NGN';
     billPinSet = !!r.bill_pin_set; billPinStatusLoaded = true;
     if(r.bill_fees) billFees = r.bill_fees;
-    if(r.psa_account_number){ billPsaAccountNumber = r.psa_account_number; billPsaBankName = r.psa_bank_name; }
+    if(r.psa_account_number){ billPsaAccountNumber = r.psa_account_number; billPsaBankName = r.psa_bank_name; if(r.psa_account_name) billPsaAccountName = r.psa_account_name; }
     bpCheckPendingSquad(false); // came back from the Squad checkout? confirm and credit
   }catch(e){ billWalletError = e.message || 'Something went wrong.'; }
   billLoading = false; refreshMain();
@@ -9798,6 +9798,7 @@ function bindBillPaymentsEvents(){
    so a new credit shows up as soon as it lands. */
 let billPsaAccountNumber = null; // permanent account (card 1)
 let billPsaBankName = null;
+let billPsaAccountName = null;
 let billPsaLoading = false;
 // ---- card 2 (pay now) state ----
 let billSqAmount = '';
@@ -9995,6 +9996,7 @@ function bpFundCardHtml(){
   return `
     <div style="text-align:center;padding:4px 0 0;">
       <div style="font-size:22px;font-weight:700;letter-spacing:1px;margin:6px 0;">${escapeHtml(billPsaAccountNumber)}</div>
+      ${billPsaAccountName ? `<div class="t1" style="font-size:15px;">${escapeHtml(billPsaAccountName)}</div>` : ''}
       <div class="t1">${escapeHtml(billPsaBankName||'')}</div>
       <button class="btn btn-outline btn-sm" id="bp-psa-copy" style="margin-top:10px;">Copy Account Number</button>
       <br><button class="btn btn-outline btn-sm" id="bp-psa-sync" style="margin-top:10px;">${billPsaSyncing?'Checking…':'↻ Refresh Balance'}</button>
@@ -10198,7 +10200,7 @@ function bindBillTopupEvents(){
     billPsaLoading = true; refreshMain();
     try{
       const r = await callBigisub('get_or_create_psa_account', {});
-      billPsaAccountNumber = r.account_number; billPsaBankName = r.bank_name;
+      billPsaAccountNumber = r.account_number; billPsaBankName = r.bank_name; if(r.account_name) billPsaAccountName = r.account_name;
       logAudit('bill_wallet_psa_setup', `Set up top-up account ${r.account_number}`);
       bpStartPsaPolling();
     }catch(e){ toast(e.message); }

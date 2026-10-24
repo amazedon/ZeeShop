@@ -2461,7 +2461,29 @@ function bindAuthEvents(){
 
     if(u){
       // Fast, fully-offline path — account already lives on this device.
-      if(u.passwordHash !== hash(pass)){ authError='Incorrect username/email or password.'; render(); return; }
+      if(!u.passwordHash || u.passwordHash !== hash(pass)){
+        // The local copy of the password can be stale or empty (a sync can overwrite it), so it must NEVER be the final
+        // word: the real password lives in Supabase Auth. If we're online, check there and repair the local copy.
+        let verified = false;
+        if(navigator.onLine && u.email){
+          const lbtn = document.getElementById('btn-login');
+          if(lbtn){ lbtn.disabled = true; lbtn.textContent = 'Signing in…'; }
+          try{
+            const { data: sd, error: se } = await window.sb.auth.signInWithPassword({ email: u.email, password: pass });
+            if(!se && sd && sd.session){
+              verified = true;
+              u.passwordHash = hash(pass);
+              enqueueSync('app_users','update', { id: u.id, password_hash: u.passwordHash });   // heal the server copy too
+            }
+          }catch(_e){ /* treated as not verified below */ }
+        }
+        if(!verified){
+          authError = (!navigator.onLine && !u.passwordHash)
+            ? 'Connect to the internet to sign in on this device.'
+            : 'Incorrect username/email or password.';
+          render(); return;
+        }
+      }
       state.sessionUserId = u.id;
       forceFullLogin = false;
       if(!state.currentShopId && state.shops[0]) state.currentShopId = state.shops[0].id;
@@ -2482,7 +2504,8 @@ function bindAuthEvents(){
     // for an account that already exists in Supabase. That path needs a
     // real email (Supabase Auth doesn't know usernames) and a network call.
     if(!/^\S+@\S+\.\S+$/.test(idf)){
-      authError='Incorrect username/email or password.';
+      // Not on this device and not an email: a username can't be checked online (Supabase only knows emails).
+      authError="This account isn't saved on this device (the browser may have cleared its storage). Sign in with your email address instead of your username.";
       render(); return;
     }
     if(!navigator.onLine){
@@ -2968,9 +2991,18 @@ function openPinScreen(u){
 function bindPinEvents(u){
   document.getElementById('back-select').addEventListener('click', e=>{e.preventDefault(); pendingPinUser=null; render();});
   if(u.role==='master'){
-    document.getElementById('pp-master-login').addEventListener('click', ()=>{
+    document.getElementById('pp-master-login').addEventListener('click', async ()=>{
       const pass = document.getElementById('pp-pass').value;
-      if(u.passwordHash !== hash(pass)){ toast('Wrong password.'); return; }
+      if(!u.passwordHash || u.passwordHash !== hash(pass)){
+        let verified = false;
+        if(navigator.onLine && u.email){
+          try{
+            const { data: sd, error: se } = await window.sb.auth.signInWithPassword({ email: u.email, password: pass });
+            if(!se && sd && sd.session){ verified = true; u.passwordHash = hash(pass); enqueueSync('app_users','update', { id: u.id, password_hash: u.passwordHash }); }
+          }catch(_e){}
+        }
+        if(!verified){ toast(!navigator.onLine && !u.passwordHash ? 'Connect to the internet to unlock on this device.' : 'Wrong password.'); return; }
+      }
       state.sessionUserId = u.id;
       if(!state.currentShopId && state.shops[0]) state.currentShopId = state.shops[0].id;
       logAudit('login','Master unlocked device');
@@ -3721,6 +3753,23 @@ function bindShellEvents(){
  * that mismatch is invisible day-to-day. It only matters for the admin
  * dashboard / super admin login, which uses Supabase Auth directly.
  */
+// Changes the password in Supabase Auth and WAITS for the answer. The old helper below ignored every failure, so a
+// password changed while offline/with an expired session was saved on the phone only — and the Super Admin page and
+// every other device (which check Supabase Auth) then rejected the new password.
+async function updateAuthPasswordStrict(currentPass, newPass){
+  if(!window.sb || !navigator.onLine) return false;
+  try{
+    const { data } = await window.sb.auth.getSession();
+    if(!data.session){
+      const u = currentUser();
+      if(!u || !u.email || !currentPass) return false;
+      const r = await window.sb.auth.signInWithPassword({ email: u.email, password: currentPass });
+      if(r.error || !r.data || !r.data.session) return false;
+    }
+    const { error } = await window.sb.auth.updateUser({ password: newPass });
+    return !error;
+  }catch(_e){ return false; }
+}
 async function syncPasswordToSupabaseAuth(newPassword){
   if(!window.sb) return;
   try{
@@ -7741,21 +7790,28 @@ function bindProfileEvents(){
     }
   });
   const savePassBtn = document.getElementById('save-password-btn');
-  if(savePassBtn) savePassBtn.addEventListener('click', ()=>{
+  if(savePassBtn) savePassBtn.addEventListener('click', async ()=>{
     const hasExistingPassword = !!currentUser().passwordHash;
+    let currentPass = '';
     if(hasExistingPassword){
-      const currentPass = document.getElementById('pf-currentpass').value;
+      currentPass = document.getElementById('pf-currentpass').value;
       if(hash(currentPass) !== currentUser().passwordHash){ toast('Current password is incorrect.'); return; }
     }
     const p1 = document.getElementById('pf-newpass').value;
     const p2 = document.getElementById('pf-newpass2').value;
     if(p1.length<6){ toast('Password must be at least 6 characters.'); return; }
     if(p1!==p2){ toast("Passwords don't match."); return; }
+    if(currentUser().role === 'master'){
+      // The real login (Supabase Auth) must accept the new password BEFORE we save it on this phone.
+      savePassBtn.disabled = true; const prevLabel = savePassBtn.textContent; savePassBtn.textContent = 'Saving…';
+      const okAuth = await updateAuthPasswordStrict(currentPass, p1);
+      savePassBtn.disabled = false; savePassBtn.textContent = prevLabel;
+      if(!okAuth){ toast("Couldn't save your new password on the server. Check your internet connection and try again — your old password still works."); return; }
+    }
     currentUser().passwordHash = hash(p1);
     if(currentUser().role === 'master') notifyContactChange('password', null);
     enqueueSync('app_users','update', { id: currentUser().id, password_hash: currentUser().passwordHash });
     logAudit(hasExistingPassword?'password_changed':'password_set', hasExistingPassword?'Changed own password':'Set a password (was Google-only)');
-    if(currentUser().role === 'master') syncPasswordToSupabaseAuth(p1);
     toast(hasExistingPassword?'Password updated ✅':'Password set ✅ — you can now log in with email + password too.');
     const currentPassEl = document.getElementById('pf-currentpass');
     if(currentPassEl) currentPassEl.value='';

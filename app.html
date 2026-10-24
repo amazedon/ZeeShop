@@ -2148,20 +2148,38 @@ function bindForgotPasswordEvents(){
       // Already on this device — update the local copy too, so login works offline right away.
       u.passwordHash = hash(p1);
       logAudit('password_reset', 'Password reset via emailed code');
-      authMode='login'; forgotStep=1; forgotUserId=null; forgotEmail=null; forgotCode=null; forgotError='';
-      toast('Password reset ✅ — log in with your new password.');
-      render();
+      const resetEmail = u.email;
+      forgotStep=1; forgotUserId=null; forgotEmail=null; forgotCode=null; forgotError='';
+      if(u.role === 'master'){
+        // They just proved who they are with the emailed code, so sign them straight in (no second password entry).
+        authMode=''; forceFullLogin=false; authError='';
+        state.sessionUserId = u.id;
+        if(!state.currentShopId && state.shops[0]) state.currentShopId = state.shops[0].id;
+        toast(`Password reset ✅ Welcome back, ${u.firstName}!`);
+        render();
+        if(resetEmail){   // background: refresh the Supabase session so sync keeps working
+          window.sb.auth.signInWithPassword({ email: resetEmail, password: p1 })
+            .then(({ error })=>{ if(!error){ flushSyncQueue(); pullSync(); } }).catch(()=>{});
+        }
+      } else {
+        authMode='login'; forceFullLogin=true; authError='';
+        toast('Password reset ✅ — log in with your new password.');
+        render();
+      }
     } else {
       // Never been on this device before — bootstrap it now, same as a
       // first-time cross-device login, so they land straight on the dashboard
       // instead of being sent back to type the same new password into Login.
       try{
-        await loginOwnerToSupabase(forgotEmail, p1);
-        forgotStep=1; forgotUserId=null; forgotEmail=null; forgotCode=null; forgotError='';
+        // Leave the "forgot password" mode BEFORE logging in: render() shows the reset screen whenever authMode is
+        // 'forgot', even with a live session — which is why people were bounced back to "Send Code" after resetting.
+        const resetEmailAddr = forgotEmail;
+        authMode=''; forgotStep=1; forgotUserId=null; forgotEmail=null; forgotCode=null; forgotError='';
+        await loginOwnerToSupabase(resetEmailAddr, p1);
       }catch(err){
         // Password was reset successfully server-side even if this device-setup
         // step failed (e.g. offline right after) — send them to Login to try normally.
-        authMode='login'; forgotStep=1; forgotUserId=null; forgotEmail=null; forgotCode=null; forgotError='';
+        authMode='login'; forceFullLogin=true; forgotStep=1; forgotUserId=null; forgotEmail=null; forgotCode=null; forgotError='';
         toast('Password reset ✅ — log in with your new password.');
         render();
       }

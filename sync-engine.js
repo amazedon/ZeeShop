@@ -467,7 +467,11 @@ async function pullSync(){
       canSell:r.can_sell, canSellCredit:r.can_sell_credit, canRecordCash:r.can_record_cash,
       canVoidReturn:r.can_void_return, isSuperAdmin:r.is_super_admin||false, managesShopIds:r.manages_shop_ids||[],
       nameChangeRequest:r.name_change_request||null,
-      passwordHash:r.password_hash||null, pinHash:r.pin_hash||null, pinLength:r.pin_length||null
+      // Never replace a working local hash with an EMPTY server value — that is what locked owners out ("Incorrect
+      // username/email or password") a few hours after a normal login, until they changed their password.
+      passwordHash: r.password_hash || ((state.users.find(x=>x.id===r.id) || {}).passwordHash) || null,
+      pinHash: r.pin_hash || ((state.users.find(x=>x.id===r.id) || {}).pinHash) || null,
+      pinLength: r.pin_length || ((state.users.find(x=>x.id===r.id) || {}).pinLength) || null
     }));
 
     mergeUpdate('customer_groups', groups, state.customerGroups, r=>({ id:r.id, businessId:r.business_id, name:r.name }));

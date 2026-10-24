@@ -34,6 +34,9 @@
   .btn-primary{background:var(--marigold);color:var(--ink);}
   .btn-primary:hover{background:var(--marigold-dark);}
   .err{background:var(--red-bg);color:var(--red);padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:14px;font-weight:600;}
+  .okmsg{background:#E3F8EE;color:#0B7A49;padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:14px;font-weight:600;}
+  .link-btn{background:none;border:none;color:var(--ink-soft,#5b6577);font-weight:700;font-size:13.5px;cursor:pointer;padding:12px 0 0;width:100%;text-align:center;text-decoration:underline;}
+  .link-btn[disabled]{opacity:.5;cursor:default;}
   .ok{background:var(--green-bg);color:var(--green);padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:14px;font-weight:600;}
   .auth-card{width:100%;max-width:380px;background:#fff;border-radius:18px;padding:28px 22px;box-shadow:0 10px 40px rgba(18,33,59,0.15);}
   .hidden{display:none !important;}
@@ -274,6 +277,19 @@
       </div>
     </div>
     <button class="btn btn-primary" id="login-btn">Log In</button>
+    <button type="button" class="link-btn" id="forgot-btn">Forgot password?</button>
+  </div>
+</div>
+
+<div id="recovery-screen" class="center-screen hidden">
+  <div class="auth-card">
+    <div class="brand" style="margin-bottom:4px;color:var(--ink);"><div class="brand-mark">Z</div>Set a new password</div>
+    <p class="subtle">Choose a new password for your Super Admin account.</p>
+    <div id="recovery-err"></div>
+    <div class="field"><label>New password</label><input id="recovery-pass" type="password" autocomplete="new-password" placeholder="At least 8 characters"></div>
+    <div class="field"><label>Confirm new password</label><input id="recovery-pass2" type="password" autocomplete="new-password"></div>
+    <button class="btn btn-primary" id="recovery-btn">Save new password</button>
+    <button type="button" class="link-btn" id="recovery-cancel">Cancel</button>
   </div>
 </div>
 
@@ -541,8 +557,13 @@
   // The shop app and this page live on the same domain, so by default they would SHARE one
   // login in the browser: signing out here would sign the shop owner out of the app (and
   // vice versa). The admin page therefore keeps its own, separate session.
+  // Did we arrive from a password-reset email link? Read the URL BEFORE the client removes it.
+  const urlHash = location.hash || '';
+  let recoveryMode = /(^#|&)type=recovery(&|$)/.test(urlHash);
+  const linkExpired = /error_code=otp_expired|error=access_denied/.test(urlHash);
   const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    auth: { storageKey: 'zeeshop-superadmin-auth', persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+    // detectSessionInUrl is ON only so the reset-email link can be read; normal logins are unaffected.
+    auth: { storageKey: 'zeeshop-superadmin-auth', persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
   });
 
   const loginScreen = document.getElementById('login-screen');
@@ -612,15 +633,70 @@
   const retryBtn = document.getElementById('check-retry-btn');
   if(retryBtn) retryBtn.addEventListener('click', ()=>checkSession());
   // If this admin session ends in another tab, show the login screen here too.
-  sb.auth.onAuthStateChange((evt)=>{ if(evt === 'SIGNED_OUT') checkSession(); });
+  sb.auth.onAuthStateChange((evt)=>{
+    if(evt === 'PASSWORD_RECOVERY'){ recoveryMode = true; showOnly('recovery'); return; }
+    if(evt === 'SIGNED_OUT') checkSession();
+  });
+
+  // ---------- Forgot password (Supabase sends a one-time reset link to the email) ----------
+  const forgotBtn = document.getElementById('forgot-btn');
+  forgotBtn.addEventListener('click', async ()=>{
+    const email = document.getElementById('login-email').value.trim();
+    const errBox = document.getElementById('login-err');
+    errBox.innerHTML = '';
+    if(!/^\S+@\S+\.\S+$/.test(email)){ showError(errBox, 'Type your email in the box above, then tap Forgot password.'); return; }
+    forgotBtn.disabled = true; const label = forgotBtn.textContent; forgotBtn.textContent = 'Sending…';
+    try{
+      const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+      if(error){
+        showError(errBox, /rate|seconds|too many/i.test(error.message) ? 'Please wait a minute before asking for another email.' : 'Could not send the email: ' + error.message);
+      }else{
+        // Same message whether or not the address exists, so this can't be used to discover accounts.
+        errBox.innerHTML = '<div class="okmsg">If that email has a Super Admin account, a reset link is on its way. Check your inbox and spam folder.</div>';
+      }
+    }catch(e){ showError(errBox, "Couldn't reach the server. Check your internet connection and try again."); }
+    let wait = 60; forgotBtn.textContent = 'Resend in ' + wait + 's';
+    const tick = setInterval(()=>{ wait--; if(wait <= 0){ clearInterval(tick); forgotBtn.disabled = false; forgotBtn.textContent = label; } else forgotBtn.textContent = 'Resend in ' + wait + 's'; }, 1000);
+  });
+
+  // ---------- Set a new password (reached from the emailed link) ----------
+  async function leaveRecovery(msgHtml){
+    recoveryMode = false;
+    try{ history.replaceState(null, '', location.pathname + location.search); }catch(_e){}
+    await sb.auth.signOut({ scope: 'local' });
+    showOnly('login');
+    if(msgHtml) document.getElementById('login-err').innerHTML = msgHtml;
+  }
+  document.getElementById('recovery-cancel').addEventListener('click', ()=> leaveRecovery(''));
+  document.getElementById('recovery-btn').addEventListener('click', async ()=>{
+    const p1 = document.getElementById('recovery-pass').value;
+    const p2 = document.getElementById('recovery-pass2').value;
+    const box = document.getElementById('recovery-err');
+    box.innerHTML = '';
+    if(p1.length < 8){ showError(box, 'Use at least 8 characters.'); return; }
+    if(p1 !== p2){ showError(box, "The two passwords don't match."); return; }
+    const btn = document.getElementById('recovery-btn');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try{
+      const { error } = await sb.auth.updateUser({ password: p1 });
+      if(error){ showError(box, error.message); btn.disabled = false; btn.textContent = 'Save new password'; return; }
+      btn.disabled = false; btn.textContent = 'Save new password';
+      document.getElementById('recovery-pass').value = ''; document.getElementById('recovery-pass2').value = '';
+      await leaveRecovery('<div class="okmsg">Password updated ✅ Log in with your new password.</div>');
+    }catch(e){
+      showError(box, "Couldn't reach the server. Try again."); btn.disabled = false; btn.textContent = 'Save new password';
+    }
+  });
 
   function showOnly(which){
     loginScreen.classList.toggle('hidden', which !== 'login');
     dashScreen.classList.toggle('hidden', which !== 'dash');
     unauthorizedScreen.classList.toggle('hidden', which !== 'unauthorized');
+    const rec = document.getElementById('recovery-screen'); if(rec) rec.classList.toggle('hidden', which !== 'recovery');
     const failed = document.getElementById('check-failed-screen'); if(failed) failed.classList.toggle('hidden', which !== 'failed');
   }
   async function checkSession(){
+    if(recoveryMode){ showOnly('recovery'); return; }     // finish choosing a new password before anything else
     const { data } = await sb.auth.getSession();
     if(!data.session){ showOnly('login'); return; }
     // Signing in only proves this is A valid ZeeShop account — it does NOT prove
@@ -1721,6 +1797,10 @@
   });
 
   checkSession();
+  if(linkExpired && !recoveryMode){
+    document.getElementById('login-err').innerHTML = '<div class="err">That reset link has expired or was already used. Enter your email and tap Forgot password to get a new one.</div>';
+    try{ history.replaceState(null, '', location.pathname + location.search); }catch(_e){}
+  }
 </script>
 </body>
 </html>

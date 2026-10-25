@@ -2368,6 +2368,7 @@ async function loginOwnerToSupabase(email, pass){
     throw new Error('Incorrect username/email or password.');
   }
   const localUser = await loadOwnerBusinessData(signInData.session.access_token, signInData.user.id, email);
+  localUser.passwordHash = hash(pass);   // Supabase just accepted this password, so it is the right one — never keep a stale server copy
   logAudit('login', 'Master logged in on a new device');
   toast(`Welcome back, ${localUser.firstName}!`);
   render();
@@ -9970,7 +9971,7 @@ function bpAccToggle(id){
 function screenBillTopup(){
   const hasVa = !!(billVa && billVa.account);
   let pending = null; try{ pending = localStorage.getItem(SQUAD_PENDING_KEY); }catch(_e){}
-  const psaSummary = billPsaLoading ? 'Setting up…' : (billPsaAccountNumber ? `${billPsaAccountNumber}${billPsaBankName ? ' · ' + billPsaBankName : ''}` : 'Get your account number in one tap');
+  const psaSummary = billPsaLoading ? 'Setting up…' : (billPsaAccountNumber ? `${billPsaAccountNumber}${billPsaAccountName ? ' · ' + billPsaAccountName : (billPsaBankName ? ' · ' + billPsaBankName : '')}` : 'Get your account number in one tap');
   const v = bpVaHeaderParts();
   return `
     ${bpHeader('Add Money')}
@@ -10069,9 +10070,12 @@ function bpFundCardHtml(){
   }
   return `
     <div style="text-align:center;padding:4px 0 0;">
-      <div style="font-size:22px;font-weight:700;letter-spacing:1px;margin:6px 0;">${escapeHtml(billPsaAccountNumber)}</div>
-      ${billPsaAccountName ? `<div class="t1" style="font-size:15px;">${escapeHtml(billPsaAccountName)}</div>` : ''}
-      <div class="t1">${escapeHtml(billPsaBankName||'')}</div>
+      <div class="subtle" style="font-size:11.5px;font-weight:800;letter-spacing:.08em;margin-top:6px;">ACCOUNT NUMBER</div>
+      <div style="font-size:26px;font-weight:800;letter-spacing:1px;margin:2px 0 10px;">${escapeHtml(billPsaAccountNumber)}</div>
+      <div class="subtle" style="font-size:11.5px;font-weight:800;letter-spacing:.08em;">ACCOUNT NAME</div>
+      <div class="t1" style="font-size:17px;margin:2px 0 10px;">${escapeHtml(billPsaAccountName || '—')}</div>
+      <div class="subtle" style="font-size:11.5px;font-weight:800;letter-spacing:.08em;">BANK</div>
+      <div class="t1" style="margin:2px 0 4px;">${escapeHtml(billPsaBankName||'')}</div>
       <button class="btn btn-outline btn-sm" id="bp-psa-copy" style="margin-top:10px;">Copy Account Number</button>
       <br><button class="btn btn-outline btn-sm" id="bp-psa-sync" style="margin-top:10px;">${billPsaSyncing?'Checking…':'↻ Refresh Balance'}</button>
     </div>
@@ -11325,13 +11329,33 @@ function bpFundingRowHtml(t){
   const ref = String(t.provider_reference || '');
   const how = ref.startsWith('squadva:') ? 'Dedicated account' : ref.startsWith('squad:') ? 'Pay Now (card / bank)' : ref.startsWith('manual:') ? 'Credited by Admin' : 'Bank transfer';
   const fee = Number(t.fee || 0);
+  const gross = Number(t.gross_amount || 0);
+  const line = (k,v)=> (v===null || v===undefined || String(v)==='') ? '' :
+    `<div style="display:flex;justify-content:space-between;gap:14px;padding:7px 0;border-top:1px solid rgba(128,140,170,.25);"><span class="subtle">${k}</span><span style="text-align:right;font-weight:700;word-break:break-word;">${escapeHtml(String(v))}</span></div>`;
+  const isTransfer = how === 'Bank transfer' || how === 'Dedicated account';
+  const details = [
+    isTransfer ? line('From', t.sender_name || 'Not shown by the sender’s bank') : '',
+    line('Sender bank', t.sender_bank),
+    line('Sender account', t.sender_account ? '••••' + String(t.sender_account).slice(-4) : ''),
+    gross > 0 && gross !== Number(t.amount) ? line('Amount sent', fmtMoney(gross)) : '',
+    fee > 0 ? line('Fee', fmtMoney(fee)) : '',
+    line('Credited to wallet', fmtMoney(t.amount)),
+    line('Method', how),
+    line('Note', t.narration),
+    line('Reference', ref.replace(/^(flw|squadva|squad|manual):/, '')),
+    line('Time', t.created_at ? fmtDateTimeFull(t.created_at) : ''),
+  ].join('');
   return `
-    <div class="list-row">
-      <div class="info">
-        <div class="t1">Wallet funding — ${escapeHtml(how)}</div>
-        <div class="t2 subtle">${t.created_at?fmtDateTimeFull(t.created_at):''} · +${fmtMoney(t.amount)}${fee>0 ? ' (fee '+fmtMoney(fee)+')' : ''}</div>
+    <div class="list-row bp-topup" data-topup-toggle role="button" tabindex="0" aria-expanded="false" style="display:block;cursor:pointer;">
+      <div style="display:flex;align-items:center;gap:10px;justify-content:space-between;">
+        <div class="info">
+          <div class="t1">Wallet funding — ${escapeHtml(how)}</div>
+          <div class="t2 subtle">${t.created_at?fmtDateTimeFull(t.created_at):''} · +${fmtMoney(t.amount)}${fee>0 ? ' (fee '+fmtMoney(fee)+')' : ''}</div>
+        </div>
+        <span class="pill pill-green">credited</span>
+        <span class="bp-chev" aria-hidden="true" style="transition:transform .2s;">▾</span>
       </div>
-      <span class="pill pill-green">credited</span>
+      <div class="bp-topup-details" hidden style="margin-top:10px;font-size:13.5px;">${details}</div>
     </div>`;
 }
 /* ---------------- MANAGE PRICES (owner only) ---------------- */
@@ -11495,6 +11519,17 @@ function openBillTxReceiptModal(txId){
 function bindBillHistoryEvents(){
 
   if(!billHistoryLoaded && !billHistoryLoading && !billHistoryError) bpLoadHistory();
+  document.querySelectorAll('[data-topup-toggle]').forEach(row=>{
+    const toggle = ()=>{
+      const d = row.querySelector('.bp-topup-details'); if(!d) return;
+      const open = d.hasAttribute('hidden');
+      if(open) d.removeAttribute('hidden'); else d.setAttribute('hidden','');
+      row.setAttribute('aria-expanded', String(open));
+      const c = row.querySelector('.bp-chev'); if(c) c.style.transform = open ? 'rotate(180deg)' : '';
+    };
+    row.addEventListener('click', toggle);
+    row.addEventListener('keydown', e=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); toggle(); } });
+  });
   const historyRetry = document.getElementById('bp-history-retry');
   if(historyRetry) historyRetry.addEventListener('click', ()=> bpLoadHistory());
   document.querySelectorAll('[data-bp-requery]').forEach(btn=>{

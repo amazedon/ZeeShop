@@ -654,12 +654,22 @@ Deno.serve(async (req: Request) => {
       const validPhone = /^0\d{10}$/.test(phoneDigits) ? phoneDigits : null;
       const createBody: Record<string, unknown> = { account_name: cleanName, email: uniqueEmail, country: "NG" };
       if (validPhone) createBody.mobilenumber = validPhone;
-      const flwRes = await fetch("https://api.flutterwave.com/v3/payout-subaccounts", {
+      const createPsa = (b: Record<string, unknown>) => fetch("https://api.flutterwave.com/v3/payout-subaccounts", {
         method: "POST",
         headers: { Authorization: `Bearer ${FLW_SECRET_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify(createBody),
+        body: JSON.stringify(b),
       });
-      const flwData = await flwRes.json().catch(() => null);
+      let flwRes = await createPsa(createBody);
+      let flwData = await flwRes.json().catch(() => null);
+      // Flutterwave sometimes fails to generate the account number at its partner bank (the same phone or person
+      // appearing twice can trigger it). Try ONCE more, a moment later and without the phone number.
+      if (!flwRes.ok && /nuban/i.test(String(flwData?.message || ""))) {
+        console.error("Flutterwave nuban error on first try, retrying once without phone:", flwRes.status, JSON.stringify(flwData)?.slice(0, 300));
+        await new Promise((r) => setTimeout(r, 2000));
+        const retryBody = { ...createBody }; delete retryBody.mobilenumber;
+        flwRes = await createPsa(retryBody);
+        flwData = await flwRes.json().catch(() => null);
+      }
       let acct = flwData?.data;
       if (!flwRes.ok || flwData?.status !== "success" || !acct?.account_reference) {
         console.error("Flutterwave payout-subaccount create failed:", flwRes.status, JSON.stringify(flwData)?.slice(0, 500), "| name:", cleanName, "| email:", uniqueEmail, "| phone sent:", !!validPhone);
@@ -769,8 +779,14 @@ Deno.serve(async (req: Request) => {
             headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` },
           });
           const flwData = await flwRes.json();
+          if (!flwRes.ok) {
+            console.error("sync_psa_wallet: Flutterwave said", flwRes.status, JSON.stringify(flwData)?.slice(0, 300), "| ref:", biz.psa_account_reference);
+          }
           if (flwRes.ok) {
             const txns: any[] = flwData?.data?.transactions || [];
+            // Diagnostics: what did Flutterwave actually return for this account? (no secrets here)
+            console.log("sync_psa_wallet: ref", biz.psa_account_reference, "| from", from, "to", to, "| transactions:", txns.length,
+              "| sample:", JSON.stringify(txns.slice(0, 3).map((t: any) => ({ type: t.type, status: t.status, amount: t.amount, reference: t.reference }))));
             for (const t of txns) {
               if (String(t.type).toLowerCase() !== "credit" || String(t.status).toLowerCase() !== "successful" || !t.reference) continue;
               const ref = String(t.reference).replace(/^PSA_/i, "");

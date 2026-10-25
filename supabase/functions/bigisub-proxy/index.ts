@@ -76,6 +76,24 @@ const FLW_SECRET_KEY = Deno.env.get("FLW_SECRET_KEY") || "";
 // report fees; the webhook uses Flutterwave's own fee figure.
 const FLW_ESTIMATED_FEE_PERCENT = Number(Deno.env.get("FLW_ESTIMATED_FEE_PERCENT")) || 2.0;
 
+// ---- Flutterwave account fee: admin-editable (Super Admin -> Platform Pricing), never hard-coded ----
+type FlwFeeRule = { type: string; value: number; cap: number };
+async function loadFlwFeeRule(admin: any): Promise<FlwFeeRule | null> {
+  try {
+    const { data, error } = await admin.from("platform_settings").select("flw_fee_type, flw_fee_value, flw_fee_cap").eq("id", 1).maybeSingle();
+    if (error || !data || !data.flw_fee_type) return null;      // not configured yet -> caller falls back to the old estimate
+    return { type: String(data.flw_fee_type), value: Number(data.flw_fee_value || 0), cap: Number(data.flw_fee_cap || 0) };
+  } catch (_e) { return null; }
+}
+function computeFlwFee(gross: number, rule: FlwFeeRule): number {
+  let fee = 0;
+  if (rule.type === "percentage") { fee = (gross * rule.value) / 100; if (rule.cap > 0) fee = Math.min(fee, rule.cap); }
+  else if (rule.type === "flat") fee = rule.value;
+  fee = Math.round(fee * 100) / 100;
+  return Math.min(Math.max(fee, 0), gross);
+}
+
+
 // ---- Email receipts ------------------------------------------------------
 // Sent through the notify-email function. Fire-and-forget: a failed or slow
 // email can NEVER block, delay or roll back a purchase or a wallet credit.
@@ -787,6 +805,7 @@ Deno.serve(async (req: Request) => {
             // Diagnostics: what did Flutterwave actually return for this account? (no secrets here)
             console.log("sync_psa_wallet: ref", biz.psa_account_reference, "| from", from, "to", to, "| transactions:", txns.length,
               "| sample:", JSON.stringify(txns.slice(0, 3).map((t: any) => ({ type: t.type, status: t.status, amount: t.amount, reference: t.reference }))));
+            const feeRule = await loadFlwFeeRule(admin);   // the fee set in Super Admin (null = not set yet -> estimate)
             for (const t of txns) {
               if (String(t.type).toLowerCase() !== "credit" || String(t.status).toLowerCase() !== "successful" || !t.reference) continue;
               const ref = String(t.reference).replace(/^PSA_/i, "");
@@ -794,13 +813,15 @@ Deno.serve(async (req: Request) => {
               if (!Number.isFinite(gross) || gross <= 0) continue;
               // This endpoint reports no fee figure, so apply the estimated
               // percentage (the webhook path uses Flutterwave's real fee).
-              const net = Math.round(gross * (1 - FLW_ESTIMATED_FEE_PERCENT / 100) * 100) / 100;
+              const feeAmt = feeRule ? computeFlwFee(gross, feeRule) : Math.round(gross * (FLW_ESTIMATED_FEE_PERCENT / 100) * 100) / 100;
+              const net = Math.round((gross - feeAmt) * 100) / 100;
               const topupId = crypto.randomUUID();
               const { error: recErr } = await admin.from("wallet_topups").insert({
-                id: topupId, business_id: businessId, amount: net, gross_amount: gross,
-                provider_reference: `flw:${ref}`, status: "success",
+                id: topupId, business_id: businessId, amount: net > 0 ? net : 0, gross_amount: gross, fee: feeAmt,
+                provider_reference: `flw:${ref}`, status: net > 0 ? "success" : "ignored",
               });
               if (recErr) continue; // already recorded by the webhook or an earlier sync
+              if (net <= 0) continue; // nothing left after the fee
               const { error: creditErr } = await admin.rpc("increment_bill_wallet", { p_business_id: String(businessId), p_amount: net });
               if (creditErr) { await admin.from("wallet_topups").delete().eq("id", topupId); continue; }
               // Receipt for this credit (never blocks the credit).

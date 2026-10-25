@@ -3001,6 +3001,19 @@ function bindUserSelectEvents(){
   const lo = document.getElementById('full-logout'); if(lo) lo.addEventListener('click', e=>{e.preventDefault(); if(confirm('Sign out of this business on this device?')){ state.sessionUserId=null; forceFullLogin=true; authMode='login'; pendingSignupData=null; authError=''; render(); }});
 }
 
+// Make the Supabase session belong to this person (needed for anything the server checks: bill payments, wallet, sync).
+async function ensureSessionFor(u, pass){
+  try{
+    if(!u || !u.email || !pass) return false;
+    const { data } = await window.sb.auth.getSession();
+    const cur = data && data.session && data.session.user;
+    if(cur && String(cur.email||'').toLowerCase() === String(u.email).toLowerCase()) return true;   // already them
+    if(!navigator.onLine) return false;
+    const r = await window.sb.auth.signInWithPassword({ email: u.email, password: pass });
+    return !r.error && !!(r.data && r.data.session);
+  }catch(_e){ return false; }
+}
+
 function openPinScreen(u){
   pendingPinUser = u; pinBuffer='';
   document.getElementById('app').innerHTML = renderPinPad(u);
@@ -3026,6 +3039,17 @@ function bindPinEvents(u){
       if(!state.currentShopId && state.shops[0]) state.currentShopId = state.shops[0].id;
       logAudit('login','Master unlocked device');
       render();
+      // The server decides who you are from the signed-in Supabase session, NOT from the profile picked on this screen.
+      // If another person (a staff member who joined on this phone) signed in last, the boss would still be treated as
+      // that staff member: wallet balance fails with "no permission for bill payments". Switch the session to the boss.
+      ensureSessionFor(u, pass).then(ok=>{
+        if(ok){
+          try{ flushSyncQueue(); pullSync(); }catch(_e){}
+          // Clear the old "no permission" failure and load the wallet again under the boss's session.
+          billWalletError = null; billWalletBalance = null; billHistoryError = null;
+          try{ if(!isViewer() && canDo('canBillPayments')) bpLoadWallet(); }catch(_e){}
+        }
+      });
     });
     const ppForgot = document.getElementById('pp-go-forgot');
     if(ppForgot) ppForgot.addEventListener('click', e=>{ e.preventDefault(); authMode='forgot'; forgotStep=1; forgotUserId=null; forgotEmail=null; forgotCode=null; forgotError=''; render(); });
@@ -10074,7 +10098,7 @@ function bpFundCardHtml(){
       <div style="font-size:26px;font-weight:800;letter-spacing:1px;margin:2px 0 10px;">${escapeHtml(billPsaAccountNumber)}</div>
       <div class="subtle" style="font-size:11.5px;font-weight:800;letter-spacing:.08em;">ACCOUNT NAME</div>
       <div class="t1" style="font-size:17px;margin:2px 0 10px;">${escapeHtml(billPsaAccountName || '—')}</div>
-      <div class="subtle" style="font-size:11.5px;font-weight:800;letter-spacing:.08em;">BANK</div>
+      <div class="subtle" style="font-size:11.5px;font-weight:800;letter-spacing:.08em;">BANK NAME</div>
       <div class="t1" style="margin:2px 0 4px;">${escapeHtml(billPsaBankName||'')}</div>
       <button class="btn btn-outline btn-sm" id="bp-psa-copy" style="margin-top:10px;">Copy Account Number</button>
       <br><button class="btn btn-outline btn-sm" id="bp-psa-sync" style="margin-top:10px;">${billPsaSyncing?'Checking…':'↻ Refresh Balance'}</button>
@@ -11352,7 +11376,7 @@ function bpFundingRowHtml(t){
           <div class="t1">Wallet funding — ${escapeHtml(how)}</div>
           <div class="t2 subtle">${t.created_at?fmtDateTimeFull(t.created_at):''} · +${fmtMoney(t.amount)}${fee>0 ? ' (fee '+fmtMoney(fee)+')' : ''}</div>
         </div>
-        <span class="pill pill-green">credited</span>
+        ${t.status === 'refunded' ? '<span class="pill pill-red">refunded</span>' : '<span class="pill pill-green">credited</span>'}
         <span class="bp-chev" aria-hidden="true" style="transition:transform .2s;">▾</span>
       </div>
       <div class="bp-topup-details" hidden style="margin-top:10px;font-size:13.5px;">${details}</div>

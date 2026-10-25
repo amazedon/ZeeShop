@@ -39,6 +39,24 @@ function safeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
+// Who sent the money? Flutterwave puts the sender's details under different keys depending on the product, so look in
+// every likely place. (account_name / bank_name / customer are the RECEIVER's details, so they are deliberately skipped.)
+function firstStr(...vals: unknown[]): string | null {
+  for (const v of vals) {
+    if (v !== undefined && v !== null && String(v).trim() !== "") return String(v).trim().slice(0, 200);
+  }
+  return null;
+}
+function pickSender(data: any) {
+  const m = (data && data.meta) || {};
+  return {
+    sender_name: firstStr(m.originator_name, m.originatorname, m.sender_name, m.payer_name, data?.originator_name, data?.sender_name, data?.payer_name, data?.sender?.name, data?.originator?.name),
+    sender_bank: firstStr(m.originator_bankname, m.originator_bank_name, m.originator_bank, m.sender_bank, data?.originator_bank, data?.sender_bank, data?.sender?.bank, data?.originator?.bank),
+    sender_account: firstStr(m.originator_account_number, m.sender_account_number, m.payer_account_number, data?.originator_account_number, data?.sender_account_number, data?.sender?.account_number, data?.originator?.account_number),
+    narration: firstStr(data?.narration, m.narration, m.originator_narration, data?.description),
+  };
+}
+
 function normaliseRef(ref: unknown): string {
   return String(ref ?? "").replace(/^PSA_/i, "");
 }
@@ -180,10 +198,16 @@ Deno.serve(async (req: Request) => {
 
     // Record FIRST — the unique provider_reference blocks a double credit.
     const topupId = crypto.randomUUID();
-    const { error: recErr } = await adminClient.from("wallet_topups").insert({
+    const baseRow = {
       id: topupId, business_id: bizId, amount: net > 0 ? net : 0, gross_amount: gross, fee,
       provider_reference: `flw:${ref}`, status: net > 0 ? "success" : "ignored",
-    });
+    };
+    let { error: recErr } = await adminClient.from("wallet_topups").insert({ ...baseRow, ...pickSender(data) });
+    // If the sender columns have not been added yet (wallet-sender-details.sql not run), still record + credit the payment.
+    if (recErr && /sender_|narration|schema cache|column/i.test(recErr.message) && !/duplicate key/i.test(recErr.message)) {
+      console.error("flutterwave-webhook: sender columns missing, saving without them:", recErr.message);
+      ({ error: recErr } = await adminClient.from("wallet_topups").insert(baseRow));
+    }
     if (recErr) return new Response("ok — already processed", { status: 200 });
     if (net <= 0) return new Response("ok — nothing left after the fee", { status: 200 });
 

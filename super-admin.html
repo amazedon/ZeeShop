@@ -465,7 +465,7 @@
       </div>
 
       <div class="card" id="deposit-fee-card">
-        <h2>Wallet funding fee</h2>
+        <h2>Squad funding fee <span class="subtle" style="font-weight:600;font-size:13px;">— Pay Now &amp; Squad dedicated accounts</span></h2>
         <p class="subtle">
           The fee charged when a business adds money with <b>Pay Now</b> (card, bank, USSD or transfer). It applies to the
           next payment straight away; a payment that is already in progress keeps the fee it was shown. Manual credits
@@ -490,6 +490,29 @@
         <div class="warn-note" id="df-warn" style="display:none;"></div>
         <button class="btn btn-primary btn-sm" id="df-save" style="margin-top:10px;">Save funding fee</button>
         <div class="subtle" id="df-save-status" style="margin-top:8px;"></div>
+      </div>
+
+      <div class="card" id="flw-fee-card">
+        <h2>Flutterwave account fee</h2>
+        <p class="subtle">
+          The fee taken when money is <b>transferred to a business's Flutterwave account number</b> (the "Instant · No ID needed"
+          account). It is always deducted from the amount received. Separate from the Squad fee above. Change it here whenever
+          Flutterwave's charges change — it applies to the next transfer, no code needed.
+        </p>
+        <div id="ff-status"></div>
+        <div class="field"><label for="ff-type">Fee type</label>
+          <select id="ff-type">
+            <option value="none">None — no fee</option>
+            <option value="percentage">Percentage (%)</option>
+            <option value="flat">Flat amount (₦)</option>
+          </select></div>
+        <div class="field" id="ff-value-wrap"><label for="ff-value" id="ff-value-label">Fee value</label>
+          <input id="ff-value" type="number" min="0" step="any" inputmode="decimal" placeholder="e.g. 1.2"></div>
+        <div class="field" id="ff-cap-wrap"><label for="ff-cap">Maximum fee (₦) — 0 means no cap</label>
+          <input id="ff-cap" type="number" min="0" step="any" inputmode="decimal" placeholder="e.g. 1500"></div>
+        <div class="vtu-note" id="ff-example" style="font-weight:700;"></div>
+        <button class="btn btn-primary btn-sm" id="ff-save" style="margin-top:10px;">Save Flutterwave fee</button>
+        <div class="subtle" id="ff-save-status" style="margin-top:8px;"></div>
       </div>
     </div>
 
@@ -1392,8 +1415,56 @@
     });
   })();
 
+  // ---------- Flutterwave account fee (separate from Squad) ----------
+  function ffCompute(gross, type, value, cap){
+    let fee = 0;
+    if(type === 'percentage'){ fee = gross * value / 100; if(cap > 0) fee = Math.min(fee, cap); }
+    else if(type === 'flat'){ fee = value; }
+    fee = Math.round(fee * 100) / 100;
+    return Math.min(Math.max(fee, 0), gross);
+  }
+  function ffRefresh(){
+    const type = document.getElementById('ff-type').value;
+    const value = Number(document.getElementById('ff-value').value || 0);
+    const cap = Number(document.getElementById('ff-cap').value || 0);
+    document.getElementById('ff-value-wrap').style.display = type === 'none' ? 'none' : '';
+    document.getElementById('ff-cap-wrap').style.display = type === 'percentage' ? '' : 'none';
+    document.getElementById('ff-value-label').textContent = type === 'flat' ? 'Flat fee (₦)' : 'Fee percentage (%) — e.g. 1.2 means 1.2%';
+    const ex = (g)=>{ const f = ffCompute(g, type, value, cap); return `₦${g.toLocaleString()} sent → fee ₦${f.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} → wallet receives ₦${(g-f).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`; };
+    document.getElementById('ff-example').textContent = 'Example: ' + ex(10000) + '  ·  ' + ex(100);
+  }
+  async function loadFlwFees(){
+    const box = document.getElementById('ff-status'); if(!box) return;
+    try{
+      const r = await callAdminApi('get_flw_fee_settings', {});
+      box.innerHTML = r.configured ? '' : '<div class="warn-note">Not saved yet — the app is using the automatic 2% estimate. Save a value below to take control.</div>';
+      document.getElementById('ff-type').value = r.flw_fee_type || 'percentage';
+      document.getElementById('ff-value').value = Number(r.flw_fee_value || 0);
+      document.getElementById('ff-cap').value = Number(r.flw_fee_cap || 0);
+      ffRefresh();
+    }catch(e){ box.innerHTML = `<div class="err">Could not load the Flutterwave fee: ${escapeHtml(e.message)}</div>`; }
+  }
+  (function wireFlwFees(){
+    const save = document.getElementById('ff-save'); if(!save) return;
+    ['ff-type','ff-value','ff-cap'].forEach(id=>{ const el = document.getElementById(id); el.addEventListener('input', ffRefresh); el.addEventListener('change', ffRefresh); });
+    save.addEventListener('click', async ()=>{
+      const st = document.getElementById('ff-save-status');
+      const flw_fee_type = document.getElementById('ff-type').value;
+      const flw_fee_value = Number(document.getElementById('ff-value').value || 0);
+      const flw_fee_cap = Number(document.getElementById('ff-cap').value || 0);
+      st.style.color = 'var(--text-dim)'; st.textContent = 'Saving…'; save.disabled = true;
+      try{
+        await callAdminApi('set_flw_fee_settings', { flw_fee_type, flw_fee_value, flw_fee_cap });
+        st.style.color = 'var(--green)'; st.textContent = 'Saved ✅ — applies to the next transfer.';
+        loadFlwFees();
+      }catch(e){ st.style.color = 'var(--red)'; st.textContent = 'Error: ' + e.message; }
+      save.disabled = false;
+    });
+  })();
+
   async function loadPlatformPricing(){
     loadDepositFees();
+    loadFlwFees();
     const statusBox = document.getElementById('pp-status');
     const box = document.getElementById('vtu-accordion');
     try{

@@ -32,6 +32,13 @@ function toNumber(v: unknown): number {
 // Flutterwave's wallet-funding reference sometimes carries a "PSA_" prefix and
 // sometimes not (webhook vs. transactions list). Normalise so the webhook and
 // the sync fallback can never credit the same payment twice.
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
 function normaliseRef(ref: unknown): string {
   return String(ref ?? "").replace(/^PSA_/i, "");
 }
@@ -39,13 +46,33 @@ function normaliseRef(ref: unknown): string {
 Deno.serve(async (req: Request) => {
   try {
     // ---- Confirm this request genuinely came from Flutterwave ----
-    const receivedHash = req.headers.get("verif-hash");
-    const expectedHash = Deno.env.get("FLW_WEBHOOK_SECRET_HASH");
-    if (!expectedHash || receivedHash !== expectedHash) {
+    // Two ways Flutterwave proves itself, depending on the webhook version chosen in its dashboard:
+    //   V3:  header  verif-hash            = your secret hash, as is
+    //   V4:  header  flutterwave-signature = base64( HMAC-SHA256( raw body, secret hash ) )
+    // Both sides are trimmed: a stray space or newline in the pasted secret is the classic cause of a permanent 401.
+    const rawBody = await req.text();
+    const expectedHash = (Deno.env.get("FLW_WEBHOOK_SECRET_HASH") || "").trim();
+    const receivedHash = (req.headers.get("verif-hash") || "").trim();
+    const receivedSig = (req.headers.get("flutterwave-signature") || "").trim();
+    let authentic = false;
+    if (expectedHash) {
+      if (receivedHash && safeEqual(receivedHash, expectedHash)) authentic = true;
+      if (!authentic && receivedSig) {
+        const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(expectedHash), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+        const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(rawBody));
+        let bin = ""; new Uint8Array(mac).forEach((b) => (bin += String.fromCharCode(b)));
+        if (safeEqual(btoa(bin), receivedSig)) authentic = true;
+      }
+    }
+    if (!authentic) {
+      // Safe diagnostics: lengths and presence only, never the secret itself.
+      console.error("flutterwave-webhook 401 | secret configured:", !!expectedHash, "(length", expectedHash.length + ")",
+        "| verif-hash header:", receivedHash ? "present (length " + receivedHash.length + ")" : "absent",
+        "| flutterwave-signature header:", receivedSig ? "present" : "absent");
       return new Response("Unauthorized", { status: 401 });
     }
 
-    const payload = await req.json();
+    const payload = JSON.parse(rawBody);
     const data = payload?.data;
 
     // Only act on a completed, successful payment — acknowledge everything

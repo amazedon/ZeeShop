@@ -167,7 +167,14 @@ Deno.serve(async (req: Request) => {
     // What the wallet is credited with: the amount received minus
     // Flutterwave's fee for it. If the fee is missing we credit the amount.
     const gross = toNumber(data.amount);
-    const fee = toNumber(data.fee) || 0;
+    // Flutterwave's wallet-funding notice often carries no fee. The app's Refresh Balance path applies an ESTIMATED
+    // percentage in that case, so do the same here — otherwise the same payment is credited differently depending on
+    // which path happens to run first.
+    const estimatedPercent = Number(Deno.env.get("FLW_ESTIMATED_FEE_PERCENT")) || 2.0;
+    const reportedFee = toNumber(data.fee);
+    const fee = Number.isFinite(reportedFee) && reportedFee > 0
+      ? reportedFee
+      : Math.round(gross * (estimatedPercent / 100) * 100) / 100;
     if (!Number.isFinite(gross) || gross <= 0) return new Response("ok — no valid amount", { status: 200 });
     const net = Math.round((gross - fee) * 100) / 100;
 

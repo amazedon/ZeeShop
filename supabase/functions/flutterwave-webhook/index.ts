@@ -57,6 +57,48 @@ function pickSender(data: any) {
   };
 }
 
+// ---- Flutterwave account fee: admin-editable (Super Admin -> Platform Pricing), never hard-coded ----
+type FlwFeeRule = { type: string; value: number; cap: number };
+async function loadFlwFeeRule(admin: any): Promise<FlwFeeRule | null> {
+  try {
+    const { data, error } = await admin.from("platform_settings").select("flw_fee_type, flw_fee_value, flw_fee_cap").eq("id", 1).maybeSingle();
+    if (error || !data || !data.flw_fee_type) return null;      // not configured yet -> caller falls back to the old estimate
+    return { type: String(data.flw_fee_type), value: Number(data.flw_fee_value || 0), cap: Number(data.flw_fee_cap || 0) };
+  } catch (_e) { return null; }
+}
+function computeFlwFee(gross: number, rule: FlwFeeRule): number {
+  let fee = 0;
+  if (rule.type === "percentage") { fee = (gross * rule.value) / 100; if (rule.cap > 0) fee = Math.min(fee, rule.cap); }
+  else if (rule.type === "flat") fee = rule.value;
+  fee = Math.round(fee * 100) / 100;
+  return Math.min(Math.max(fee, 0), gross);
+}
+
+// A refund notice: take the original credit back out of the wallet (once). Flutterwave's refund payload shape is not
+// something we have captured yet, so look for the original reference in every likely field and log the payload.
+async function handleRefund(admin: any, payload: any, data: any): Promise<Response> {
+  console.log("flutterwave-webhook refund payload:", JSON.stringify(payload));
+  const raw = [data?.tx_ref, data?.flw_ref, data?.reference, data?.transaction_id, data?.id, data?.original_reference, data?.txref, data?.flwref];
+  const refs = Array.from(new Set(raw.filter((x) => x !== undefined && x !== null && String(x).trim() !== "").map((x) => `flw:${normaliseRef(x)}`)));
+  if (!refs.length) return new Response("ok — refund notice with no reference", { status: 200 });
+  const { data: rows } = await admin.from("wallet_topups").select("id, business_id, amount, status").in("provider_reference", refs).limit(1);
+  const topup = rows && rows[0];
+  if (!topup) return new Response("ok — refund does not match a wallet top-up", { status: 200 });
+  if (topup.status !== "success") return new Response("ok — already refunded or never credited", { status: 200 });
+  // Claim it atomically so a retry cannot debit twice.
+  const { data: claimed, error: claimErr } = await admin.from("wallet_topups").update({ status: "refunded" }).eq("id", topup.id).eq("status", "success").select("id");
+  if (claimErr) { console.error("flutterwave-webhook: could not mark refunded (run flutterwave-fee.sql):", claimErr.message); return new Response("ok — refund noted", { status: 200 }); }
+  if (!claimed || !claimed.length) return new Response("ok — already handled", { status: 200 });
+  const { data: newBalance, error: debitErr } = await admin.rpc("debit_bill_wallet_floor", { p_business_id: String(topup.business_id), p_amount: Number(topup.amount) });
+  if (debitErr) {
+    await admin.from("wallet_topups").update({ status: "success" }).eq("id", topup.id);   // undo the claim so a retry can finish it
+    console.error("flutterwave-webhook: refund debit failed:", debitErr.message);
+    return new Response("Refund debit failed, please retry", { status: 500 });
+  }
+  console.log("flutterwave-webhook: refund applied | business", topup.business_id, "| debited", topup.amount, "| new balance", newBalance);
+  return new Response("ok — refund applied", { status: 200 });
+}
+
 function normaliseRef(ref: unknown): string {
   return String(ref ?? "").replace(/^PSA_/i, "");
 }
@@ -92,6 +134,12 @@ Deno.serve(async (req: Request) => {
 
     const payload = JSON.parse(rawBody);
     const data = payload?.data;
+
+    // Refund notices are handled before the "successful payment" gate below (their status is not "successful").
+    const eventName = String(payload?.event || payload?.["event.type"] || "").toLowerCase();
+    if (eventName.includes("refund")) {
+      return await handleRefund(createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!), payload, data);
+    }
 
     // Only act on a completed, successful payment — acknowledge everything
     // else with 200 so Flutterwave doesn't keep retrying non-actionable events.
@@ -188,11 +236,14 @@ Deno.serve(async (req: Request) => {
     // Flutterwave's wallet-funding notice often carries no fee. The app's Refresh Balance path applies an ESTIMATED
     // percentage in that case, so do the same here — otherwise the same payment is credited differently depending on
     // which path happens to run first.
+    // 1st choice: the fee you set in Super Admin -> Platform Pricing -> Flutterwave account fee.
+    // Fallback (nothing saved yet): the fee Flutterwave reports, else an automatic estimate.
+    const feeRule = await loadFlwFeeRule(adminClient);
     const estimatedPercent = Number(Deno.env.get("FLW_ESTIMATED_FEE_PERCENT")) || 2.0;
     const reportedFee = toNumber(data.fee);
-    const fee = Number.isFinite(reportedFee) && reportedFee > 0
-      ? reportedFee
-      : Math.round(gross * (estimatedPercent / 100) * 100) / 100;
+    const fee = feeRule
+      ? computeFlwFee(gross, feeRule)
+      : (Number.isFinite(reportedFee) && reportedFee > 0 ? reportedFee : Math.round(gross * (estimatedPercent / 100) * 100) / 100);
     if (!Number.isFinite(gross) || gross <= 0) return new Response("ok — no valid amount", { status: 200 });
     const net = Math.round((gross - fee) * 100) / 100;
 

@@ -409,6 +409,41 @@ Deno.serve(async (req: Request) => {
     }
 
     // =====================================================================
+    // FLUTTERWAVE ACCOUNT FEE — charged when money is transferred to a business's Flutterwave account number.
+    // Separate from the Squad / Pay Now fee above. Needs flutterwave-fee.sql. Read live by flutterwave-webhook and
+    // by the app's Refresh Balance check, so a change applies to the next transfer with no code change.
+    //   flw_fee_type  "percentage" | "flat" | "none"      flw_fee_value  1.2 = 1.2%  or  50 = N50
+    //   flw_fee_cap   max fee in N for a percentage fee; 0 = no cap
+    // =====================================================================
+    if (action === "get_flw_fee_settings") {
+      const { data, error } = await admin.from("platform_settings").select("flw_fee_type, flw_fee_value, flw_fee_cap").eq("id", 1).maybeSingle();
+      if (error) return json({ error: "Flutterwave fee settings aren't set up yet — run flutterwave-fee.sql in Supabase first. (" + error.message + ")" }, 500);
+      return json({
+        flw_fee_type: data?.flw_fee_type || "percentage", flw_fee_value: data?.flw_fee_type ? Number(data?.flw_fee_value || 0) : 2,
+        flw_fee_cap: Number(data?.flw_fee_cap || 0), configured: !!data?.flw_fee_type,
+      }, 200);
+    }
+    if (action === "set_flw_fee_settings") {
+      const type = String(params.flw_fee_type || "");
+      if (!["percentage", "flat", "none"].includes(type)) return json({ error: "Choose percentage, flat or none." }, 400);
+      const value = type === "none" ? 0 : Number(params.flw_fee_value);
+      const cap = type === "percentage" ? Number(params.flw_fee_cap || 0) : 0;
+      if (!Number.isFinite(value) || value < 0) return json({ error: "Enter a fee of 0 or more." }, 400);
+      if (!Number.isFinite(cap) || cap < 0) return json({ error: "Enter a cap of 0 or more (0 = no cap)." }, 400);
+      if (type === "percentage" && value > 20) return json({ error: "A percentage fee above 20% looks like a typo. Please check it." }, 400);
+      if (type === "flat" && value > 100000) return json({ error: "That flat fee looks too large (max ₦100,000)." }, 400);
+      const { error } = await admin.from("platform_settings").upsert({
+        id: 1, flw_fee_type: type, flw_fee_value: value, flw_fee_cap: cap, updated_at: new Date().toISOString(),
+      }, { onConflict: "id" });
+      if (error) return json({ error: "Could not save: " + error.message }, 500);
+      await admin.from("audit_log_platform").insert({
+        actor_auth_user_id: callerData.user.id, action: "set_flw_fee_settings",
+        detail: `Flutterwave account fee: ${type}${type === "none" ? "" : " " + (type === "percentage" ? value + "%" : "₦" + value)}${type === "percentage" && cap > 0 ? ", cap ₦" + cap : ""}`,
+      });
+      return json({ ok: true }, 200);
+    }
+
+    // =====================================================================
     // Betting platform logos: the platforms come from Bigisub; the logo for
     // each is uploaded here (the app only displays what you upload).
     // =====================================================================

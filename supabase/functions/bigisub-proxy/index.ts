@@ -76,6 +76,12 @@ const FLW_SECRET_KEY = Deno.env.get("FLW_SECRET_KEY") || "";
 // report fees; the webhook uses Flutterwave's own fee figure.
 const FLW_ESTIMATED_FEE_PERCENT = Number(Deno.env.get("FLW_ESTIMATED_FEE_PERCENT")) || 2.0;
 
+// The account name shown to people who send money = the business name, cleaned so Flutterwave never rejects it
+// (odd characters / emoji), max 60 characters.
+function cleanPsaName(name: unknown): string {
+  return String(name || "").normalize("NFKD").replace(/[^\p{L}\p{N} &.'-]/gu, " ").replace(/\s+/g, " ").trim().slice(0, 60) || "ZeeShop Business";
+}
+
 // ---- Flutterwave account fee: admin-editable (Super Admin -> Platform Pricing), never hard-coded ----
 type FlwFeeRule = { type: string; value: number; cap: number };
 async function loadFlwFeeRule(admin: any): Promise<FlwFeeRule | null> {
@@ -419,6 +425,34 @@ Deno.serve(async (req: Request) => {
           if (nr.ok && nm) { psaName = nm; await admin.from("businesses").update({ psa_account_name: nm }).eq("id", businessId); }
         } catch (_e) { /* show no name rather than fail the screen */ }
       }
+      // The shop name IS the account name. If the owner renamed the business, update the name on the Flutterwave account too.
+      // (Flutterwave's update call needs the account's email and mobile number as well, so read them first and send them back.)
+      const wantName = cleanPsaName(biz.name);
+      if (biz.psa_account_reference && FLW_SECRET_KEY && psaName && psaName.trim().toLowerCase() !== wantName.toLowerCase()) {
+        try {
+          const ref = String(biz.psa_account_reference);
+          const gr = await fetch(`https://api.flutterwave.com/v3/payout-subaccounts/${ref}`, { headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` } });
+          const gd = await gr.json().catch(() => null);
+          const cur = gd?.data;
+          if (gr.ok && cur?.email) {
+            const body: Record<string, unknown> = { account_name: wantName, email: cur.email, country: "NG" };
+            if (cur.mobilenumber) body.mobilenumber = cur.mobilenumber;
+            const pr = await fetch(`https://api.flutterwave.com/v3/payout-subaccounts/${ref}`, {
+              method: "PUT", headers: { Authorization: `Bearer ${FLW_SECRET_KEY}`, "Content-Type": "application/json" }, body: JSON.stringify(body),
+            });
+            const pd = await pr.json().catch(() => null);
+            if (pr.ok) {
+              psaName = wantName;
+              await admin.from("businesses").update({ psa_account_name: wantName }).eq("id", businessId);
+              console.log("my_wallet_summary: account name updated to match the shop name:", wantName);
+            } else {
+              console.error("my_wallet_summary: Flutterwave refused the name update:", pr.status, JSON.stringify(pd)?.slice(0, 300));
+            }
+          } else {
+            console.error("my_wallet_summary: could not read the account before renaming:", gr.status, JSON.stringify(gd)?.slice(0, 300));
+          }
+        } catch (e) { console.error("my_wallet_summary: account rename error:", (e as Error).message); }
+      }
       return json({
         wallet_balance: Number(biz.bill_wallet_balance || 0), currency,
         psa_account_number: biz.psa_account_number || null, psa_bank_name: biz.psa_bank_name || null, psa_status: biz.psa_status || null,
@@ -664,7 +698,7 @@ Deno.serve(async (req: Request) => {
         : `business-${businessId}@zeeshop.app`;
 
       // The name on the account = the business name, cleaned so Flutterwave never rejects it for odd characters/emoji.
-      const cleanName = String(biz.name || "").normalize("NFKD").replace(/[^\p{L}\p{N} &.'-]/gu, " ").replace(/\s+/g, " ").trim().slice(0, 60) || "ZeeShop Business";
+      const cleanName = cleanPsaName(biz.name);
       // Send a phone number only when it is a real Nigerian number (a shared placeholder can be refused as a duplicate).
       let phoneDigits = String(caller.phone || "").replace(/[\s()-]/g, "");
       if (phoneDigits.startsWith("+")) phoneDigits = phoneDigits.slice(1);

@@ -792,14 +792,31 @@ Deno.serve(async (req: Request) => {
         if (updErr) return json({ error: updErr.message }, 500);
       }
 
+      // If the email changed, tell Flutterwave too so its records (and any notices it sends) follow the new address.
+      let flutterwave: string | null = null;
+      if (updatePayload.email) flutterwave = await syncFlutterwaveEmail(admin, String(business_id), String(updatePayload.email));
+
       await admin.from("audit_log_platform").insert({
         actor_auth_user_id: callerData.user.id,
         action: "override_owner_contact",
         target_business_id: business_id,
-        detail: `Manual account recovery — changed: ${changes.join(", ") || "(nothing changed)"}.`,
+        detail: `Manual account recovery — changed: ${changes.join(", ") || "(nothing changed)"}.${flutterwave ? " Flutterwave: " + flutterwave : ""}`,
       }).then((r) => { if (r.error) console.log("audit_log_platform insert skipped:", r.error.message); });
 
-      return json({ ok: true, changed: changes }, 200);
+      return json({ ok: true, changed: changes, flutterwave }, 200);
+    }
+
+    // Retry button: push the owner's CURRENT email to Flutterwave (use after a "NOT updated at Flutterwave" message).
+    if (action === "sync_flutterwave_email") {
+      const { business_id } = params;
+      if (!business_id) return json({ error: "business_id is required." }, 400);
+      const { data: ownerRow } = await admin.from("app_users").select("email").eq("business_id", business_id).eq("role", "master").maybeSingle();
+      if (!ownerRow || !ownerRow.email) return json({ error: "This business owner has no email on file." }, 404);
+      const result = await syncFlutterwaveEmail(admin, String(business_id), String(ownerRow.email));
+      await admin.from("audit_log_platform").insert({
+        actor_auth_user_id: callerData.user.id, action: "sync_flutterwave_email", target_business_id: business_id, detail: result,
+      }).then((r) => { if (r.error) console.log("audit_log_platform insert skipped:", r.error.message); });
+      return json({ ok: true, flutterwave: result }, 200);
     }
 
     // BILL PAYMENTS OVERVIEW — platform-wide monitoring for the Bigisub/
@@ -1050,6 +1067,48 @@ Deno.serve(async (req: Request) => {
 // Mirrors the client's hash() function in app.html/admin.html exactly —
 // same 32-bit signed overflow behavior — so a server-set password stays
 // consistent with what the app's own local comparison logic expects.
+// Tell Flutterwave about a changed owner email. The business's payout-subaccount (its Flutterwave account number) is
+// registered under a per-business alias of the owner's email: <name>+zs<businessid>@<domain>. When the owner's email
+// changes, the alias must follow, otherwise Flutterwave keeps notifying the OLD address. Flutterwave's update call also
+// requires the account's current name and mobile number, so they are read first and sent back unchanged.
+// Returns a plain-English result for the dashboard; it never throws, because the login email change has already happened.
+async function syncFlutterwaveEmail(admin: any, businessId: string, newOwnerEmail: string): Promise<string> {
+  try {
+    const key = Deno.env.get("FLW_SECRET_KEY") || "";
+    const { data: biz } = await admin.from("businesses").select("psa_account_reference").eq("id", businessId).maybeSingle();
+    const ref = biz && biz.psa_account_reference ? String(biz.psa_account_reference) : "";
+    if (!ref) return "This business has no Flutterwave account yet — nothing to update there.";
+    if (!key) return "NOT updated at Flutterwave: the FLW_SECRET_KEY secret is missing on this function. Add it in Edge Functions → Secrets, then use Re-sync Flutterwave.";
+    const [local, domain] = String(newOwnerEmail).toLowerCase().split("@");
+    if (!local || !domain) return "NOT updated at Flutterwave: the new email looks invalid.";
+    const tag = "zs" + String(businessId).replace(/[^a-z0-9]/gi, "").slice(0, 12).toLowerCase();
+    const flwEmail = `${local.split("+")[0]}+${tag}@${domain}`;
+
+    const gr = await fetch(`https://api.flutterwave.com/v3/payout-subaccounts/${ref}`, { headers: { Authorization: `Bearer ${key}` } });
+    const gd = await gr.json().catch(() => null);
+    const cur = gd && gd.data;
+    if (!gr.ok || !cur) {
+      console.error("syncFlutterwaveEmail: could not read the account:", gr.status, JSON.stringify(gd)?.slice(0, 300));
+      return `NOT updated at Flutterwave: could not read the account (${gr.status}). Use Re-sync Flutterwave to retry.`;
+    }
+    if (String(cur.email || "").toLowerCase() === flwEmail) return "Flutterwave already has this email.";
+    const body: Record<string, unknown> = { account_name: cur.account_name, email: flwEmail, country: "NG" };
+    if (cur.mobilenumber) body.mobilenumber = cur.mobilenumber;
+    const pr = await fetch(`https://api.flutterwave.com/v3/payout-subaccounts/${ref}`, {
+      method: "PUT", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    const pd = await pr.json().catch(() => null);
+    if (!pr.ok) {
+      console.error("syncFlutterwaveEmail: Flutterwave refused:", pr.status, JSON.stringify(pd)?.slice(0, 300));
+      return `NOT updated at Flutterwave (${pr.status}: ${String(pd?.message || "refused").slice(0, 120)}). Use Re-sync Flutterwave to retry.`;
+    }
+    return `Flutterwave account email updated to ${flwEmail}.`;
+  } catch (e) {
+    console.error("syncFlutterwaveEmail error:", (e as Error).message);
+    return "NOT updated at Flutterwave (unexpected error). Use Re-sync Flutterwave to retry.";
+  }
+}
+
 function simpleHash(s: string): string {
   let h = 0;
   for (let i = 0; i < s.length; i++) {

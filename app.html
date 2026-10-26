@@ -1649,6 +1649,7 @@ window.addEventListener('load', ()=>{ setTimeout(()=>syncSettingsWithServer(true
 setInterval(()=>{ if(Object.keys(spLoad()).length) syncSettingsWithServer(true); }, 15000);
 
 function render(){
+  if(!state.sessionUserId && typeof closeNoteView === 'function') closeNoteView();   // never leave a note open on the lock screen
   if(route !== 'goods'){ goodsFilter = 'all'; goodsTab = 'active'; }    // filters apply only while you are on Goods
   applySettingsPending();
   save();
@@ -8398,6 +8399,18 @@ function bindAuditEvents(){
 /* ============================================================
    NOTES — a simple notepad for reminders, supplier contacts, etc.
    ============================================================ */
+// Exact moment a note was written: "25 October 2026 · 5:39 PM".
+function fmtNoteStamp(iso){
+  const d = new Date(iso);
+  if(!iso || isNaN(d.getTime())) return '';
+  const date = d.toLocaleDateString('en-GB', { day:'numeric', month:'long', year:'numeric' });
+  const time = d.toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit', hour12:true });
+  return `${date} · ${time}`;
+}
+function noteWasEdited(n){
+  const c = Date.parse(n.createdAt || ''), u = Date.parse(n.updatedAt || '');
+  return !!(c && u && u - c > 60000);   // more than a minute after it was written
+}
 function screenNotes(){
   const notes = state.shopNotes.filter(n=>n.shopId===state.currentShopId)
     .sort((a,b)=>new Date(b.updatedAt||b.createdAt) - new Date(a.updatedAt||a.createdAt));
@@ -8407,17 +8420,10 @@ function screenNotes(){
     ${notes.length===0 ? `<div class="empty"><div class="ic">${ICON_NOTEBOOK}</div><b>No notes yet</b>Jot down reminders, supplier contacts, or anything worth remembering.</div>` :
     notes.map(n=>{
       const author = state.users.find(u=>u.id===n.authorUserId);
-      const canEdit = isMaster() || n.authorUserId===state.sessionUserId;
-      return `<div class="card" ${canEdit?`data-edit-note="${n.id}" style="cursor:pointer;"`:''}>
-        <div class="t1" style="font-size:15px;margin-bottom:6px;">${escapeHtml(n.title)}</div>
-        <p style="white-space:pre-wrap;font-size:13.5px;color:var(--text-dim);margin-bottom:10px;line-height:1.45;">${escapeHtml(n.text)}</p>
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <span class="subtle" style="font-size:11px;">${author?author.firstName:'Unknown'} · ${fmtDate(n.createdAt.slice(0,10))}</span>
-          <div style="display:flex;gap:14px;">
-            <button data-share-note="${n.id}" style="background:none;border:none;color:var(--marigold-dark);font-size:12px;font-weight:700;padding:0;">${ICON_EXPORT} Share</button>
-            ${canEdit ? `<button data-delete-note="${n.id}" style="background:none;border:none;color:var(--red);font-size:12px;font-weight:700;padding:0;">Delete</button>` : ''}
-          </div>
-        </div>
+      return `<div class="card" data-open-note="${n.id}" role="button" tabindex="0" style="cursor:pointer;">
+        <div class="t1" style="font-size:15px;margin-bottom:6px;">${escapeHtml(n.title)}${n.isHandover ? ' 📌' : ''}</div>
+        <p style="white-space:pre-wrap;font-size:13.5px;color:var(--text-dim);margin-bottom:10px;line-height:1.45;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;">${escapeHtml(n.text)}</p>
+        <div class="subtle" style="font-size:11.5px;">${escapeHtml(author?author.firstName:'Unknown')} · ${escapeHtml(fmtNoteStamp(n.createdAt))}</div>
       </div>`;
     }).join('')}
   `;
@@ -8425,21 +8431,77 @@ function screenNotes(){
 function bindNotesEvents(){
   const addBtn = document.getElementById('add-note-btn');
   if(addBtn) addBtn.addEventListener('click', openAddNoteModal);
-  document.querySelectorAll('[data-edit-note]').forEach(b=> b.addEventListener('click', (e)=>{
-    if(e.target.closest('[data-delete-note]') || e.target.closest('[data-share-note]')) return; // don't open edit when another action was tapped
-    openEditNoteModal(b.dataset.editNote);
-  }));
-  document.querySelectorAll('[data-delete-note]').forEach(b=> b.addEventListener('click', (e)=>{
-    e.stopPropagation();
-    deleteNote(b.dataset.deleteNote);
-  }));
-  document.querySelectorAll('[data-share-note]').forEach(b=> b.addEventListener('click', (e)=>{
-    e.stopPropagation();
-    openShareNoteModal(b.dataset.shareNote);
-  }));
+  document.querySelectorAll('[data-open-note]').forEach(c=>{
+    c.addEventListener('click', ()=> openNoteView(c.dataset.openNote));
+    c.addEventListener('keydown', e=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); openNoteView(c.dataset.openNote); } });
+  });
+}
+
+// ---- Full note page: full text, exact date and time, and a ⋮ menu holding Share / Edit / Delete ----
+function closeNoteView(){
+  const el = document.getElementById('note-view');
+  if(el) el.remove();
+  if(window._noteViewKey){ document.removeEventListener('keydown', window._noteViewKey); window._noteViewKey = null; }
+  if(window._noteViewOutside){ document.removeEventListener('click', window._noteViewOutside); window._noteViewOutside = null; }
+}
+function openNoteView(id){
+  const n = state.shopNotes.find(x=>x.id===id);
+  if(!n) return;
+  closeNoteView();
+  const author = state.users.find(u=>u.id===n.authorUserId);
+  const canEdit = isMaster() || n.authorUserId===state.sessionUserId;
+  const dots = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="12" cy="12" r="2.2"/><circle cx="12" cy="19" r="2.2"/></svg>`;
+  const iconBtn = 'background:var(--paper-dim);border:none;width:44px;height:44px;border-radius:12px;color:var(--ink-text);display:flex;align-items:center;justify-content:center;font-size:22px;cursor:pointer;flex-shrink:0;';
+  const item = 'display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:none;padding:12px 14px;font-size:14.5px;font-weight:700;border-radius:10px;cursor:pointer;color:var(--ink-text);font-family:inherit;';
+  const wrap = document.createElement('div');
+  wrap.id = 'note-view';
+  wrap.setAttribute('role','dialog'); wrap.setAttribute('aria-modal','true');
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:40;background:var(--paper);display:flex;flex-direction:column;';
+  wrap.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;padding:12px 16px;padding-top:calc(12px + env(safe-area-inset-top,0px));border-bottom:1px solid var(--line);">
+      <button id="nv-back" aria-label="Back" style="${iconBtn}">←</button>
+      <div style="flex:1;font-weight:800;font-size:16px;color:var(--ink-text);">Note</div>
+      <div style="position:relative;">
+        <button id="nv-menu-btn" aria-label="More options" aria-haspopup="menu" aria-expanded="false" style="${iconBtn}">${dots}</button>
+        <div id="nv-menu" role="menu" hidden style="position:absolute;right:0;top:52px;min-width:180px;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:0 12px 32px rgba(18,33,59,.22);padding:6px;z-index:3;">
+          <button role="menuitem" id="nv-share" style="${item}">${ICON_EXPORT} Share</button>
+          ${canEdit ? `<button role="menuitem" id="nv-edit" style="${item}">✏️ Edit</button>
+          <button role="menuitem" id="nv-delete" style="${item}color:var(--red);">🗑️ Delete</button>` : ''}
+        </div>
+      </div>
+    </div>
+    <div style="flex:1;overflow-y:auto;padding:20px 18px 60px;">
+      <h1 style="font-size:23px;line-height:1.25;margin:0 0 10px;color:var(--ink-text);word-break:break-word;">${escapeHtml(n.title)}</h1>
+      <div class="subtle" style="font-size:13px;line-height:1.6;margin-bottom:18px;">
+        <div>${escapeHtml(author ? author.firstName+' '+author.lastName : 'Unknown')}</div>
+        <div>Added ${escapeHtml(fmtNoteStamp(n.createdAt))}</div>
+        ${noteWasEdited(n) ? `<div>Edited ${escapeHtml(fmtNoteStamp(n.updatedAt))}</div>` : ''}
+        ${n.isHandover ? `<div>📌 Handover note — shown to the next person who logs in</div>` : ''}
+      </div>
+      <p style="white-space:pre-wrap;font-size:16px;line-height:1.6;color:var(--text);margin:0;word-break:break-word;">${escapeHtml(n.text) || '<span class="subtle">No details.</span>'}</p>
+    </div>`;
+  document.body.appendChild(wrap);
+
+  const menu = document.getElementById('nv-menu'), menuBtn = document.getElementById('nv-menu-btn');
+  const setMenu = (open)=>{ if(open) menu.removeAttribute('hidden'); else menu.setAttribute('hidden',''); menuBtn.setAttribute('aria-expanded', String(open)); };
+  menuBtn.addEventListener('click', (e)=>{ e.stopPropagation(); setMenu(menu.hasAttribute('hidden')); });
+  window._noteViewOutside = (e)=>{ if(!menu.contains(e.target) && e.target !== menuBtn) setMenu(false); };
+  document.addEventListener('click', window._noteViewOutside);
+  window._noteViewKey = (e)=>{
+    if(e.key !== 'Escape' || document.getElementById('active-overlay')) return;
+    if(!menu.hasAttribute('hidden')) setMenu(false); else closeNoteView();
+  };
+  document.addEventListener('keydown', window._noteViewKey);
+
+  document.getElementById('nv-back').addEventListener('click', closeNoteView);
+  document.getElementById('nv-share').addEventListener('click', ()=>{ setMenu(false); openShareNoteModal(id); });
+  const ed = document.getElementById('nv-edit');
+  if(ed) ed.addEventListener('click', ()=>{ setMenu(false); openEditNoteModal(id); });
+  const del = document.getElementById('nv-delete');
+  if(del) del.addEventListener('click', ()=>{ setMenu(false); if(deleteNote(id)) closeNoteView(); });
 }
 function noteShareText(n, author){
-  const parts = [n.title, '', n.text || '', '', `— ${author?author.firstName+' '+author.lastName:'Unknown'}, ${fmtDate(n.createdAt.slice(0,10))}`];
+  const parts = [n.title, '', n.text || '', '', `— ${author?author.firstName+' '+author.lastName:'Unknown'}, ${fmtNoteStamp(n.createdAt)}`];
   return parts.join('\n');
 }
 function openShareNoteModal(noteId){
@@ -8522,14 +8584,16 @@ function saveNoteFromForm(existingId){
     toast('Note saved ✅');
   }
   closeSheet(); render();
+  if(existingId && document.getElementById('note-view')) openNoteView(existingId);   // refresh the open note page
 }
 function deleteNote(id){
-  if(!confirm('Delete this note? This cannot be undone.')) return;
+  if(!confirm('Delete this note? This cannot be undone.')) return false;
   state.shopNotes = state.shopNotes.filter(x=>x.id!==id);
   enqueueSync('shop_notes','delete', { id });
   logAudit('note_deleted', 'Deleted a note');
   toast('Note deleted');
   render();
+  return true;
 }
 
 /* ============================================================

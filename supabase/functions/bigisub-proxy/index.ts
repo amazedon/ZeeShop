@@ -162,13 +162,14 @@ function pinsToText(pins: any): string {
 }
 type ReceiptCtx = {
   to?: string | null; name?: string; serviceLabel: string; recipient: string; amount: number; reference: string; newBalance: number;
-  provider?: string; planName?: string; token?: string; units?: string; meterType?: string; customerName?: string; extra?: { label: string; value: string; mono?: boolean }[];
+  provider?: string; planName?: string; token?: string; units?: string; meterType?: string; customerName?: string; customerPhone?: string; customerAddress?: string; txId?: string; createdAt?: string; extra?: { label: string; value: string; mono?: boolean }[];
 };
 function receiptPayload(service: string, c: ReceiptCtx): Record<string, unknown> {
   const base = { to: c.to, name: c.name };
   if (service === "electricity") {
     return { type: "electricity_token", ...base, data: {
       provider: c.provider, meter_number: c.recipient, meter_type: c.meterType, customer_name: c.customerName,
+      customer_phone: c.customerPhone, customer_address: c.customerAddress, tx_id: c.txId, created_at: c.createdAt,
       token: c.token, units: c.units, amount: c.amount, reference: c.reference, new_balance: c.newBalance } };
   }
   if (service === "airtime" || service === "data") {
@@ -611,7 +612,10 @@ Deno.serve(async (req: Request) => {
       const { company, meter_no, meter_type } = params as { company: string; meter_no: string; meter_type: string };
       if (!company || !meter_no || !meter_type) return json({ error: "Missing company, meter_no, or meter_type." }, 400);
       const data = await bigisub("POST", EP.ELECTRICITY_VERIFY, { company, meter_no, meter_type });
-      return json({ customer_name: extractCustomerName(data), upstream_message: extractUpstreamMessage(data), raw: data }, 200);
+      return json({
+        customer_name: extractCustomerName(data), upstream_message: extractUpstreamMessage(data), raw: data,
+        customer_address: deepFindString(data, ["address", "customer_address", "customeraddress", "meter_address", "service_address"]) || null,
+      }, 200);
     }
     if (action === "betting_validate") {
       const { biller_code, customer_id } = params as { biller_code: string; customer_id: string };
@@ -693,7 +697,8 @@ Deno.serve(async (req: Request) => {
           fireEmail(receiptPayload(txRow.service, {
             to: caller.email || callerData.user.email, name: caller.first_name || "", serviceLabel: txRow.service_label || txRow.service,
             recipient: String(txRow.recipient || ""), amount: Number(txRow.sale_price || 0), reference: String(txRow.bigisub_tranx_id || txRow.id),
-            newBalance: Number(bRow?.bill_wallet_balance ?? 0), token: d?.token || "", units: deepFindAny(data, ["units", "unit", "kwh", "token_units", "total_units"]),
+            newBalance: Number(bRow?.bill_wallet_balance ?? 0), txId: String(txRow.id), createdAt: txRow.created_at || undefined, token: d?.token || "",
+            extra: pinsToText(d?.pins) ? [{ label: "PIN(s)", value: pinsToText(d?.pins), mono: true }] : undefined, units: deepFindAny(data, ["units", "unit", "kwh", "token_units", "total_units"]),
           }));
         }
       }
@@ -880,6 +885,8 @@ async function handlePurchase(
   let providerName = "";   // network / cable provider / disco / betting platform — receipt only
   let meterType = "";
   let customerNameForReceipt = "";
+  let customerPhoneForReceipt = "";
+  let customerAddressForReceipt = "";
   let serviceLabel = "";
   let recipient = "";
   let estimatedCost = 0; // always resolved to a real, verified amount below before any Bigisub call — see per-branch comments
@@ -927,11 +934,12 @@ async function handlePurchase(
     bigisubCall = () => bigisub("POST", EP.CABLE_PURCHASE, { cable_type: String(cable_type).toLowerCase(), card_no, phone_number, amount: cableAmount, Customer: customer_name, pin: BIGISUB_PIN });
 
   } else if (action === "electricity_pay") {
-    const { company, meter_no, meter_type, phone_number, amount, customer_name } = params as { company: string; meter_no: string; meter_type: string; phone_number: string; amount: number; customer_name: string };
+    const { company, meter_no, meter_type, phone_number, amount, customer_name, customer_address } = params as { company: string; meter_no: string; meter_type: string; phone_number: string; amount: number; customer_name: string; customer_address?: string };
     if (!company || !meter_no || !meter_type || !phone_number || !amount || !customer_name) return json({ error: "Missing company, meter_no, meter_type, phone_number, amount, or customer_name (verify the meter first)." }, 400);
     if (Number(amount) < MIN_AMOUNT.electricity) return json({ error: `The minimum electricity purchase is ₦${MIN_AMOUNT.electricity.toLocaleString()}.` }, 400);
     serviceLabel = "Electricity"; recipient = String(meter_no); estimatedCost = Number(amount); pricingService = "electricity";
     providerName = String(company); meterType = String(meter_type); customerNameForReceipt = String(customer_name);
+    customerPhoneForReceipt = String(phone_number); customerAddressForReceipt = String(customer_address || "").slice(0, 200);
     bigisubCall = () => bigisub("POST", EP.ELECTRICITY_PAY, { company, meter_no, meter_type, phone_number, amount: Number(amount), Customer_name: customer_name, pin: BIGISUB_PIN });
 
   } else if (action === "betting_fund") {
@@ -1068,6 +1076,7 @@ async function handlePurchase(
     fireEmail(receiptPayload(serviceKey, {
       to: buyer.email, name: buyer.name, serviceLabel, recipient, amount: salePrice, reference: String(bigisubTranxId || txId), newBalance,
       provider: providerName, planName, meterType, customerName: customerNameForReceipt,
+      customerPhone: customerPhoneForReceipt, customerAddress: customerAddressForReceipt, txId: String(txId),
       token: payload?.token || "", units: deepFindAny(bigisubResponse, ["units", "unit", "kwh", "token_units", "total_units"]),
       extra: pinsText ? [{ label: "PIN(s)", value: pinsText, mono: true }] : undefined,
     }));

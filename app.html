@@ -10538,6 +10538,13 @@ function bpStopPsaPolling(){
   .bps-ben-item button.pick{flex:1;text-align:left;background:none;border:none;color:#fff;font-size:16px;font-weight:700;cursor:pointer;font-family:inherit;}
   .bps-ben-item button.rm{background:none;border:none;color:#FF7B7B;font-size:20px;cursor:pointer;}
   .bps-empty{color:#9C9AC0;text-align:center;padding:30px 10px;font-size:15px;}
+  .bps-sugg{margin:8px 0 0;background:#1E1B3A;border:2px solid #34325A;border-radius:16px;overflow:hidden;box-shadow:0 10px 28px rgba(6,5,20,.45);}
+  .bps-sugg[hidden]{display:none;}
+  .bps-sugg-h{padding:9px 16px 6px;font-size:11.5px;font-weight:800;letter-spacing:.08em;color:#9C9AC0;text-transform:uppercase;}
+  .bps-sugg-item{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;text-align:left;background:none;border:none;border-top:1px solid #2D2B52;color:#fff;padding:14px 16px;font-size:16.5px;font-weight:700;cursor:pointer;font-family:inherit;}
+  .bps-sugg-item:active,.bps-sugg-item:hover{background:#27254A;}
+  .bps-sugg-item small{color:#9C9AC0;font-size:13px;font-weight:600;max-width:55%;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .bps-sugg-item mark{background:none;color:#F59E0B;}
   .bps-loading{color:#9C9AC0;text-align:center;padding:40px 10px;}
   /* success / receipt */
   .bps-receipt{padding:26px 22px 8px;text-align:center;overflow-y:auto;flex:1;}
@@ -10690,17 +10697,73 @@ function bpAutoVerify(inputId, ready, run){
 /* ---- Beneficiaries: numbers/IDs used before, saved on this device per business ---- */
 function bpBenKey(type){ return 'zeeshop_ben_' + ((business() && business().id) || 'x') + '_' + type; }
 function bpBenList(type){ try{ return JSON.parse(localStorage.getItem(bpBenKey(type)) || '[]'); }catch(_e){ return []; } }
+// Phone numbers are always stored as 11-digit local numbers (+234 80… and 080… are the same person).
+function bpBenNorm(type, v){
+  let s = String(v||'').trim();
+  if(type === 'phone'){
+    let d = s.replace(/\D/g,'');
+    if(d.startsWith('234')) d = '0' + d.slice(3);      // +234 81… (even half-typed) means 081…
+    return d;
+  }
+  return s;
+}
 function bpBenSave(type, value, label){
-  value = String(value||'').trim(); if(!value) return;
-  const list = bpBenList(type).filter(b=>b.value !== value);
-  list.unshift({ value, label: label || '' });
-  try{ localStorage.setItem(bpBenKey(type), JSON.stringify(list.slice(0, 12))); }catch(_e){}
+  value = bpBenNorm(type, value); if(!value) return;
+  const prev = bpBenList(type).find(b=>bpBenNorm(type, b.value) === value);
+  const list = bpBenList(type).filter(b=>bpBenNorm(type, b.value) !== value);
+  list.unshift({ value, label: label || (prev && prev.label) || '' });     // most recently used first
+  try{ localStorage.setItem(bpBenKey(type), JSON.stringify(list.slice(0, 30))); }catch(_e){}
 }
 function bpBenRemove(type, value){
   try{ localStorage.setItem(bpBenKey(type), JSON.stringify(bpBenList(type).filter(b=>b.value !== value))); }catch(_e){}
 }
-function bpBenLink(type){ return `<a href="#" class="bps-link" data-ben="${type}">🔖 Pick from Beneficiary</a>`; }
+function bpBenLink(type){ return `<a href="#" class="bps-link" data-ben="${type}">🔖 ${type === 'phone' ? 'Saved numbers' : 'Pick from Beneficiary'}</a>`; }
+// Inline suggestions under the field: tap the empty field to see recent numbers, or start typing (e.g. 081) to see only the
+// saved ones that start with it. Numbers are saved automatically after every successful purchase.
+function bpAttachSuggest(type, inputId, onPick){
+  const input = document.getElementById(inputId);
+  if(!input || input._sugg) return;
+  input._sugg = true;
+  const holder = input.closest('.bps-input') || input.parentNode;
+  const panel = document.createElement('div');
+  panel.className = 'bps-sugg'; panel.hidden = true; panel.setAttribute('role','listbox');
+  holder.parentNode.insertBefore(panel, holder.nextSibling);
+  let hideTimer = null;
+  const numeric = (type === 'phone' || type === 'card' || type === 'meter');
+  const hl = (text, typed)=>{      // highlight the part the person has typed
+    const t = String(text); const n = String(typed||'');
+    return (n && t.toLowerCase().startsWith(n.toLowerCase())) ? `<mark>${escapeHtml(t.slice(0,n.length))}</mark>${escapeHtml(t.slice(n.length))}` : escapeHtml(t);
+  };
+  const draw = ()=>{
+    const raw = input.value.trim();
+    const typed = bpBenNorm(type, raw);
+    const all = bpBenList(type);
+    let matches = !raw ? all : all.filter(b=>{
+      const v = bpBenNorm(type, b.value);
+      if(v.startsWith(typed) || String(b.value).toLowerCase().startsWith(raw.toLowerCase())) return true;
+      return !numeric && raw.length >= 2 && (b.label||'').toLowerCase().includes(raw.toLowerCase());   // names too, for meters/cards/betting
+    });
+    matches = matches.filter(b=>bpBenNorm(type, b.value) !== typed).slice(0, 8);   // nothing to suggest once it is fully typed
+    if(!matches.length){ panel.hidden = true; panel.innerHTML = ''; return; }
+    panel.innerHTML = `<div class="bps-sugg-h">${raw ? 'Matching saved' : 'Recently used'}</div>` + matches.map(b=>
+      `<button type="button" class="bps-sugg-item" role="option" data-v="${escAttr(b.value)}"><span>${hl(b.value, typed || raw)}</span>${b.label?`<small>${escapeHtml(b.label)}</small>`:''}</button>`).join('');
+    panel.hidden = false;
+    panel.querySelectorAll('.bps-sugg-item').forEach(btn=>{
+      btn.addEventListener('pointerdown', e=> e.preventDefault());         // keep the keyboard / focus while tapping
+      btn.addEventListener('click', ()=>{
+        input.value = btn.dataset.v;
+        input.dispatchEvent(new Event('input', { bubbles:true }));          // updates the form exactly like typing would
+        panel.hidden = true; panel.innerHTML = '';
+        if(onPick) onPick(btn.dataset.v);
+      });
+    });
+  };
+  input.addEventListener('focus', ()=>{ clearTimeout(hideTimer); draw(); });
+  input.addEventListener('input', draw);
+  input.addEventListener('blur', ()=>{ hideTimer = setTimeout(()=>{ panel.hidden = true; }, 180); });
+}
 function bpBindBen(type, inputId, onPick){
+  bpAttachSuggest(type, inputId, onPick);
   const link = document.querySelector(`[data-ben="${type}"]`); if(!link) return;
   link.addEventListener('click', (e)=>{
     e.preventDefault();

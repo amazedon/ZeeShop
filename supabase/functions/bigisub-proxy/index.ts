@@ -371,6 +371,79 @@ async function hashPin(pin: string): Promise<string> {
   return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+// ---- Bill Payments PIN protection ----------------------------------------------------------------------------------
+// A 4-digit PIN has only 10,000 possibilities, so two things protect it:
+//  1) Stored with a per-business salt AND a server-side secret ("v2:" hash). A plain SHA-256 of a 4-digit number can be
+//     reversed in an instant by anyone who ever sees the database; this cannot be without the server secret.
+//     Older plain hashes still work and are upgraded to v2 the first time the right PIN is entered.
+//  2) Lockout: 5 wrong tries lock bill payments for 15 minutes (needs bill-pin-lockout.sql).
+const PIN_MAX_ATTEMPTS = 5;
+const PIN_LOCK_MINUTES = 15;
+
+async function hashPinStrong(pin: string, businessId: string): Promise<string> {
+  const secret = (Deno.env.get("BILL_PIN_PEPPER") || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "zeeshop") + "|" + businessId;
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(pin));
+  return "v2:" + Array.from(new Uint8Array(mac)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+function safeEq(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let d = 0; for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return d === 0;
+}
+async function verifyBillPin(admin: any, businessId: string, stored: string, pin: string): Promise<boolean> {
+  if (!pin || !stored) return false;
+  if (stored.startsWith("v2:")) return safeEq(await hashPinStrong(pin, businessId), stored);
+  if (!safeEq(await hashPin(pin), stored)) return false;                       // old plain SHA-256 hash
+  await admin.from("businesses").update({ bill_payments_pin_hash: await hashPinStrong(pin, businessId) }).eq("id", businessId);   // upgrade in place
+  return true;
+}
+type PinLock = { attempts: number; lockedUntil: number } | null;
+async function getPinLock(admin: any, businessId: string): Promise<PinLock> {
+  try {
+    const { data, error } = await admin.from("businesses").select("bill_pin_failed_attempts, bill_pin_locked_until").eq("id", businessId).maybeSingle();
+    if (error || !data) return null;                    // columns not added yet: lockout stays off
+    return { attempts: Number(data.bill_pin_failed_attempts || 0), lockedUntil: data.bill_pin_locked_until ? Date.parse(data.bill_pin_locked_until) : 0 };
+  } catch (_e) { return null; }
+}
+function pinLockedResponse(lock: PinLock): Response | null {
+  if (lock && lock.lockedUntil > Date.now()) {
+    const mins = Math.ceil((lock.lockedUntil - Date.now()) / 60000);
+    return json({ error: `Too many wrong PIN attempts. Bill payments are locked for ${mins} more minute${mins === 1 ? "" : "s"}. The owner can reset the PIN with the emailed code.` }, 429);
+  }
+  return null;
+}
+// Count one wrong try; returns how many tries are left (0 = now locked).
+async function registerPinFailure(admin: any, businessId: string, lock: PinLock): Promise<number> {
+  if (!lock) return PIN_MAX_ATTEMPTS;                     // lockout not available: behave as before
+  const attempts = lock.attempts + 1;
+  if (attempts >= PIN_MAX_ATTEMPTS) {
+    await admin.from("businesses").update({ bill_pin_failed_attempts: 0, bill_pin_locked_until: new Date(Date.now() + PIN_LOCK_MINUTES * 60000).toISOString() }).eq("id", businessId);
+    return 0;
+  }
+  await admin.from("businesses").update({ bill_pin_failed_attempts: attempts }).eq("id", businessId);
+  return PIN_MAX_ATTEMPTS - attempts;
+}
+async function clearPinFailures(admin: any, businessId: string, lock: PinLock) {
+  if (lock && (lock.attempts > 0 || lock.lockedUntil)) {
+    await admin.from("businesses").update({ bill_pin_failed_attempts: 0, bill_pin_locked_until: null }).eq("id", businessId);
+  }
+}
+// The emailed 6-digit code that proves the owner is really them (used to set a new PIN and to remove the PIN).
+async function consumeResetOtp(admin: any, businessId: string, otp: string): Promise<{ ok: true } | { ok: false; status: number; message: string }> {
+  if (!/^\d{6}$/.test(otp)) return { ok: false, status: 400, message: "Enter the 6-digit code sent to your email." };
+  const otpHash = await hashPin(otp);
+  const { data: otpRow, error: otpErr } = await admin.from("bill_pin_reset_otp_codes")
+    .select("id, expires_at, consumed_at").eq("business_id", businessId).eq("code_hash", otpHash)
+    .order("created_at", { ascending: false }).limit(1).maybeSingle();
+  if (otpErr) return { ok: false, status: 500, message: otpErr.message };
+  if (!otpRow || otpRow.consumed_at || new Date(otpRow.expires_at).getTime() < Date.now()) {
+    return { ok: false, status: 403, message: "That code is invalid or has expired. Request a new one." };
+  }
+  await admin.from("bill_pin_reset_otp_codes").update({ consumed_at: new Date().toISOString() }).eq("id", otpRow.id);
+  return { ok: true };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   try {
@@ -644,239 +717,40 @@ Deno.serve(async (req: Request) => {
       if (!isMaster) return json({ error: "Only the business owner can set the Bill Payments PIN." }, 403);
       const pin = String(params.pin || "");
       if (!/^\d{4}$/.test(pin)) return json({ error: "PIN must be exactly 4 digits." }, 400);
-      // A PIN already exists — require a valid, unused, unexpired OTP code
-      // (sent via send-bill-pin-otp, using your existing Termii setup)
-      // before overwriting it. Real OTP, not just re-entering the old PIN —
-      // this is also what makes recovering a genuinely forgotten PIN
-      // possible, which a "must know the current PIN" check never could.
+      // A PIN already exists — require the emailed code before overwriting it (also what makes a forgotten PIN recoverable).
+      // Wrong codes count toward the same lockout as wrong PINs, so the 6-digit code cannot be guessed either.
+      const lock = await getPinLock(admin, businessId);
       if (biz.bill_payments_pin_hash) {
-        const otp = String(params.otp || "");
-        if (!/^\d{6}$/.test(otp)) return json({ error: "Enter the 6-digit code sent to your email." }, 400);
-        const otpHash = await hashPin(otp); // same SHA-256 helper works for any numeric code, not just 4-digit PINs
-        const { data: otpRow, error: otpErr } = await admin.from("bill_pin_reset_otp_codes")
-          .select("id, expires_at, consumed_at").eq("business_id", businessId).eq("code_hash", otpHash)
-          .order("created_at", { ascending: false }).limit(1).maybeSingle();
-        if (otpErr) return json({ error: otpErr.message }, 500);
-        if (!otpRow || otpRow.consumed_at || new Date(otpRow.expires_at).getTime() < Date.now()) {
-          return json({ error: "That code is invalid or has expired. Request a new one." }, 403);
+        const locked = pinLockedResponse(lock); if (locked) return locked;
+        const check = await consumeResetOtp(admin, businessId, String(params.otp || ""));
+        if (!check.ok) {
+          if (check.status === 403) await registerPinFailure(admin, businessId, lock);
+          return json({ error: check.message }, check.status);
         }
-        await admin.from("bill_pin_reset_otp_codes").update({ consumed_at: new Date().toISOString() }).eq("id", otpRow.id);
       }
-      const hash = await hashPin(pin);
+      const hash = await hashPinStrong(pin, businessId);
       const { error } = await admin.from("businesses").update({ bill_payments_pin_hash: hash }).eq("id", businessId);
       if (error) return json({ error: error.message }, 500);
+      await clearPinFailures(admin, businessId, lock);
       return json({ ok: true }, 200);
     }
     if (action === "clear_bill_pin") {
       if (!isMaster) return json({ error: "Only the business owner can remove the Bill Payments PIN." }, 403);
+      // Removing the PIN is as sensitive as changing it, so it needs the same emailed code.
+      if (biz.bill_payments_pin_hash) {
+        const lock = await getPinLock(admin, businessId);
+        const locked = pinLockedResponse(lock); if (locked) return locked;
+        const check = await consumeResetOtp(admin, businessId, String(params.otp || ""));
+        if (!check.ok) {
+          if (check.status === 403) await registerPinFailure(admin, businessId, lock);
+          return json({ error: check.message }, check.status);
+        }
+      }
       const { error } = await admin.from("businesses").update({ bill_payments_pin_hash: null }).eq("id", businessId);
       if (error) return json({ error: error.message }, 500);
       return json({ ok: true }, 200);
     }
 
-    // ---------- wallet funding card 1: permanent account for every business ----------
-    // A Flutterwave "payout subaccount": one permanent account number per
-    // business, no BVN/NIN needed. Created once and reused forever.
-    // Money sent to it is credited by flutterwave-webhook (and caught by
-    // sync_psa_wallet below if a notice is ever missed) — NOT here.
-    if (action === "get_or_create_psa_account") {
-      if (biz.psa_account_number && biz.psa_status === "active") {
-        return json({ account_number: biz.psa_account_number, bank_name: biz.psa_bank_name, account_name: (biz as any).psa_account_name || null, status: biz.psa_status }, 200);
-      }
-      if (!FLW_SECRET_KEY) return json({ error: "Account setup isn't configured yet." }, 500);
-
-      // RULE: every business gets its OWN Flutterwave sub-account and its own
-      // account number — never shared, never reused. The sub-account is
-      // registered under an email that is unique to THIS business (the owner's
-      // address with a "+zs<id>" tag, so mail still reaches the owner). The old
-      // code used the owner's plain email, so a second business of the same
-      // owner collided with the first.
-      const ownerEmail = String(callerData.user.email || "").toLowerCase();
-      const tag = "zs" + String(businessId).replace(/[^a-z0-9]/gi, "").slice(0, 12).toLowerCase();
-      const uniqueEmail = ownerEmail.includes("@")
-        ? `${ownerEmail.split("@")[0].split("+")[0]}+${tag}@${ownerEmail.split("@")[1]}`
-        : `business-${businessId}@zeeshop.app`;
-
-      // The name on the account = the business name, cleaned so Flutterwave never rejects it for odd characters/emoji.
-      const cleanName = cleanPsaName(biz.name);
-      // Send a phone number only when it is a real Nigerian number (a shared placeholder can be refused as a duplicate).
-      let phoneDigits = String(caller.phone || "").replace(/[\s()-]/g, "");
-      if (phoneDigits.startsWith("+")) phoneDigits = phoneDigits.slice(1);
-      if (phoneDigits.startsWith("234") && phoneDigits.length === 13) phoneDigits = "0" + phoneDigits.slice(3);
-      const validPhone = /^0\d{10}$/.test(phoneDigits) ? phoneDigits : null;
-      const createBody: Record<string, unknown> = { account_name: cleanName, email: uniqueEmail, country: "NG" };
-      if (validPhone) createBody.mobilenumber = validPhone;
-      const createPsa = (b: Record<string, unknown>) => fetch("https://api.flutterwave.com/v3/payout-subaccounts", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${FLW_SECRET_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify(b),
-      });
-      let flwRes = await createPsa(createBody);
-      let flwData = await flwRes.json().catch(() => null);
-      // Flutterwave sometimes fails to generate the account number at its partner bank (the same phone or person
-      // appearing twice can trigger it). Try ONCE more, a moment later and without the phone number.
-      if (!flwRes.ok && /nuban/i.test(String(flwData?.message || ""))) {
-        console.error("Flutterwave nuban error on first try, retrying once without phone:", flwRes.status, JSON.stringify(flwData)?.slice(0, 300));
-        await new Promise((r) => setTimeout(r, 2000));
-        const retryBody = { ...createBody }; delete retryBody.mobilenumber;
-        flwRes = await createPsa(retryBody);
-        flwData = await flwRes.json().catch(() => null);
-      }
-      let acct = flwData?.data;
-      if (!flwRes.ok || flwData?.status !== "success" || !acct?.account_reference) {
-        console.error("Flutterwave payout-subaccount create failed:", flwRes.status, JSON.stringify(flwData)?.slice(0, 500), "| name:", cleanName, "| email:", uniqueEmail, "| phone sent:", !!validPhone);
-        // Recovery: this business's OWN sub-account may already exist (created
-        // earlier, then our copy of the number was lost). Match ONLY on this
-        // business's unique email. The owner's plain email is used only when the
-        // owner has exactly ONE business — with several, it is ambiguous and
-        // is never used.
-        acct = null;
-        try {
-          const { count: ownedCount } = await admin.from("businesses").select("id", { count: "exact", head: true }).eq("owner_auth_user_id", callerData.user.id);
-          const wanted = new Set<string>([uniqueEmail.toLowerCase()]);
-          if ((ownedCount || 0) === 1 && ownerEmail) wanted.add(ownerEmail);
-          for (let page = 1; page <= 5 && !acct; page++) {
-            const lr = await fetch(`https://api.flutterwave.com/v3/payout-subaccounts?page=${page}`, { headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` } });
-            const ld = await lr.json().catch(() => null);
-            const rows: any[] = Array.isArray(ld?.data) ? ld.data : (Array.isArray(ld?.data?.subaccounts) ? ld.data.subaccounts : []);
-            if (!lr.ok || rows.length === 0) break;
-            acct = rows.find((r: any) => wanted.has(String(r?.email || "").toLowerCase()) && r?.account_reference) || null;
-          }
-        } catch (_e) { /* fall through to the neutral error below */ }
-        if (!acct) return json({ error: "Account setup is temporarily unavailable. Please try again later." }, 502);
-      }
-
-      // The account number to fund. The create response may carry `nuban`;
-      // Flutterwave's docs also describe a separate "fetch static account"
-      // call that returns `static_account` — try that when it's missing.
-      let accountNumber: string | null = acct.nuban ? String(acct.nuban) : null;
-      let bankName: string | null = acct.bank_name || null;
-      const staticRes = await fetch(`https://api.flutterwave.com/v3/payout-subaccounts/${acct.account_reference}/static-account`, {
-        headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` },
-      });
-      const staticData = await staticRes.json().catch(() => null);
-      const sd = staticData?.data;
-      const staticAcct = sd?.static_account ? sd : (sd?.static_accounts?.[0] || sd?.static_virtual_accounts?.[0] || null);
-      if (staticRes.ok && staticAcct) {
-        // Prefer the account Flutterwave documents for FUNDING the wallet.
-        accountNumber = String(staticAcct.static_account || staticAcct.account_number || accountNumber || "");
-        bankName = staticAcct.bank_name || bankName;
-      }
-      if (!accountNumber) return json({ error: "Your account was created but the number isn't ready yet — tap Refresh in a moment." }, 502);
-
-      // NEVER hand one account number (or one Flutterwave sub-account) to two
-      // businesses: if another business already holds either, refuse and log it.
-      const [{ data: refOwner }, { data: numOwner }] = await Promise.all([
-        admin.from("businesses").select("id").neq("id", businessId).eq("psa_account_reference", acct.account_reference).limit(1),
-        admin.from("businesses").select("id").neq("id", businessId).eq("psa_account_number", accountNumber).limit(1),
-      ]);
-      if ((refOwner && refOwner.length) || (numOwner && numOwner.length)) {
-        console.error("PSA COLLISION BLOCKED: business", businessId, "was about to get account", accountNumber, "already held by", (refOwner?.[0] || numOwner?.[0])?.id);
-        return json({ error: "We couldn't assign you a unique account number. Please contact support — no money is at risk." }, 409);
-      }
-
-      // Claim the slot only if it is still empty (a double-tap or a second
-      // device can't overwrite or duplicate it). The database also enforces
-      // uniqueness (see account-safety-setup.sql).
-      const { data: saved, error: saveErr } = await admin.from("businesses").update({
-        psa_account_reference: acct.account_reference, psa_account_number: accountNumber,
-        psa_bank_name: bankName || "Bank", psa_status: "active",
-        psa_account_name: String(acct.account_name || cleanName),
-      }).eq("id", businessId).is("psa_account_number", null).select("id");
-      if (saveErr) {
-        console.error("PSA save failed:", saveErr.code, saveErr.message);
-        return json({ error: saveErr.code === "23505" ? "We couldn't assign you a unique account number. Please contact support." : "Could not save your account. Please try again." }, saveErr.code === "23505" ? 409 : 500);
-      }
-      if (!saved || saved.length === 0) {
-        const { data: cur } = await admin.from("businesses").select("psa_account_number, psa_bank_name, psa_status").eq("id", businessId).maybeSingle();
-        if (cur?.psa_account_number) return json({ account_number: cur.psa_account_number, bank_name: cur.psa_bank_name, status: cur.psa_status || "active" }, 200);
-        return json({ error: "Could not save your account. Please try again." }, 500);
-      }
-
-      return json({ account_number: accountNumber, bank_name: bankName || "Bank", account_name: String(acct.account_name || cleanName), status: "active" }, 200);
-    }
-
-    // Catch-up check for the permanent account. The webhook is the fast path,
-    // but if its notice is ever missed (or the field it reads isn't right),
-    // this independently asks Flutterwave for the account's recent transfers
-    // and credits any not seen yet. It runs on a timer while the Add Money
-    // screen is open. Returns the CURRENT wallet balance either way, so it
-    // also shows credits that arrived another way (e.g. Squad).
-    // Each payment is recorded FIRST under a unique reference (the same
-    // "flw:<reference>" key the webhook uses), so the webhook and this sync
-    // can never credit the same transfer twice.
-    if (action === "sync_psa_wallet") {
-      let syncWarning: string | null = null;
-      if (biz.psa_account_reference && FLW_SECRET_KEY) {
-        // Fail-safe: if this account (or sub-account) is held by more than one
-        // business we cannot tell whose money it is, so credit NOTHING here.
-        const [{ data: shareRef }, { data: shareNum }] = await Promise.all([
-          admin.from("businesses").select("id").eq("psa_account_reference", biz.psa_account_reference).limit(3),
-          admin.from("businesses").select("id").eq("psa_account_number", biz.psa_account_number || "__none__").limit(3),
-        ]);
-        const sharers = new Set<string>([...(shareRef || []), ...(shareNum || [])].map((r: any) => String(r.id)));
-        if (sharers.size > 1) {
-          console.error("PSA SYNC SKIPPED — account shared by businesses:", [...sharers].join(","));
-          syncWarning = "There's a problem with your account number. Please contact support — your money is safe and will be credited once it's fixed.";
-        }
-      }
-      if (!syncWarning && biz.psa_account_reference && FLW_SECRET_KEY) {
-        const lastSyncedAt: string | null = (biz as any).psa_last_synced_at || null;
-        const from = lastSyncedAt
-          ? new Date(new Date(lastSyncedAt).getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-          : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-        const to = new Date().toISOString().slice(0, 10);
-        try {
-          const flwRes = await fetch(`https://api.flutterwave.com/v3/payout-subaccounts/${biz.psa_account_reference}/transactions?from=${from}&to=${to}`, {
-            headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` },
-          });
-          const flwData = await flwRes.json();
-          if (!flwRes.ok) {
-            console.error("sync_psa_wallet: Flutterwave said", flwRes.status, JSON.stringify(flwData)?.slice(0, 300), "| ref:", biz.psa_account_reference);
-          }
-          if (flwRes.ok) {
-            const txns: any[] = flwData?.data?.transactions || [];
-            // Diagnostics: what did Flutterwave actually return for this account? (no secrets here)
-            console.log("sync_psa_wallet: ref", biz.psa_account_reference, "| from", from, "to", to, "| transactions:", txns.length,
-              "| sample:", JSON.stringify(txns.slice(0, 3).map((t: any) => ({ type: t.type, status: t.status, amount: t.amount, reference: t.reference }))));
-            const feeRule = await loadFlwFeeRule(admin);   // the fee set in Super Admin (null = not set yet -> estimate)
-            for (const t of txns) {
-              if (String(t.type).toLowerCase() !== "credit" || String(t.status).toLowerCase() !== "successful" || !t.reference) continue;
-              const ref = String(t.reference).replace(/^PSA_/i, "");
-              const gross = Number(String(t.amount).replace(/,/g, ""));
-              if (!Number.isFinite(gross) || gross <= 0) continue;
-              // This endpoint reports no fee figure, so apply the estimated
-              // percentage (the webhook path uses Flutterwave's real fee).
-              const feeAmt = feeRule ? computeFlwFee(gross, feeRule) : Math.round(gross * (FLW_ESTIMATED_FEE_PERCENT / 100) * 100) / 100;
-              const net = Math.round((gross - feeAmt) * 100) / 100;
-              const topupId = crypto.randomUUID();
-              const { error: recErr } = await admin.from("wallet_topups").insert({
-                id: topupId, business_id: businessId, amount: net > 0 ? net : 0, gross_amount: gross, fee: feeAmt,
-                provider_reference: `flw:${ref}`, status: net > 0 ? "success" : "ignored",
-              });
-              if (recErr) continue; // already recorded by the webhook or an earlier sync
-              if (net <= 0) continue; // nothing left after the fee
-              const { error: creditErr } = await admin.rpc("increment_bill_wallet", { p_business_id: String(businessId), p_amount: net });
-              if (creditErr) { await admin.from("wallet_topups").delete().eq("id", topupId); continue; }
-              // Receipt for this credit (never blocks the credit).
-              const { data: balRow } = await admin.from("businesses").select("bill_wallet_balance").eq("id", businessId).maybeSingle();
-              const nowBal = Number(balRow?.bill_wallet_balance ?? 0);
-              fireEmail({
-                type: "wallet_funding", to: caller.email || callerData.user.email, name: caller.first_name || "",
-                data: { amount: net, fee: Math.round((gross - net) * 100) / 100, previous_balance: Math.round((nowBal - net) * 100) / 100, new_balance: nowBal, reference: ref, method: "Bank transfer" },
-              });
-            }
-            await admin.from("businesses").update({ psa_last_synced_at: new Date().toISOString() }).eq("id", businessId);
-          }
-        } catch (e) {
-          console.error("sync_psa_wallet lookup failed:", e);
-        }
-      }
-      const { data: fresh } = await admin.from("businesses").select("bill_wallet_balance").eq("id", businessId).maybeSingle();
-      return json({ wallet_balance: Number(fresh?.bill_wallet_balance ?? biz.bill_wallet_balance ?? 0), warning: syncWarning }, 200);
-    }
-
-    // ---------- purchases (debit wallet, call Bigisub, log) ----------
     const PURCHASE_ACTIONS = [
       "airtime_purchase", "data_purchase", "cable_purchase", "electricity_pay",
       "betting_fund", "result_checker_purchase", "isp_smile_topup", "isp_spectranet_topup",
@@ -888,11 +762,16 @@ Deno.serve(async (req: Request) => {
       // purchases proceed exactly as before (this is opt-in, not forced
       // on existing installs); once a PIN exists, it's required every time.
       if (biz.bill_payments_pin_hash) {
+        const lock = await getPinLock(admin, businessId);
+        const locked = pinLockedResponse(lock); if (locked) return locked;
         const suppliedPin = String(params.bill_pin || "");
-        const suppliedHash = suppliedPin ? await hashPin(suppliedPin) : null;
-        if (!suppliedPin || suppliedHash !== biz.bill_payments_pin_hash) {
-          return json({ error: "Incorrect Bill Payments PIN." }, 403);
+        if (!(await verifyBillPin(admin, businessId, biz.bill_payments_pin_hash, suppliedPin))) {
+          const left = await registerPinFailure(admin, businessId, lock);
+          return json({ error: left === 0 && lock
+            ? `Too many wrong PIN attempts. Bill payments are locked for ${PIN_LOCK_MINUTES} minutes.`
+            : (lock ? `Incorrect Bill Payments PIN. ${left} attempt${left === 1 ? "" : "s"} left.` : "Incorrect Bill Payments PIN.") }, left === 0 && lock ? 429 : 403);
         }
+        await clearPinFailures(admin, businessId, lock);
       }
       const pricing = await loadPricing(admin);
       return await handlePurchase(admin, action, params, businessId, biz, pricing, caller.id, { email: caller.email || callerData.user.email || null, name: caller.first_name || "" });

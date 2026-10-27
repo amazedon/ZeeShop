@@ -6,15 +6,17 @@
 // or roll back money movement.
 //
 // HOW IT SENDS (first that is configured wins, the next is the fallback):
-//   1. Termii SMTP   — TERMII_SMTP_HOST / TERMII_SMTP_PORT / TERMII_SMTP_USER / TERMII_SMTP_PASS
+//   1. Termii TEMPLATE — your approved "ZeeShop Bill Receipt" template, through Termii's
+//                      POST /api/templates/send-email (NOT the OTP "email token" route, which always uses the OTP layout).
+//                      Needs TERMII_API_KEY + TERMII_RECEIPT_TEMPLATE_ID (+ optional TERMII_EMAIL_CONFIG_ID).
+//   2. Termii SMTP   — TERMII_SMTP_HOST / TERMII_SMTP_PORT / TERMII_SMTP_USER / TERMII_SMTP_PASS
 //                      (port 465 = implicit TLS; Supabase blocks 25 and 587)
-//   2. Resend (HTTP) — RESEND_API_KEY
-//   3. Neither       — the email is logged as "skipped"; nothing breaks.
-// Also set EMAIL_FROM, e.g.  ZeeShop <no-reply@yourdomain.com>
+//   3. Resend (HTTP) — RESEND_API_KEY
+//   4. None          — the email is logged as "skipped"; nothing breaks.
+// EMAIL_FROM (e.g. ZeeShop <no-reply@yourdomain.com>) is needed only for 2 and 3.
 //
-// NOTE: Termii's HTTP "email" endpoint only sends one-time-password emails
-// from a pre-made template, so it cannot carry these receipts. Termii's SMTP
-// can, which is why TERMII_API_KEY / TERMII_SENDER_ID are not used here.
+// The receipt template's placeholders (exactly these, none else):
+//   customer_name  transaction_id  transaction_date  payment_method  service_type  recipient_phone  amount  status  support_email
 //
 // Deploy:  supabase functions deploy notify-email
 // Only callers holding the service-role key are accepted.
@@ -30,6 +32,13 @@ const SMTP_PORT = Number(Deno.env.get("TERMII_SMTP_PORT")) || 465;
 const SMTP_USER = Deno.env.get("TERMII_SMTP_USER") || "";
 const SMTP_PASS = Deno.env.get("TERMII_SMTP_PASS") || "";
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") || "";
+const TERMII_API_KEY = Deno.env.get("TERMII_API_KEY") || "";
+const TERMII_BASE_URL = (Deno.env.get("TERMII_BASE_URL") || "https://api.ng.termii.com").replace(/\/+$/, "");
+const TERMII_EMAIL_CONFIG_ID = Deno.env.get("TERMII_EMAIL_CONFIG_ID") || "01a04442-c633-7ad5-8100-1bab0ab67914";
+const RECEIPT_TEMPLATE_ID = Deno.env.get("TERMII_RECEIPT_TEMPLATE_ID") || "";
+// Optional: if you add a {{token}}-style placeholder to the template, put its name here and electricity tokens will
+// also use the template. Until then electricity emails use the built-in layout below, because they MUST show the token.
+const RECEIPT_TOKEN_VAR = Deno.env.get("TERMII_RECEIPT_TOKEN_VAR") || "";
 
 // ---------- helpers ----------
 const esc = (v: unknown) =>
@@ -208,6 +217,65 @@ function build(p: Payload): { subject: string; html: string; text: string } | nu
   return null;
 }
 
+// ---------- Termii template route ----------
+// Maps one of our four email types onto the receipt template's placeholders. Returns null when this email type
+// should keep using the built-in HTML layout (electricity tokens, until the template has a token placeholder).
+function receiptVars(p: Payload): { subject: string; variables: Record<string, string> } | null {
+  const d = p.data || {};
+  const name = String(p.name || "").trim().split(" ")[0] || "Customer";
+  const common = {
+    customer_name: name,
+    transaction_date: when(d.date),
+    status: "SUCCESSFUL",
+    support_email: SUPPORT_EMAIL || "help@ememart.com",
+  };
+  if (p.type === "wallet_funding") {
+    const byAdmin = !!d.credited_by_admin;
+    return {
+      subject: `${byAdmin ? "Wallet credited by Admin" : "Wallet funded"}: ${naira(d.amount)}`,
+      variables: { ...common, transaction_id: String(d.reference || "—"), payment_method: String(d.method || (byAdmin ? "Admin credit" : "Bank transfer")),
+        service_type: byAdmin ? "Wallet credited by Admin" : "Wallet funding", recipient_phone: "ZeeShop Bill Wallet", amount: naira(d.amount) },
+    };
+  }
+  if (p.type === "vtu_purchase") {
+    return {
+      subject: `${d.service || "Purchase"} successful: ${d.phone || ""} (${naira(d.amount)})`,
+      variables: { ...common, transaction_id: String(d.reference || "—"), payment_method: "ZeeShop Bill Wallet",
+        service_type: [d.service, d.network, d.plan].filter(Boolean).join(" · ") || "Purchase", recipient_phone: String(d.phone || "—"), amount: naira(d.amount) },
+    };
+  }
+  if (p.type === "bill_payment") {
+    return {
+      subject: `${d.service || "Bill payment"} successful: ${naira(d.amount)}`,
+      variables: { ...common, transaction_id: String(d.reference || "—"), payment_method: "ZeeShop Bill Wallet",
+        service_type: [d.service, d.provider, d.plan].filter(Boolean).join(" · ") || "Bill payment", recipient_phone: String(d.recipient || "—"), amount: naira(d.amount) },
+    };
+  }
+  if (p.type === "electricity_token" && RECEIPT_TOKEN_VAR && d.token) {
+    return {
+      subject: `Electricity token: ${d.meter_number || ""} (${naira(d.amount)})`,
+      variables: { ...common, transaction_id: String(d.reference || "—"), payment_method: "ZeeShop Bill Wallet",
+        service_type: [ "Electricity", d.provider, d.meter_type ].filter(Boolean).join(" · "), recipient_phone: String(d.meter_number || "—"), amount: naira(d.amount),
+        [RECEIPT_TOKEN_VAR]: String(d.token) },
+    };
+  }
+  return null;
+}
+
+async function sendTermiiTemplate(to: string, subject: string, variables: Record<string, string>) {
+  const res = await fetch(`${TERMII_BASE_URL}/api/templates/send-email`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: TERMII_API_KEY, email: to, subject, email_configuration_id: TERMII_EMAIL_CONFIG_ID,
+      template_id: RECEIPT_TEMPLATE_ID, variables,
+    }),
+  });
+  const data = await res.json().catch(() => null);
+  const ok = res.ok && (data?.code === "ok" || /success/i.test(String(data?.message || "")));
+  if (!ok) throw new Error(`Termii ${res.status}: ${JSON.stringify(data)?.slice(0, 250)}`);   // never includes the api key
+}
+
 // ---------- sending ----------
 async function sendSmtp(to: string, subject: string, html: string, text: string) {
   const client = new SMTPClient({
@@ -256,9 +324,20 @@ Deno.serve(async (req: Request) => {
   const built = build(payload);
   if (!built) { await log("skipped", "none", null, "unknown type"); return reply({ ok: false, skipped: "unknown type" }); }
 
-  if (!EMAIL_FROM) { await log("skipped", "none", built.subject, "EMAIL_FROM is not set"); return reply({ ok: false, skipped: "EMAIL_FROM not set" }); }
-
   const errors: string[] = [];
+
+  // 1) The approved Termii receipt template (the branded layout), when configured.
+  const tpl = (TERMII_API_KEY && RECEIPT_TEMPLATE_ID) ? receiptVars(payload) : null;
+  if (tpl) {
+    try { await sendTermiiTemplate(to, tpl.subject, tpl.variables); await log("sent", "termii-template", tpl.subject); return reply({ ok: true, provider: "termii-template" }); }
+    catch (e) { errors.push("termii-template: " + (e instanceof Error ? e.message : String(e))); console.error("notify-email Termii template failed:", errors[0]); }
+  }
+
+  if (!EMAIL_FROM) {
+    await log(errors.length ? "failed" : "skipped", "none", built.subject, errors.join(" | ") || "EMAIL_FROM is not set");
+    return reply({ ok: false, skipped: errors.length ? undefined : "EMAIL_FROM not set", error: errors.join(" | ") || undefined });
+  }
+
   if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
     try { await sendSmtp(to, built.subject, built.html, built.text); await log("sent", "smtp", built.subject); return reply({ ok: true, provider: "smtp" }); }
     catch (e) { errors.push("smtp: " + (e instanceof Error ? e.message : String(e))); console.error("notify-email SMTP failed:", errors[0]); }

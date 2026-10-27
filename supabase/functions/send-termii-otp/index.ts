@@ -19,6 +19,7 @@
 //                             Leave it unset/blank to use Termii's default Email Token route (POST /api/email/otp/send),
 //                             which needs no template: { api_key, email_address, code, email_configuration_id }.
 //   TERMII_OTP_VAR            optional, default "otp"; only used in template mode (the {{variable}} name for the code)
+//   TERMII_EXPIRY_VAR         optional: name of the template variable that should show "10" (minutes). Leave unset if the template has none.
 //   TERMII_EXTRA_VARS         optional JSON for other template variables, e.g. {"company_name":"ZeeShop"}
 //   TERMII_EMAIL_CONFIG_ID    optional, defaults to 01a04442-c633-7ad5-8100-1bab0ab67914
 //   TERMII_BASE_URL           optional, defaults to https://api.ng.termii.com
@@ -109,7 +110,13 @@ async function sendViaTermii(apiKey: string, templateId: string, email: string, 
       subject: SUBJECT,
       email_configuration_id: EMAIL_CONFIG_ID,
       template_id: templateId,
-      variables: { ...extraVars(), [OTP_VAR]: code, expiry_minutes: String(OTP_TTL_MIN) },
+      // Only variables your Termii template actually defines may be sent. The code goes in {{<TERMII_OTP_VAR>}}; the
+      // lifetime goes in {{<TERMII_EXPIRY_VAR>}} only if you set that secret and your template has such a variable.
+      variables: {
+        ...extraVars(),
+        [OTP_VAR]: code,
+        ...(Deno.env.get("TERMII_EXPIRY_VAR") ? { [Deno.env.get("TERMII_EXPIRY_VAR") as string]: String(OTP_TTL_MIN) } : {}),
+      },
     }),
   });
   const data = await res.json().catch(() => null);

@@ -9608,7 +9608,7 @@ let billCache = { dataPlans:null, cablePlans:null, electricityProviders:null, re
 let billForm = {
   network:1, phone:'', amount:'', planId:'', ported:false,
   cableType:'', cardNo:'', cableVerifying:false, cableCustomerName:'', cableVerifyError:'',
-  company:'', meterType:'prepaid', meterNo:'', elecVerifying:false, elecCustomerName:'', elecVerifyError:'',
+  company:'', meterType:'prepaid', meterNo:'', elecVerifying:false, elecCustomerName:'', elecCustomerAddress:'', elecVerifyError:'',
   billerCode:'', customerId:'', bettingValidating:false, bettingCustomerName:'', validationReference:'',
   examName:'', qty:1,
   ispProvider:'smile', accountId:'', email:'', spectranetNumber:'', ispVerifying:false, ispCustomerName:'', ispVerifyError:'',
@@ -9624,7 +9624,7 @@ function billResetForm(){
   billForm = {
     network:1, phone:'', amount:'', planId:'', ported:false,
     cableType:'', cardNo:'', cableVerifying:false, cableCustomerName:'', cableVerifyError:'',
-    company:'', meterType:'prepaid', meterNo:'', elecVerifying:false, elecCustomerName:'', elecVerifyError:'',
+    company:'', meterType:'prepaid', meterNo:'', elecVerifying:false, elecCustomerName:'', elecCustomerAddress:'', elecVerifyError:'',
     billerCode:'', customerId:'', bettingValidating:false, bettingCustomerName:'', validationReference:'',
     examName:'', qty:1,
     ispProvider:'smile', accountId:'', email:'', spectranetNumber:'', ispVerifying:false, ispCustomerName:'', ispVerifyError:'',
@@ -10000,6 +10000,9 @@ function bpResetVaForm(){ billVaOpen = false; billVaBusy = false; billVaError = 
   st.textContent = `
   .va-badge{display:inline-block;background:#FEF3C7;color:#92400E;font-size:11.5px;font-weight:800;letter-spacing:.02em;padding:5px 10px;border-radius:999px;margin-bottom:10px;}
   .va-badge.on{background:#DCFCE7;color:#166534;}
+  .va-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;align-self:stretch;width:100%;margin-bottom:2px;}
+  .rec-badge{display:inline-flex;align-items:center;gap:4px;color:#16A34A;font-size:12.5px;font-weight:700;white-space:nowrap;margin-left:auto;}
+  .rec-badge svg{width:18px;height:18px;flex:none;}
   .va-list{list-style:none;padding:0;margin:12px 0 14px;}
   .va-list li{display:flex;gap:8px;align-items:flex-start;font-size:14px;padding:4px 0;}
   .va-list li::before{content:"✓";color:#16A34A;font-weight:900;}
@@ -10082,14 +10085,16 @@ function screenBillTopup(){
 
 // ---- Dedicated account: accordion header (title/badge/summary) and body ----
 function bpVaFee(){ return (billVa && billVa.fee) || { badge:'Save Money • Low Deposit Fee', short:'low', below_one_percent:false }; }
+// Small green "Recommended" seal shown on the Squad dedicated-account card.
+const BP_REC_BADGE = '<span class="rec-badge"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#22C55E" d="M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z"/><path fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="m9 12 2 2 4-4"/></svg>Recommended</span>';
 function bpVaHeaderParts(){
   const fee = bpVaFee();
   if(billVa && billVa.account){
     const act = fee.below_one_percent ? (fee.short === 'no deposit fee' ? 'Active • No Deposit Fee' : 'Active • Low Deposit Fee (<1%)') : 'Active • Low Deposit Fee';
-    return { badge: `<span class="va-badge on" style="margin:0;">${escapeHtml(act)}</span>`, title: 'Your Dedicated Business Account',
+    return { badge: `<span class="va-row"><span class="va-badge on" style="margin:0;">${escapeHtml(act)}</span>${BP_REC_BADGE}</span>`, title: 'Your Dedicated Business Account',
              summary: `${billVa.account.number}${billVa.account.bank_name ? ' · ' + billVa.account.bank_name : ''}` };
   }
-  return { badge: `<span class="va-badge" style="margin:0;">${escapeHtml(fee.badge)}</span>`, title: 'Upgrade &amp; Get Free Dedicated Account',
+  return { badge: `<span class="va-row"><span class="va-badge" style="margin:0;">${escapeHtml(fee.badge)}</span>${BP_REC_BADGE}</span>`, title: 'Upgrade &amp; Get Free Dedicated Account',
            summary: 'Free setup • instant auto-credit' };
 }
 function bpVaCardHtml(){
@@ -11144,11 +11149,11 @@ function screenBillElectricity(){
 }
 async function bpVerifyMeter(){
   if(billForm.elecVerifying || !billForm.company || billForm.meterNo.trim().length < 6) return;
-  billForm.elecVerifying = true; billForm.elecVerifyError = ''; billForm.elecCustomerName = ''; bpSetStatus('bp-elec-status', bpStatusHtml(true));
+  billForm.elecVerifying = true; billForm.elecVerifyError = ''; billForm.elecCustomerName = ''; billForm.elecCustomerAddress = ''; bpSetStatus('bp-elec-status', bpStatusHtml(true));
   try{
     const r = await callBigisub('electricity_verify', { company: billForm.company, meter_no: billForm.meterNo.trim(), meter_type: billForm.meterType });
     const name = bigisubNameFromResponse(r);
-    if(name) billForm.elecCustomerName = name;
+    if(name){ billForm.elecCustomerName = name; billForm.elecCustomerAddress = (r && r.customer_address) || ''; }
     else billForm.elecVerifyError = bigisubUpstreamMessage(r && r.raw) || "Couldn't verify this meter — check the number, the company, and prepaid/postpaid.";
   }catch(e){ billForm.elecVerifyError = e.message || 'Verification failed.'; }
   billForm.elecVerifying = false; bpSetStatus('bp-elec-status', bpStatusHtml(false, billForm.elecCustomerName, billForm.elecVerifyError));
@@ -11181,7 +11186,7 @@ function bindBillElectricityEvents(){
     const pin = billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
     try{
-      const r = await callBigisub('electricity_pay', { company: billForm.company, meter_no: billForm.meterNo.trim(), meter_type: billForm.meterType, phone_number: billForm.phone.trim(), amount, customer_name: billForm.elecCustomerName, client_ref: billGetClientRef(), bill_pin: pin });
+      const r = await callBigisub('electricity_pay', { company: billForm.company, meter_no: billForm.meterNo.trim(), meter_type: billForm.meterType, phone_number: billForm.phone.trim(), amount, customer_name: billForm.elecCustomerName, customer_address: billForm.elecCustomerAddress || '', client_ref: billGetClientRef(), bill_pin: pin });
       billWalletBalance = r.wallet_balance;
       billRecordTxAttribution(billGetClientRef());
       bpBenSave('meter', billForm.meterNo, billForm.elecCustomerName);

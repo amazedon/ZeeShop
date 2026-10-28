@@ -415,6 +415,53 @@ Deno.serve(async (req: Request) => {
     //   flw_fee_type  "percentage" | "flat" | "none"      flw_fee_value  1.2 = 1.2%  or  50 = N50
     //   flw_fee_cap   max fee in N for a percentage fee; 0 = no cap
     // =====================================================================
+    // =====================================================================
+    // PSA RECONCILIATION (read-only) — where is each business's money resting?
+    // For one business: our own books (sum of wallet_topups, current wallet balance) next to what Flutterwave says its
+    // payout-subaccount holds. params: { business_id }. Flutterwave's response is returned raw as well, because the exact
+    // balance fields can differ by account type; "flutterwave_error" says plainly if the call was refused.
+    // =====================================================================
+    if (action === "psa_reconcile") {
+      const businessId = String(params.business_id || "");
+      if (!businessId) return json({ error: "business_id is required." }, 400);
+      const { data: biz, error: bErr } = await admin.from("businesses")
+        .select("id, name, bill_wallet_balance, psa_account_reference, psa_account_number, psa_bank_name, psa_status, psa_last_synced_at")
+        .eq("id", businessId).maybeSingle();
+      if (bErr || !biz) return json({ error: bErr?.message || "Business not found." }, 404);
+
+      const { data: tops, error: tErr } = await admin.from("wallet_topups")
+        .select("provider_reference, amount, gross_amount, fee, status, created_at").eq("business_id", businessId)
+        .like("provider_reference", "flw:%").order("created_at", { ascending: false }).limit(500);
+      if (tErr) return json({ error: tErr.message }, 500);
+      const ok = (tops || []).filter((x: any) => x.status === "success");
+      const sum = (k: string) => Math.round(ok.reduce((a: number, x: any) => a + Number(x[k] || 0), 0) * 100) / 100;
+      const ours = { flutterwave_topups: ok.length, gross_received: sum("gross_amount"), fees_taken: sum("fee"), credited_to_wallet: sum("amount") };
+
+      const key = Deno.env.get("FLW_SECRET_KEY") || "";
+      const ref = biz.psa_account_reference ? String(biz.psa_account_reference) : "";
+      let flw: any = null, flwErr: string | null = null, flwTx: any = null;
+      if (!key) flwErr = "FLW_SECRET_KEY is not set on this function.";
+      else if (!ref) flwErr = "This business has no payout-subaccount reference yet.";
+      else {
+        const h = { Authorization: `Bearer ${key}` };
+        try {
+          const r = await fetch(`https://api.flutterwave.com/v3/payout-subaccounts/${ref}/balances?currency=NGN`, { headers: h });
+          flw = await r.json().catch(() => null);
+          if (!r.ok) flwErr = `Flutterwave refused the balance call (${r.status}): ${String(flw?.message || "").slice(0, 200)}`;
+          const t = await fetch(`https://api.flutterwave.com/v3/payout-subaccounts/${ref}/transactions`, { headers: h });
+          flwTx = await t.json().catch(() => null);
+        } catch (e) { flwErr = "Could not reach Flutterwave: " + String((e as Error).message || e); }
+      }
+      // Our wallet can legitimately be lower than credited_to_wallet (bills were spent), so the real check is:
+      // Flutterwave subaccount balance should be >= the sum of what is still in customers' wallets for this business.
+      return json({
+        business: { id: biz.id, name: biz.name, psa_account_number: biz.psa_account_number, bank: biz.psa_bank_name, status: biz.psa_status, last_synced: biz.psa_last_synced_at },
+        our_books: { ...ours, wallet_balance_now: Number(biz.bill_wallet_balance || 0) },
+        flutterwave: { balances: flw?.data ?? null, recent_transactions: flwTx?.data ?? null, error: flwErr },
+        recent_topups: (tops || []).slice(0, 25),
+      }, 200);
+    }
+
     if (action === "get_flw_fee_settings") {
       const { data, error } = await admin.from("platform_settings").select("flw_fee_type, flw_fee_value, flw_fee_cap").eq("id", 1).maybeSingle();
       if (error) return json({ error: "Flutterwave fee settings aren't set up yet — run flutterwave-fee.sql in Supabase first. (" + error.message + ")" }, 500);

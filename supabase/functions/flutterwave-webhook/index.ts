@@ -216,11 +216,18 @@ Deno.serve(async (req: Request) => {
     ].filter((x) => x !== undefined && x !== null && String(x).trim() !== "").map((x) => String(x).trim());
 
     let bizId: string | null = null;
+    let matchedAcct: string | null = null;
     for (const acct of candidates) {
       const { data: biz } = await adminClient.from("businesses").select("id").eq("psa_account_number", acct).maybeSingle();
-      if (biz) { bizId = String(biz.id); break; }
+      if (biz) { bizId = String(biz.id); matchedAcct = acct; break; }
     }
+    // One greppable line per deposit attempt. Search the Supabase logs for "FLW-DEPOSIT".
+    const trace = (stage: string, extra: Record<string, unknown> = {}) => console.log("FLW-DEPOSIT " + JSON.stringify({
+      stage, event: eventName || null, flw_id: data?.id ?? null, reference: data?.reference ?? null, tx_ref: data?.tx_ref ?? null,
+      psa_account_number: matchedAcct, tried_accounts: candidates, business_id: bizId, currency: data?.currency ?? null, ...extra,
+    }));
     if (!bizId) {
+      trace("no_matching_business");
       // Not one of ours (or the field wasn't recognised). The app's own
       // "sync" check against Flutterwave's transactions list will still
       // catch a real transfer, so just acknowledge.
@@ -246,6 +253,10 @@ Deno.serve(async (req: Request) => {
       : (Number.isFinite(reportedFee) && reportedFee > 0 ? reportedFee : Math.round(gross * (estimatedPercent / 100) * 100) / 100);
     if (!Number.isFinite(gross) || gross <= 0) return new Response("ok — no valid amount", { status: 200 });
     const net = Math.round((gross - fee) * 100) / 100;
+    trace("calculated", {
+      gross, fee, net, fee_source: feeRule ? "super_admin_rule" : (Number.isFinite(reportedFee) && reportedFee > 0 ? "flutterwave_reported" : "estimate"),
+      fee_rule: feeRule || null, flutterwave_reported_fee: Number.isFinite(reportedFee) ? reportedFee : null,
+    });
 
     // Record FIRST — the unique provider_reference blocks a double credit.
     const topupId = crypto.randomUUID();
@@ -259,17 +270,19 @@ Deno.serve(async (req: Request) => {
       console.error("flutterwave-webhook: sender columns missing, saving without them:", recErr.message);
       ({ error: recErr } = await adminClient.from("wallet_topups").insert(baseRow));
     }
-    if (recErr) return new Response("ok — already processed", { status: 200 });
-    if (net <= 0) return new Response("ok — nothing left after the fee", { status: 200 });
+    if (recErr) { trace("duplicate_skipped", { provider_reference: `flw:${ref}`, error: recErr.message }); return new Response("ok — already processed", { status: 200 }); }
+    if (net <= 0) { trace("ignored_zero_net", { gross, fee }); return new Response("ok — nothing left after the fee", { status: 200 }); }
 
     const { error: creditErr } = await adminClient.rpc("increment_bill_wallet", { p_business_id: bizId, p_amount: net });
     if (creditErr) {
       // Undo the record so a retry (or the app's sync) can credit it properly.
       await adminClient.from("wallet_topups").delete().eq("id", topupId);
+      trace("credit_failed", { gross, fee, net, error: creditErr.message });
       console.error("flutterwave-webhook: wallet credit failed:", creditErr.message);
       return new Response("Credit failed, please retry", { status: 500 });
     }
 
+    trace("credited", { provider_reference: `flw:${ref}`, topup_id: topupId, gross, fee, net, credited: net });
     return new Response("ok — bill wallet funded", { status: 200 });
   } catch (e) {
     // Return 200 for unexpected errors after logging, so Flutterwave doesn't

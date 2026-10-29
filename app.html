@@ -10064,7 +10064,7 @@ function bpResetVaForm(){ billVaOpen = false; billVaBusy = false; billVaError = 
 // ---- Accordion helpers ----
 function bpAccCurrent(){
   if(billAcc !== null) return billAcc;
-  return 'squad';
+  return '';   // both sections start closed; tapping one expands it
 }
 function bpAccHtml(id, title, badgeHtml, summary, bodyHtml){
   const open = bpAccCurrent() === id;
@@ -10100,7 +10100,7 @@ function screenBillTopup(){
     ${bpHeader('Add Money')}
     <p class="subtle" style="margin:0 4px 4px;">Fund your Bill Wallet to buy airtime, data and pay bills.</p>
     ${bpAccHtml('squad', v.title, v.badge, v.summary, bpVaCardHtml())}
-    ${bpAccHtml('pay', 'Pay Now', '', pending ? 'Card, bank, USSD or transfer • payment awaiting confirmation' : 'Card, bank, USSD or transfer', bpSquadCardHtml())}
+    ${bpAccHtml('pay', 'Pay Now', '<span class="va-badge" style="margin:0;">Instant • No verification needed</span>', pending ? 'Card, bank, USSD or transfer • payment awaiting confirmation' : 'Card, bank, USSD or transfer', bpSquadCardHtml())}
     ${bpVaModalHtml()}
   `;
 }

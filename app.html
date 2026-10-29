@@ -10064,7 +10064,7 @@ function bpResetVaForm(){ billVaOpen = false; billVaBusy = false; billVaError = 
 // ---- Accordion helpers ----
 function bpAccCurrent(){
   if(billAcc !== null) return billAcc;
-  return (billVa && billVa.account) ? 'squad' : 'flw';
+  return 'squad';
 }
 function bpAccHtml(id, title, badgeHtml, summary, bodyHtml){
   const open = bpAccCurrent() === id;
@@ -10095,13 +10095,10 @@ function bpAccToggle(id){
 function screenBillTopup(){
   const hasVa = !!(billVa && billVa.account);
   let pending = null; try{ pending = localStorage.getItem(SQUAD_PENDING_KEY); }catch(_e){}
-  const psaSummary = billPsaLoading ? 'Setting up…' : (billPsaAccountNumber ? `${billPsaAccountNumber}${billPsaAccountName ? ' · ' + billPsaAccountName : (billPsaBankName ? ' · ' + billPsaBankName : '')}` : 'Get your account number in one tap');
   const v = bpVaHeaderParts();
   return `
     ${bpHeader('Add Money')}
     <p class="subtle" style="margin:0 4px 4px;">Fund your Bill Wallet to buy airtime, data and pay bills.</p>
-    ${bpAccHtml('flw', 'Your account number', '<span class="va-badge" style="margin:0;">Instant • No ID needed</span>', psaSummary, bpFundCardHtml())}
-    ${hasVa ? '' : `<p class="bp-hint">Want lower deposit fees? Upgrade to a dedicated account below.</p>`}
     ${bpAccHtml('squad', v.title, v.badge, v.summary, bpVaCardHtml())}
     ${bpAccHtml('pay', 'Pay Now', '', pending ? 'Card, bank, USSD or transfer • payment awaiting confirmation' : 'Card, bank, USSD or transfer', bpSquadCardHtml())}
     ${bpVaModalHtml()}
@@ -10119,7 +10116,7 @@ function bpVaHeaderParts(){
     return { badge: `<span class="va-row"><span class="va-badge on" style="margin:0;">${escapeHtml(act)}</span>${BP_REC_BADGE}</span>`, title: 'Your Dedicated Business Account',
              summary: `${billVa.account.number}${billVa.account.bank_name ? ' · ' + billVa.account.bank_name : ''}` };
   }
-  return { badge: `<span class="va-row"><span class="va-badge" style="margin:0;">${escapeHtml(fee.badge)}</span>${BP_REC_BADGE}</span>`, title: 'Upgrade &amp; Get Free Dedicated Account',
+  return { badge: `<span class="va-row"><span class="va-badge" style="margin:0;">${escapeHtml(fee.badge)}</span>${BP_REC_BADGE}</span>`, title: 'Get Your Free Dedicated Account',
            summary: 'Free setup • instant auto-credit' };
 }
 function bpVaCardHtml(){
@@ -10140,14 +10137,14 @@ function bpVaCardHtml(){
   const lowTxt = fee.below_one_percent ? (fee.short === 'no deposit fee' ? 'no deposit fee' : 'transfer fees below 1%') : 'low transfer fees';
   return `
     <h3 style="margin:0 0 4px;font-size:17px;">Get Your Dedicated Business Account</h3>
-    <p class="subtle">Upgrade to your personal permanent account number and fund your wallet with ${escapeHtml(lowTxt)}!</p>
+    <p class="subtle">Get your personal permanent account number and fund your wallet with ${escapeHtml(lowTxt)}!</p>
     <ul class="va-list">
       <li><span><b>100% Free Setup</b></span></li>
       <li><span><b>${fee.below_one_percent ? 'Ultra-Low' : 'Low'} Transfer Fees</b></span></li>
       <li><span><b>Instant Auto-Credit</b> within seconds</span></li>
       <li><span><b>Works with Any Nigerian Bank App</b> (Kuda, Access, Zenith, OPay, GTBank and more)</span></li>
     </ul>
-    <button class="btn btn-primary" id="bp-va-open">Upgrade &amp; Get Free Dedicated Account</button>
+    <button class="btn btn-primary" id="bp-va-open">Get Free Dedicated Account</button>
   `;
 }
 
@@ -10325,7 +10322,7 @@ async function bpCheckPendingSquad(manual){
 }
 
 function bindBillTopupEvents(){
-  if((billPsaAccountNumber || (billVa && billVa.account)) && !billPsaPollTimer) bpStartPsaPolling();
+  if((billVa && billVa.account) && !billPsaPollTimer) bpStartPsaPolling();
   if(!billVaLoading && Date.now() - billVaLoadedAt > 60000) bpLoadVaStatus();
 
   // ---- accordion + "Good to know" ----
@@ -10450,7 +10447,7 @@ async function bpSyncPsaWallet(manual){
   billPsaSyncing = true; if(manual) refreshMain();
   try{
     const before = Number(billWalletBalance || 0);
-    const r = await callBigisub(billPsaAccountNumber ? 'sync_psa_wallet' : 'my_wallet_summary', {});
+    const r = await callBigisub('my_wallet_summary', {});
     billWalletBalance = r.wallet_balance;
     if(r.warning && !window.__psaWarned){ window.__psaWarned = true; toast(r.warning); }
     const added = Number(r.wallet_balance || 0) - before;
@@ -10467,7 +10464,7 @@ async function bpSyncPsaWallet(manual){
 function bpStartPsaPolling(){
   bpStopPsaPolling(); // clear any previous timer first
   billPsaPollTimer = setInterval(()=>{
-    if((!billPsaAccountNumber && !(billVa && billVa.account)) || billScreen!=='topup'){ bpStopPsaPolling(); return; }
+    if(!(billVa && billVa.account) || billScreen!=='topup'){ bpStopPsaPolling(); return; }
     if(billVaOpen) return;   // don't re-render under someone who is typing
     bpSyncPsaWallet(false);
   }, 8000);

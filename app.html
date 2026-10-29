@@ -4776,7 +4776,7 @@ function bindDashboardEvents(){
   const historyBtn = document.querySelector('[data-wallet-history]');
   if(historyBtn) historyBtn.addEventListener('click', (e)=>{
     e.stopPropagation();
-    route = 'billpayments'; billScreen = 'history'; bphFilter = { cat:'all', status:'all', month:'all' }; billHistory = []; billTopups = []; billHistoryLoaded = false; billHistoryError = null; render();
+    route = 'billpayments'; billScreen = 'history'; bphFilter = { cat:'all', status:'all', from:'', to:'' }; billHistory = []; billTopups = []; billHistoryLoaded = false; billHistoryError = null; render();
   });
   const walletRetryBtn = document.querySelector('[data-wallet-retry]');
   if(walletRetryBtn) walletRetryBtn.addEventListener('click', (e)=>{
@@ -10874,7 +10874,7 @@ function bindBillSuccessEvents(){
   const done = document.getElementById('bp-succ-done');
   if(done) done.addEventListener('click', ()=>{ billScreen = 'hub'; billResetForm(); refreshMain(); });
   const hist = document.getElementById('bp-succ-hist');
-  if(hist) hist.addEventListener('click', ()=>{ billScreen = 'history'; bphFilter = { cat:'all', status:'all', month:'all' }; billHistory = []; billTopups = []; billHistoryLoaded = false; billHistoryError = null; billResetForm(); refreshMain(); });
+  if(hist) hist.addEventListener('click', ()=>{ billScreen = 'history'; bphFilter = { cat:'all', status:'all', from:'', to:'' }; billHistory = []; billTopups = []; billHistoryLoaded = false; billHistoryError = null; billResetForm(); refreshMain(); });
 }
 
 /* ---------------- Plan helpers (live Bigisub data) ---------------- */
@@ -11558,7 +11558,9 @@ function bpFundingRowHtml(t){
   .bph-filters{display:flex;gap:10px;margin-bottom:10px;}
   .bph-filters select,.bph-sum select{flex:1;min-width:0;appearance:auto;background:var(--paper, #fff);color:inherit;border:1px solid var(--line, rgba(128,140,170,.35));border-radius:12px;padding:11px 12px;font:inherit;font-weight:600;font-size:14px;}
   .bph-sum{display:flex;flex-direction:column;gap:8px;border:1px solid var(--line, rgba(128,140,170,.3));border-radius:14px;padding:12px;margin-bottom:6px;}
-  .bph-sum select{flex:none;width:auto;align-self:flex-start;border:0;padding:4px 0;font-size:17px;font-weight:800;background:transparent;}
+  .bph-datebtn{align-self:flex-start;display:inline-flex;align-items:center;gap:6px;background:transparent;border:0;padding:4px 0;font:inherit;font-size:17px;font-weight:800;color:inherit;cursor:pointer;}
+  .bph-chipbtn{border:1px solid var(--line, rgba(128,140,170,.4));background:var(--paper, #fff);color:inherit;border-radius:999px;padding:9px 14px;font:inherit;font-weight:700;font-size:13.5px;cursor:pointer;}
+  .bph-sheet-input{width:100%;}
   .bph-tot{display:flex;gap:18px;font-size:13px;opacity:.85;flex-wrap:wrap;} .bph-tot b{font-weight:800;}
   .bph-list{padding:0 2px;}
   .bph-row{display:flex;align-items:center;gap:12px;padding:15px 0;border-bottom:1px solid var(--line, rgba(128,140,170,.25));cursor:pointer;}
@@ -11626,7 +11628,7 @@ function bphRowHtml(t){
 }
 const BPH_CATS = [['all','All Categories'],['airtime','Airtime'],['data','Data Bundles'],['cable','Cable TV'],['electricity','Electricity'],['betting','Betting'],['result','Result Checker PINs'],['isp','Internet (ISP)'],['funding','Wallet funding']];
 const BPH_STATUSES = [['all','All Status'],['success','Successful'],['pending','Pending'],['failed','Failed']];
-let bphFilter = { cat:'all', status:'all', month:'all' };
+let bphFilter = { cat:'all', status:'all', from:'', to:'' };
 function bphCategory(m){
   if(m.kind==='topup') return 'funding';
   const s = String((m.raw.service||'') + ' ' + (m.raw.service_label||'')).toLowerCase();
@@ -11640,30 +11642,66 @@ function bphCategory(m){
   return 'other';
 }
 function bphStatusKey(m){ return m.tone==='ok' ? 'success' : m.tone==='bad' ? 'failed' : 'pending'; }
+function bphDay(iso){ const d = new Date(iso); if(isNaN(d.getTime())) return ''; return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function bphDayStr(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function bphDateLabel(){
+  const f = bphFilter.from, t = bphFilter.to;
+  if(!f && !t) return 'All time';
+  const fmt = s => { const [y,m,d] = s.split('-').map(Number); return new Date(y,m-1,d).toLocaleString(undefined,{day:'numeric',month:'short',year:'numeric'}); };
+  if(f && t){
+    const [y,m,d] = f.split('-').map(Number); const last = new Date(y,m,0);
+    if(d===1 && t===bphDayStr(last)) return new Date(y,m-1,1).toLocaleString(undefined,{month:'short',year:'numeric'});
+    return f===t ? fmt(f) : fmt(f)+' – '+fmt(t);
+  }
+  return f ? 'From '+fmt(f) : 'Until '+fmt(t);
+}
+function openBphDateSheet(){
+  const now = new Date(), today = bphDayStr(now);
+  const mk = (a,b)=> [bphDayStr(a), bphDayStr(b)];
+  const presets = [
+    ['Today', ...mk(now, now)],
+    ['Yesterday', ...mk(new Date(now.getFullYear(),now.getMonth(),now.getDate()-1), new Date(now.getFullYear(),now.getMonth(),now.getDate()-1))],
+    ['Last 7 days', ...mk(new Date(now.getFullYear(),now.getMonth(),now.getDate()-6), now)],
+    ['This month', ...mk(new Date(now.getFullYear(),now.getMonth(),1), new Date(now.getFullYear(),now.getMonth()+1,0))],
+    ['Last month', ...mk(new Date(now.getFullYear(),now.getMonth()-1,1), new Date(now.getFullYear(),now.getMonth(),0))],
+    ['All time','',''],
+  ];
+  openSheet(`
+    <div class="sheet-head"><h3>Select date</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">
+      ${presets.map((p,i)=>`<button class="bph-chipbtn" data-bph-preset="${i}">${p[0]}</button>`).join('')}
+    </div>
+    <div style="display:flex;gap:10px;margin-bottom:6px;">
+      <div style="flex:1;"><label class="subtle" style="display:block;margin-bottom:4px;">From</label><input type="date" id="bph-from" value="${escAttr(bphFilter.from)}" max="${today}" style="width:100%;"></div>
+      <div style="flex:1;"><label class="subtle" style="display:block;margin-bottom:4px;">To</label><input type="date" id="bph-to" value="${escAttr(bphFilter.to)}" max="${today}" style="width:100%;"></div>
+    </div>
+    <button class="btn btn-primary" id="bph-apply" style="width:100%;margin-top:14px;">Apply</button>
+  `);
+  const apply = (f,t)=>{ if(f && t && f>t){ const x=f; f=t; t=x; } bphFilter.from = f; bphFilter.to = t; closeSheet(); refreshMain(); };
+  document.querySelectorAll('[data-bph-preset]').forEach(b=>b.addEventListener('click', ()=>{ const p = presets[Number(b.dataset.bphPreset)]; apply(p[1], p[2]); }));
+  document.getElementById('bph-apply').addEventListener('click', ()=> apply(document.getElementById('bph-from').value, document.getElementById('bph-to').value));
+}
 function bphMonthKey(iso){ const d = new Date(iso); return isNaN(d.getTime()) ? '' : d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0'); }
 function bphMonthLabel(k){ const [y,mo] = k.split('-'); return new Date(Number(y), Number(mo)-1, 1).toLocaleString(undefined, { month:'short', year:'numeric' }); }
 function bphFilteredHtml(){
   const all = bpHistoryRows();
-  const months = [...new Set(all.map(t=>bphMonthKey(t.created_at)).filter(Boolean))];
-  if(bphFilter.month!=='all' && !months.includes(bphFilter.month)) bphFilter.month = 'all';
   let inSum = 0, outSum = 0;
   const shown = all.filter(t=>{
     const m = bphModel(t);
     if(bphFilter.cat!=='all' && bphCategory(m)!==bphFilter.cat) return false;
     if(bphFilter.status!=='all' && bphStatusKey(m)!==bphFilter.status) return false;
-    if(bphFilter.month!=='all' && bphMonthKey(t.created_at)!==bphFilter.month) return false;
+    if(bphFilter.from || bphFilter.to){ const day = bphDay(t.created_at); if(!day || (bphFilter.from && day<bphFilter.from) || (bphFilter.to && day>bphFilter.to)) return false; }
     if(m.tone==='ok'){ if(m.in) inSum += m.amount; else outSum += m.amount; }
     return true;
   });
   const opt = (list, cur)=> list.map(([v,l])=>`<option value="${escAttr(v)}"${v===cur?' selected':''}>${escapeHtml(l)}</option>`).join('');
-  const monthOpts = `<option value="all"${bphFilter.month==='all'?' selected':''}>All time</option>` + months.map(k=>`<option value="${k}"${k===bphFilter.month?' selected':''}>${escapeHtml(bphMonthLabel(k))}</option>`).join('');
   return `
     <div class="bph-filters">
       <select id="bph-f-cat" aria-label="Category">${opt(BPH_CATS, bphFilter.cat)}</select>
       <select id="bph-f-status" aria-label="Status">${opt(BPH_STATUSES, bphFilter.status)}</select>
     </div>
     <div class="bph-sum">
-      <select id="bph-f-month" aria-label="Month">${monthOpts}</select>
+      <button type="button" id="bph-f-date" class="bph-datebtn" aria-label="Select date">${escapeHtml(bphDateLabel())} <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
       <div class="bph-tot"><span>In: <b>${escapeHtml(fmtMoney(inSum))}</b></span><span>Out: <b>${escapeHtml(fmtMoney(outSum))}</b></span></div>
     </div>
     ${shown.length ? `<div class="bph-list">${shown.map(bphRowHtml).join('')}</div>` : `<p class="subtle" style="text-align:center;padding:24px 0;">No transactions match these filters.</p>`}`;
@@ -11951,10 +11989,12 @@ function bindBillHistoryEvents(){
   if(!billHistoryLoaded && !billHistoryLoading && !billHistoryError) bpLoadHistory();
   const historyRetry = document.getElementById('bp-history-retry');
   if(historyRetry) historyRetry.addEventListener('click', ()=> bpLoadHistory());
-  [['bph-f-cat','cat'],['bph-f-status','status'],['bph-f-month','month']].forEach(([id,key])=>{
+  [['bph-f-cat','cat'],['bph-f-status','status']].forEach(([id,key])=>{
     const el = document.getElementById(id);
     if(el) el.addEventListener('change', ()=>{ bphFilter[key] = el.value; refreshMain(); });
   });
+  const dateBtn = document.getElementById('bph-f-date');
+  if(dateBtn) dateBtn.addEventListener('click', openBphDateSheet);
   document.querySelectorAll('[data-bph-open]').forEach(row=>{
     const open = ()=>{ const v = row.dataset.bphOpen; const i = v.indexOf(':'); openBillTxDetail(v.slice(0,i), v.slice(i+1)); };
     row.addEventListener('click', open);
@@ -12313,7 +12353,7 @@ const FAQ_GROUPS = [
     { q:"How do I fund my Bill Wallet?", a:"Tap Fund Wallet on Home or Add Money inside Bill Payments. There are two ways, both through Squad: a free Dedicated Account (transfer from any bank app to your own account number) and Pay Now, which needs no verification at all — you can use it straight away with a card or bank transfer. Funding is instant either way, and every funding shows in your Transaction History." },
     { q:"How do I hide my Bill Wallet balance?", a:"Tap the eye icon on the Bill Wallet card (on Bill Payments or on Home). The balance shows as •••••• until you tap it again. It's separate from the other cards on Home." },
     { q:"Where can I see my past bill payments?", a:"Open More → Bill Payments → Transaction History (or tap History on the Wallet card). It lists every purchase and every wallet funding, newest first, each with its status (Successful, Pending or Failed)." },
-    { q:"How do I filter my Transaction History?", a:"Use the All Categories and All Status boxes at the top to narrow the list — for example Airtime only, or Failed only — and pick a month (or All time) just below them. The In and Out totals update to match what you've filtered: In is money that came into your wallet, Out is money spent on successful purchases." },
+    { q:"How do I filter my Transaction History?", a:"Use the All Categories and All Status boxes at the top to narrow the list — for example Airtime only, or Failed only — and tap the date (e.g. Oct 2026) just below them to choose Today, Yesterday, Last 7 days, This month, Last month, or your own From – To dates. The In and Out totals update to match what you've filtered: In is money that came into your wallet, Out is money spent on successful purchases." },
     { q:"How do I see the full details or share a receipt?", a:"Tap any transaction in the history to open its details — amount, status, reference, and your electricity token or PINs when there are any. Tap Share Receipt and your phone's share sheet opens straight away with the receipt image attached, so you can send it on WhatsApp, email or any other app." },
     { q:"What does a Pending transaction mean?", a:"The provider hasn't confirmed it yet. Open it and tap Check status — the status updates to Successful or Failed. If it stays pending for long, contact support." },
     { q:"Who is allowed to make bill payments?", a:"The Owner always can. Staff need the Bill Payments permission, which the Owner turns on for them under More → Staff. Viewers can't make bill payments." },

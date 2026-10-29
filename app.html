@@ -1511,6 +1511,45 @@ function toggleCardHidden(id){
   refreshMain();
 }
 
+/* ---- In-app dialogs (replace the browser's "zeeshop… says" confirm/prompt boxes) ---- */
+function appDialog(o){
+  return new Promise(resolve=>{
+    const ov = document.createElement('div');
+    ov.setAttribute('role','dialog'); ov.setAttribute('aria-modal','true');
+    ov.style.cssText = 'position:fixed;inset:0;z-index:10050;background:rgba(8,10,24,.6);display:flex;align-items:center;justify-content:center;padding:22px;';
+    const box = document.createElement('div');
+    box.style.cssText = 'width:100%;max-width:380px;background:var(--paper,#fff);color:var(--ink-text,#12213B);border-radius:20px;padding:22px 20px 16px;box-shadow:0 20px 60px rgba(0,0,0,.45);font-family:inherit;';
+    const msg = document.createElement('div');
+    msg.style.cssText = 'font-size:16px;line-height:1.5;font-weight:600;white-space:pre-wrap;word-break:break-word;margin-bottom:14px;';
+    msg.textContent = o.message || '';
+    box.appendChild(msg);
+    let input = null;
+    if(o.input){
+      input = document.createElement('input');
+      input.type = o.password ? 'password' : 'text';
+      if(o.numeric){ input.inputMode = 'numeric'; input.maxLength = o.maxLength || 6; }
+      input.value = o.defaultValue == null ? '' : String(o.defaultValue);
+      input.autocomplete = 'off';
+      input.style.cssText = 'width:100%;font-size:18px;padding:13px 14px;border-radius:12px;border:1.5px solid var(--line,#d9dde3);background:transparent;color:inherit;margin-bottom:14px;box-sizing:border-box;' + (o.password ? 'letter-spacing:6px;text-align:center;' : '');
+      box.appendChild(input);
+    }
+    const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:10px;';
+    const mk = (txt, primary)=>{ const b = document.createElement('button'); b.type='button'; b.textContent = txt;
+      b.style.cssText = 'flex:1;padding:14px;border-radius:14px;font:inherit;font-size:16px;font-weight:800;cursor:pointer;' + (primary ? 'border:none;background:linear-gradient(135deg,#F7A108,#D97706);color:#1b1206;' : 'border:1.5px solid var(--line,#d9dde3);background:transparent;color:inherit;'); return b; };
+    const cancel = mk(o.cancelText || 'Cancel', false), ok = mk(o.okText || 'OK', true);
+    row.appendChild(cancel); row.appendChild(ok); box.appendChild(row); ov.appendChild(box); document.body.appendChild(ov);
+    const done = (v)=>{ document.removeEventListener('keydown', onKey, true); ov.remove(); resolve(v); };
+    const accept = ()=> done(o.input ? input.value : true), reject = ()=> done(o.input ? null : false);
+    function onKey(e){ if(e.key==='Escape'){ e.preventDefault(); reject(); } else if(e.key==='Enter'){ e.preventDefault(); accept(); } }
+    document.addEventListener('keydown', onKey, true);
+    ok.addEventListener('click', accept); cancel.addEventListener('click', reject);
+    ov.addEventListener('click', e=>{ if(e.target === ov) reject(); });
+    setTimeout(()=>{ try{ (input || ok).focus(); if(input) input.select(); }catch(_e){} }, 30);
+  });
+}
+function appConfirm(message, okText){ return appDialog({ message, okText: okText || 'OK' }); }
+function appPrompt(message, defaultValue, opts){ return appDialog(Object.assign({ message, input:true, defaultValue }, opts || {})); }
+
 function toast(msg){
   clearTimeout(toastTimer);
   let el = document.getElementById('toast');
@@ -3010,7 +3049,7 @@ function bindUserSelectEvents(){
     });
   });
   const jt = document.getElementById('tile-join'); if(jt) jt.addEventListener('click', openJoinFlow);
-  const lo = document.getElementById('full-logout'); if(lo) lo.addEventListener('click', e=>{e.preventDefault(); if(confirm('Sign out of this business on this device?')){ state.sessionUserId=null; forceFullLogin=true; authMode='login'; pendingSignupData=null; authError=''; render(); }});
+  const lo = document.getElementById('full-logout'); if(lo) lo.addEventListener('click', async e=>{e.preventDefault(); if(await appConfirm('Sign out of this business on this device?')){ state.sessionUserId=null; forceFullLogin=true; authMode='login'; pendingSignupData=null; authError=''; render(); }});
 }
 
 // Make the Supabase session belong to this person (needed for anything the server checks: bill payments, wallet, sync).
@@ -3619,7 +3658,7 @@ function openAddStockModal(gid){
     <div class="subtle" id="as-err" style="color:var(--red);min-height:18px;margin-bottom:6px;"></div>
     <button class="btn btn-primary" id="as-submit">Add Stock</button>
   `);
-  document.getElementById('as-submit').addEventListener('click', ()=>{
+  document.getElementById('as-submit').addEventListener('click', async ()=>{
     const err = (m)=>{ document.getElementById('as-err').textContent = m; };
     const qty = Number(document.getElementById('as-qty').value);
     const costRaw = document.getElementById('as-cost').value;
@@ -3642,7 +3681,7 @@ function openAddStockModal(gid){
     }
     logAudit('stock_added', `Added ${qty} × ${g.name}${cost!==null?' at '+fmtMoney(cost):''}${expiry?' (expires '+expiry+')':''}`);
     closeSheet();
-    if(!isGoodActive(g) && isMaster() && confirm(`${g.name} is hidden. Reactivate it now so it can be sold?`)){ reactivateGood(g.id); }
+    if(!isGoodActive(g) && isMaster() && await appConfirm(`${g.name} is hidden. Reactivate it now so it can be sold?`)){ reactivateGood(g.id); }
     toast('Stock added ✅');
     render(); openGoodDetail(g.id);
   });
@@ -5107,12 +5146,12 @@ function bindRouteEvents(){
       });
     });
     document.querySelectorAll('[data-item-note]').forEach(b=>{
-      b.addEventListener('click', ()=>{
+      b.addEventListener('click', async ()=>{
         const {goodId,variantId} = parseKey(b.dataset.itemNote);
         const line = cart.find(c=>c.goodId===goodId && c.variantId===variantId);
         const g = state.goods.find(x=>x.id===goodId);
         if(!line) return;
-        const val = prompt(`Detail for ${g.name} (size, color, part no., dimensions, etc.):`, line.note||'');
+        const val = await appPrompt(`Detail for ${g.name} (size, color, part no., dimensions, etc.):`, line.note||'');
         if(val!==null){ line.note = val.trim(); refreshMain(); }
       });
     });
@@ -6046,10 +6085,10 @@ function openGoodDetail(gid){
     });
   });
   document.querySelectorAll('[data-add-variant-stock]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
+    btn.addEventListener('click', async ()=>{
       const v = g.variants.find(x=>x.id===btn.dataset.addVariantStock);
       if(!isGoodActive(g) && !isMaster()){ toast(`${g.name} is hidden. Ask the owner to reactivate it first.`); return; }
-      const add = Number(prompt(`Add how many units to "${v.label}"?`, '0')||0);
+      const add = Number(await appPrompt(`Add how many units to "${v.label}"?`, '0')||0);
       if(!(add>0)) return;
       if(!Number.isInteger(add)){ toast('Enter a whole number.'); return; }
       v.qty += add;
@@ -6064,11 +6103,11 @@ function openGoodDetail(gid){
     btn.addEventListener('click', ()=>openStockCorrectionModal(gid, btn.dataset.correctCount));
   });
   const addVariantBtn = document.getElementById('add-new-variant-btn');
-  if(addVariantBtn) addVariantBtn.addEventListener('click', ()=>{
-    const size = prompt('Size (e.g. Large):','') || '';
-    const color = prompt('Color (optional):','') || '';
+  if(addVariantBtn) addVariantBtn.addEventListener('click', async ()=>{
+    const size = await appPrompt('Size (e.g. Large):','') || '';
+    const color = await appPrompt('Color (optional):','') || '';
     if(!size && !color){ toast('Enter at least a size or color.'); return; }
-    const qty = Number(prompt('Starting quantity:','0')||0);
+    const qty = Number(await appPrompt('Starting quantity:','0')||0);
     const v = { id: uid('var'), size, color, qty: Math.max(0,qty), label: [size,color].filter(Boolean).join(' / ') };
     g.variants.push(v);
     // Same missing-sync bug — a brand new variant never reached the server.
@@ -6335,10 +6374,10 @@ function bindCreditEvents(){
     });
     save();
   }));
-  document.querySelectorAll('[data-mark-paid]').forEach(b=>b.addEventListener('click', ()=>{
+  document.querySelectorAll('[data-mark-paid]').forEach(b=>b.addEventListener('click', async ()=>{
     const s = state.sales.find(x=>x.id===b.dataset.markPaid);
     if(isStaff() && s.soldByUserId !== state.sessionUserId){ toast('Staff can only mark paid sales they made.'); return; }
-    const amt = Number(prompt(`Amount received (balance ${fmtMoney(s.balance)}):`, s.balance) || 0);
+    const amt = Number(await appPrompt(`Amount received (balance ${fmtMoney(s.balance)}):`, s.balance) || 0);
     if(amt<=0) return;
     s.paidAmount += amt;
     s.balance = Math.max(0, s.subtotal - s.paidAmount);
@@ -6487,8 +6526,8 @@ function bindMoreEvents(){
   const lo = document.getElementById('do-logout');
   if(lo) lo.addEventListener('click', ()=>{ state.sessionUserId=null; forceFullLogin=false; route='dashboard'; render(); });
   const flo = document.getElementById('do-full-logout');
-  if(flo) flo.addEventListener('click', ()=>{
-    if(confirm('Sign out of this business on this device?')){
+  if(flo) flo.addEventListener('click', async ()=>{
+    if(await appConfirm('Sign out of this business on this device?')){
       state.sessionUserId=null; forceFullLogin=true; authMode='login'; pendingSignupData=null; authError=''; route='dashboard';
       // A "full" logout has to actually end the Supabase Auth session too —
       // otherwise the device still holds a valid, silently-refreshing
@@ -7533,7 +7572,7 @@ function bindStaffEvents(){
   const resetCode = document.getElementById('reset-connect-code');
   if(resetCode) resetCode.addEventListener('click', async ()=>{
     const isReset = !!business().connectCode;
-    if(isReset && !confirm('Generate a new code? The current code will stop working immediately. Staff already signed in on their devices are not affected.')) return;
+    if(isReset && !await appConfirm('Generate a new code? The current code will stop working immediately. Staff already signed in on their devices are not affected.')) return;
     resetCode.disabled = true; resetCode.textContent = 'Generating…';
     try{
       const { data: sessionData } = await window.sb.auth.getSession();
@@ -7625,8 +7664,8 @@ function bindStaffEvents(){
     logAudit('recordonly_status', (p.isActive?'Marked active: ':'Marked as left: ')+p.firstName+' '+p.lastName);
     render();
   }));
-  document.querySelectorAll('[data-delete-recordonly]').forEach(b=>b.addEventListener('click', ()=>{
-    if(!confirm('Remove this person? Since they have no employment record yet, this fully deletes them.')) return;
+  document.querySelectorAll('[data-delete-recordonly]').forEach(b=>b.addEventListener('click', async ()=>{
+    if(!await appConfirm('Remove this person? Since they have no employment record yet, this fully deletes them.')) return;
     const p = state.recordOnlyStaff.find(x=>x.id===b.dataset.deleteRecordonly);
     state.recordOnlyStaff = state.recordOnlyStaff.filter(x=>x.id!==b.dataset.deleteRecordonly);
     logAudit('recordonly_deleted', 'Removed '+p.firstName+' '+p.lastName+' (no app account)');
@@ -7635,7 +7674,7 @@ function bindStaffEvents(){
   document.querySelectorAll('[data-reset-pin]').forEach(b=>b.addEventListener('click', async ()=>{
     const u = state.users.find(x=>x.id===b.dataset.resetPin);
     if(!canManageThisUser(u)){ toast("You don't have permission to manage this account."); return; }
-    const pin = prompt('New 4-6 digit PIN for '+u.firstName+':');
+    const pin = await appPrompt('New 4-6 digit PIN for '+u.firstName+':');
     if(!pin || !/^\d{4,6}$/.test(pin)){ toast('PIN must be 4-6 digits.'); return; }
     // Pushed straight to the server and awaited — not queued for later —
     // so a failure (e.g. a permissions problem) shows up immediately as
@@ -8075,8 +8114,8 @@ function bindSettingsEvents(){
     } catch(err){ toast('Could not process that image.'); }
   });
   const removeLogo = document.getElementById('remove-logo-btn');
-  if(removeLogo) removeLogo.addEventListener('click', ()=>{
-    if(!confirm('Remove your business logo?')) return;
+  if(removeLogo) removeLogo.addEventListener('click', async ()=>{
+    if(!await appConfirm('Remove your business logo?')) return;
     business().logoDataUrl = null;
     __logoImgCache = { dataUrl:null, img:null };
     enqueueSettings('businesses', { id: business().id, logo_data_url: null });
@@ -8117,7 +8156,7 @@ function bindSettingsEvents(){
   if(exp) exp.addEventListener('click', exportCSV);
   const del = document.getElementById('delete-biz');
   if(del) del.addEventListener('click', async ()=>{
-    if(!confirm('This will permanently delete your business and all its data within 30 days, per GDPR. You and your staff will be locked out immediately. Continue?')) return;
+    if(!await appConfirm('This will permanently delete your business and all its data within 30 days, per GDPR. You and your staff will be locked out immediately. Continue?')) return;
     // This used to only clear this one device's local storage — nothing
     // was actually requested from the server, so the business (and every
     // other device signed into it) kept working completely normally
@@ -8335,7 +8374,7 @@ function urlBase64ToUint8Array(base64String){
 }
 
 async function disableAutoRenew(){
-  if(!confirm('Turn off auto-renewal? Your plan will need to be renewed manually going forward.')) return;
+  if(!await appConfirm('Turn off auto-renewal? Your plan will need to be renewed manually going forward.')) return;
   try{
     const { data: sessionData } = await window.sb.auth.getSession();
     const accessToken = sessionData.session ? sessionData.session.access_token : null;
@@ -8564,7 +8603,7 @@ function bindNoteViewEvents(){
   const sh = document.getElementById('nv-share');
   if(sh) sh.addEventListener('click', ()=>{ noteMenuOpen = false; render(); openShareNoteModal(id); });
   const del = document.getElementById('nv-delete');
-  if(del) del.addEventListener('click', ()=>{ noteMenuOpen = false; if(deleteNote(id)){ route = 'notes'; render(); } else render(); });
+  if(del) del.addEventListener('click', async ()=>{ noteMenuOpen = false; if(await deleteNote(id)){ route = 'notes'; render(); } else render(); });
 }
 function noteShareText(n, author){
   const parts = [n.title, '', n.text || '', '', `— ${author?author.firstName+' '+author.lastName:'Unknown'}, ${fmtNoteStamp(n.createdAt)}`];
@@ -8635,7 +8674,7 @@ function openEditNoteModal(id){
   `);
   document.getElementById('save-note-btn').addEventListener('click', ()=>saveNoteFromForm(id));
 }
-function saveNoteFromForm(existingId){
+async function saveNoteFromForm(existingId){
   const title = document.getElementById('note-title').value.trim();
   const text = document.getElementById('note-text').value.trim();
   const hcEl = document.getElementById('note-handover');
@@ -8651,7 +8690,7 @@ function saveNoteFromForm(existingId){
   } else {
     const isHandover = !!(hcEl && hcEl.checked);
     const isPrivate = !isHandover;   // not shared with the next person = private
-    if(!isPrivate && !confirm("Everyone in the shop will see this note.\n\nAfter 7 days you will NOT be able to edit or delete it.\n\nSave it?")) return;
+    if(!isPrivate && !await appConfirm("Everyone in the shop will see this note.\n\nAfter 7 days you will NOT be able to edit or delete it.\n\nSave it?")) return;
     const noteId = uid('note');
     state.shopNotes.push({ id: noteId, businessId: business().id, shopId: state.currentShopId,
       authorUserId: state.sessionUserId, title, text, isHandover, isPrivate, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
@@ -8664,10 +8703,10 @@ function saveNoteFromForm(existingId){
   }
   closeSheet(); render();
 }
-function deleteNote(id){
+async function deleteNote(id){
   const nn = state.shopNotes.find(x=>x.id===id);
   if(nn && !noteRights(nn).canDelete){ toast(noteRights(nn).deleteMsg); return false; }
-  if(!confirm('Delete this note? This cannot be undone.')) return false;
+  if(!await appConfirm('Delete this note? This cannot be undone.')) return false;
   state.shopNotes = state.shopNotes.filter(x=>x.id!==id);
   enqueueSync('shop_notes','delete', { id });
   logAudit('note_deleted', 'Deleted a note');
@@ -9073,14 +9112,14 @@ function openSaleDetail(saleId){
   const voidBtn = document.getElementById('void-sale-btn');
   if(voidBtn) voidBtn.addEventListener('click', ()=>voidSale(saleId));
 }
-function voidSale(saleId){
+async function voidSale(saleId){
   const s = state.sales.find(x=>x.id===saleId);
   if(!(isMaster() || (isStaff() && canDo('canVoidReturn') && s.soldByUserId===state.sessionUserId))){
     toast("You don't have permission to void this sale."); return;
   }
-  const reason = prompt('Why are you voiding this sale? (e.g. entered by mistake)');
+  const reason = await appPrompt('Why are you voiding this sale? (e.g. entered by mistake)');
   if(reason===null) return;
-  if(!confirm('This restores all items to stock and removes the sale from your totals. Continue?')) return;
+  if(!await appConfirm('This restores all items to stock and removes the sale from your totals. Continue?')) return;
   s.items.forEach(it=>{
     const remaining = it.qty - (it.returnedQty||0);
     if(remaining<=0) return;
@@ -9205,8 +9244,8 @@ function screenExpenses(){
 function bindExpensesEvents(){
   const addBtn = document.getElementById('add-expense-btn');
   if(addBtn) addBtn.addEventListener('click', openAddExpenseModal);
-  document.querySelectorAll('[data-delete-expense]').forEach(b=>b.addEventListener('click', ()=>{
-    if(!confirm('Delete this expense?')) return;
+  document.querySelectorAll('[data-delete-expense]').forEach(b=>b.addEventListener('click', async ()=>{
+    if(!await appConfirm('Delete this expense?')) return;
     state.expenses = state.expenses.filter(x=>x.id!==b.dataset.deleteExpense);
     logAudit('expense_deleted','Deleted an expense');
     toast('Expense deleted'); render();
@@ -9481,8 +9520,8 @@ function openRoomDetail(roomId){
   const ci = document.getElementById('checkin-btn');
   if(ci) ci.addEventListener('click', ()=>openCheckInModal(roomId));
   const pay = document.getElementById('pay-booking-btn');
-  if(pay) pay.addEventListener('click', ()=>{
-    const amt = Number(prompt(`Amount paid (balance ${fmtMoney(b.balance)}):`, b.balance) || 0);
+  if(pay) pay.addEventListener('click', async ()=>{
+    const amt = Number(await appPrompt(`Amount paid (balance ${fmtMoney(b.balance)}):`, b.balance) || 0);
     if(amt<=0) return;
     b.paidAmount += amt;
     b.balance = Math.max(0, b.totalAmount - b.paidAmount);
@@ -9491,17 +9530,17 @@ function openRoomDetail(roomId){
     toast('Payment recorded ✅'); openRoomDetail(roomId);
   });
   const co = document.getElementById('checkout-booking-btn');
-  if(co) co.addEventListener('click', ()=>{
-    if(b.balance>0 && !confirm(`This guest still owes ${fmtMoney(b.balance)}. Check out anyway?`)) return;
+  if(co) co.addEventListener('click', async ()=>{
+    if(b.balance>0 && !await appConfirm(`This guest still owes ${fmtMoney(b.balance)}. Check out anyway?`)) return;
     b.status = 'checked_out';
     b.checkedOutAt = new Date().toISOString();
     enqueueSync('lodging_bookings','update', { id: b.id, status: 'checked_out', checked_out_at: b.checkedOutAt });
     logAudit('lodging_checkout', `Checked out ${escapeHtml(b.guestName)} from ${r.name}`);
     toast('Guest checked out ✅'); closeSheet(); render();
   });
-  document.querySelectorAll('[data-delete-room]').forEach(el=>el.addEventListener('click', ()=>{
+  document.querySelectorAll('[data-delete-room]').forEach(el=>el.addEventListener('click', async ()=>{
     if(activeBookingForRoom(el.dataset.deleteRoom)){ toast('Check the guest out before deleting this room.'); return; }
-    if(!confirm('Delete this room? Its past stay history will be kept.')) return;
+    if(!await appConfirm('Delete this room? Its past stay history will be kept.')) return;
     state.rooms = state.rooms.filter(x=>x.id!==el.dataset.deleteRoom);
     toast('Room deleted'); closeSheet(); render();
   }));
@@ -9741,9 +9780,9 @@ function billTxMadeByName(tx){
 // left it blank — callers should abort the purchase on null. Native
 // prompt() rather than a custom modal, matching the existing confirm()
 // dialogs already used for the "are you sure" step right before this.
-function billPromptPin(){
+async function billPromptPin(){
   if(!billPinSet) return '';
-  const pin = prompt('Enter your Bill Payments PIN to confirm this purchase:');
+  const pin = await appPrompt('Enter your Bill Payments PIN to confirm this purchase:', '', { password:true, numeric:true, okText:'Confirm' });
   if(!pin) return null;
   return pin;
 }
@@ -11037,8 +11076,8 @@ function bindBillAirtimeEvents(){
     if(!billForm.phone.trim() || amount<BILL_MIN.airtime){ toast(`Enter a valid phone number and an amount of at least ₦${BILL_MIN.airtime}.`); return; }
     const price = billPreviewPrice('airtime', null, 1, amount);
     if(!(await bpPreflight(price))) return;
-    if(!confirm(`Buy ₦${amount} airtime for ${billForm.phone}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
-    const pin = billPromptPin(); if(pin===null) return;
+    if(!await appConfirm(`Buy ₦${amount} airtime for ${billForm.phone}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
+    const pin = await billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
     try{
       const r = await callBigisub('airtime_purchase', { network: Number(billForm.network), phone_number: billForm.phone.trim(), amount, client_ref: billGetClientRef(), bill_pin: pin });
@@ -11098,7 +11137,6 @@ function screenBillData(){
     const price = bpPrice(chosen); const lbl = bigisubPlanLabel(chosen);
     body += bpSelected(BP_ICONS.wifi, lbl, `${bpN(price)} · ${String(chosen.plantype||'').toUpperCase()}`, 'bp-plan-change') +
       `<div class="bps-label">Phone number</div>${bpField('bp-phone', BP_ICONS.phone, '08012345678', billForm.phone, 'type="tel" inputmode="tel"')}${bpBenLink('phone')}
-       <label style="display:flex;align-items:center;gap:10px;margin:18px 0 0;font-size:14.5px;color:#C9C7E8;"><input type="checkbox" id="bp-ported" ${billForm.ported?'checked':''} style="width:20px;height:20px;"> This number was ported from another network</label>
        ${bpTotal('Total Amount', `${bpNetName()} ${lbl}`, price)}`;
   }
   return bpSheet(BP_ICONS.wifi, 'Buy Data', 'Quick and secure data purchase', body, chosen ? bpCta('bp-data-confirm','Continue to Payment') : '');
@@ -11110,7 +11148,6 @@ function bindBillDataEvents(){
   document.querySelectorAll('[data-plan]').forEach(b=>b.addEventListener('click', ()=>{ billForm.planId=b.dataset.plan; refreshMain(); }));
   const ch = document.getElementById('bp-plan-change'); if(ch) ch.addEventListener('click', ()=>{ billForm.planId=''; refreshMain(); });
   const phone = document.getElementById('bp-phone'); if(phone) phone.addEventListener('input', e=>{ billForm.phone=e.target.value; });
-  const ported = document.getElementById('bp-ported'); if(ported) ported.addEventListener('change', e=>{ billForm.ported=e.target.checked; });
   bpBindBen('phone','bp-phone');
   const btn = document.getElementById('bp-data-confirm');
   if(btn) btn.addEventListener('click', async ()=>{
@@ -11119,8 +11156,8 @@ function bindBillDataEvents(){
     if(!billForm.phone.trim() || !chosen){ toast('Enter a phone number and select a plan.'); return; }
     const price = bpPrice(chosen); const lbl = bigisubPlanLabel(chosen);
     if(!(await bpPreflight(price))) return;
-    if(!confirm(`Buy ${bpNetName()} ${lbl} for ${billForm.phone}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
-    const pin = billPromptPin(); if(pin===null) return;
+    if(!await appConfirm(`Buy ${bpNetName()} ${lbl} for ${billForm.phone}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
+    const pin = await billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
     try{
       const r = await callBigisub('data_purchase', { network: Number(billForm.network), phone_number: billForm.phone.trim(), plan: chosen.id, ported_number: !!billForm.ported, client_ref: billGetClientRef(), bill_pin: pin });
@@ -11205,8 +11242,8 @@ function bindBillCableEvents(){
     if(!billForm.phone.trim()){ toast('Enter a phone number.'); return; }
     const price = bpPrice(chosen);
     if(!(await bpPreflight(price))) return;
-    if(!confirm(`Pay ${bigisubPlanLabel(chosen)} for ${billForm.cableCustomerName}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
-    const pin = billPromptPin(); if(pin===null) return;
+    if(!await appConfirm(`Pay ${bigisubPlanLabel(chosen)} for ${billForm.cableCustomerName}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
+    const pin = await billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
     try{
       const r = await callBigisub('cable_purchase', { cable_type: billForm.cableType, card_no: billForm.cardNo.trim(), phone_number: billForm.phone.trim(), amount: chosen.amount!==undefined?chosen.amount:bigisubPlanPrice(chosen), plan_id: chosen.id, customer_name: billForm.cableCustomerName, client_ref: billGetClientRef(), bill_pin: pin });
@@ -11291,8 +11328,8 @@ function bindBillElectricityEvents(){
     if(!billForm.phone.trim() || amount<min){ toast(`Enter a phone number and an amount of at least ₦${min.toLocaleString('en-NG')}.`); return; }
     const price = billPreviewPrice('electricity', null, 1, amount);
     if(!(await bpPreflight(price))) return;
-    if(!confirm(`Buy ₦${amount} token for ${billForm.elecCustomerName}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
-    const pin = billPromptPin(); if(pin===null) return;
+    if(!await appConfirm(`Buy ₦${amount} token for ${billForm.elecCustomerName}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
+    const pin = await billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
     try{
       const r = await callBigisub('electricity_pay', { company: billForm.company, meter_no: billForm.meterNo.trim(), meter_type: billForm.meterType, phone_number: billForm.phone.trim(), amount, customer_name: billForm.elecCustomerName, customer_address: billForm.elecCustomerAddress || '', client_ref: billGetClientRef(), bill_pin: pin });
@@ -11389,8 +11426,8 @@ function bindBillBettingEvents(){
     try{ validation = await callBigisub('betting_validate', { biller_code: billForm.billerCode, customer_id: billForm.customerId.trim() }); }
     catch(e){ bpFailNow(e.message); return; }
     const bettingName = validation.customer_name || bigisubNameFromResponse(validation) || billForm.customerId;
-    if(!confirm(`Fund ${bettingName} with ₦${amount}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)){ billPurchaseInFlight=false; billPurchaseStage=''; refreshMain(); return; }
-    const pin = billPromptPin();
+    if(!await appConfirm(`Fund ${bettingName} with ₦${amount}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)){ billPurchaseInFlight=false; billPurchaseStage=''; refreshMain(); return; }
+    const pin = await billPromptPin();
     if(pin===null){ billPurchaseInFlight=false; billPurchaseStage=''; refreshMain(); return; }
     billPurchaseStage = 'Funding…'; refreshMain();
     try{
@@ -11451,8 +11488,8 @@ function bindBillResultCheckerEvents(){
     if(!chosen){ toast('Select an exam.'); return; }
     const price = billPreviewPrice('result_checker', bpExamKey(chosen), qtyNum, bpPrice(chosen)*qtyNum);
     if(!(await bpPreflight(price))) return;
-    if(!confirm(`Buy ${qtyNum} × ${chosen.name||bpExamKey(chosen)} PIN(s)? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
-    const pin = billPromptPin(); if(pin===null) return;
+    if(!await appConfirm(`Buy ${qtyNum} × ${chosen.name||bpExamKey(chosen)} PIN(s)? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
+    const pin = await billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
     try{
       const r = await callBigisub('result_checker_purchase', { exam: bpExamKey(chosen), quantity: qtyNum, client_ref: billGetClientRef(), bill_pin: pin });
@@ -11560,8 +11597,8 @@ function bindBillIspEvents(){
     const q = isSmile ? 1 : Math.max(1, Number(billForm.qty||1));
     const price = billPreviewPrice(isSmile?'isp_smile':'isp_spectranet', chosen.id, q, bpPrice(chosen)*q);
     if(!(await bpPreflight(price))) return;
-    if(!confirm(`Buy ${bpIspTitle(chosen)}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
-    const pin = billPromptPin(); if(pin===null) return;
+    if(!await appConfirm(`Buy ${bpIspTitle(chosen)}? This deducts ${fmtMoney(price)} from your Bill Wallet.`)) return;
+    const pin = await billPromptPin(); if(pin===null) return;
     billPurchaseInFlight = true; billPurchaseStage = ''; refreshMain();
     try{
       const r = isSmile
@@ -12849,14 +12886,14 @@ function openSupplierDetail(supplierId){
       </div>`).join('')}
   `);
   document.getElementById('log-restock-btn').addEventListener('click', ()=>openLogRestockModal(supplierId));
-  document.querySelectorAll('[data-delete-supplier]').forEach(b=>b.addEventListener('click', ()=>{
-    if(!confirm('Delete this supplier? Their purchase history will be kept but unlinked.')) return;
+  document.querySelectorAll('[data-delete-supplier]').forEach(b=>b.addEventListener('click', async ()=>{
+    if(!await appConfirm('Delete this supplier? Their purchase history will be kept but unlinked.')) return;
     state.suppliers = state.suppliers.filter(x=>x.id!==b.dataset.deleteSupplier);
     toast('Supplier deleted'); closeSheet(); render();
   }));
-  document.querySelectorAll('[data-pay-supplier]').forEach(b=>b.addEventListener('click', ()=>{
+  document.querySelectorAll('[data-pay-supplier]').forEach(b=>b.addEventListener('click', async ()=>{
     const p = state.supplierPurchases.find(x=>x.id===b.dataset.paySupplier);
-    const amt = Number(prompt(`Amount paid (balance ${fmtMoney(p.balance)}):`, p.balance) || 0);
+    const amt = Number(await appPrompt(`Amount paid (balance ${fmtMoney(p.balance)}):`, p.balance) || 0);
     if(amt<=0) return;
     p.paidAmount += amt;
     p.balance = Math.max(0, p.totalAmount - p.paidAmount);

@@ -4637,7 +4637,7 @@ function handoverNoteBanner(){
 // background (Kuda-style), set inline per card so it renders identically
 // in both the light theme and Dark/Market Mode with no extra CSS needed.
 const CARD_META = {
-  billwallet: { from:'#3562E8', to:'#7C9CF5' },
+  billwallet: { from:'#E8962A', to:'#F2B04F' },
   sales:      { from:'#17A470', to:'#4FD8A0' },
   profit:     { from:'#7A4CE0', to:'#A78BFA' },
   cashin:     { from:'#0F9488', to:'#4FD1C5' },
@@ -4776,7 +4776,7 @@ function bindDashboardEvents(){
   const historyBtn = document.querySelector('[data-wallet-history]');
   if(historyBtn) historyBtn.addEventListener('click', (e)=>{
     e.stopPropagation();
-    route = 'billpayments'; billScreen = 'history'; billHistory = []; billTopups = []; billHistoryLoaded = false; billHistoryError = null; render();
+    route = 'billpayments'; billScreen = 'history'; bphFilter = { cat:'all', status:'all', month:'all' }; billHistory = []; billTopups = []; billHistoryLoaded = false; billHistoryError = null; render();
   });
   const walletRetryBtn = document.querySelector('[data-wallet-retry]');
   if(walletRetryBtn) walletRetryBtn.addEventListener('click', (e)=>{
@@ -9857,9 +9857,12 @@ function screenBillPayments(){
   return `
     <h2 class="screen-title">Bill Payments</h2>
     <div class="card" style="background:var(--marigold);color:#fff;">
-      <div class="subtle" style="color:rgba(255,255,255,0.85);">Bill Wallet Balance</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <div class="subtle" style="color:rgba(255,255,255,0.85);">Bill Wallet Balance</div>
+        <button class="eye-btn" id="bp-eye" aria-label="${isCardHidden('billwallet')?'Show':'Hide'} balance" style="color:#fff;">${isCardHidden('billwallet')?ICON_EYE:ICON_EYE_OFF}</button>
+      </div>
       <div style="font-size:26px;font-weight:700;margin:4px 0 10px;">
-        ${billLoading ? 'Loading…' : billWalletError ? '—' : (billWalletBalance===null ? '—' : fmtMoney(billWalletBalance))}
+        ${billLoading ? 'Loading…' : billWalletError ? '—' : (billWalletBalance===null ? '—' : (isCardHidden('billwallet') ? '••••••' : fmtMoney(billWalletBalance)))}
       </div>
       ${billWalletError ? `
       <p style="font-size:12.5px;color:rgba(255,255,255,0.9);margin:0 0 10px;">Couldn't load: ${escapeHtml(billWalletError)}</p>
@@ -9962,6 +9965,8 @@ function bindBillPaymentsEvents(){
     });
     const goHist = document.querySelector('[data-bp-goto="history"]');
     if(goHist) goHist.addEventListener('click', ()=>{ billScreen='history'; billHistory=[]; billTopups=[]; billHistoryLoaded=false; billHistoryError=null; refreshMain(); });
+    const bpEye = document.getElementById('bp-eye');
+    if(bpEye) bpEye.addEventListener('click', ()=>{ toggleCardHidden('billwallet'); });
     const topupBtn = document.getElementById('bp-topup-btn');
     if(topupBtn) topupBtn.addEventListener('click', ()=>{ billScreen='topup'; refreshMain(); });
     const historyBtn = document.getElementById('bp-history-btn');
@@ -10869,7 +10874,7 @@ function bindBillSuccessEvents(){
   const done = document.getElementById('bp-succ-done');
   if(done) done.addEventListener('click', ()=>{ billScreen = 'hub'; billResetForm(); refreshMain(); });
   const hist = document.getElementById('bp-succ-hist');
-  if(hist) hist.addEventListener('click', ()=>{ billScreen = 'history'; billHistory = []; billTopups = []; billHistoryLoaded = false; billHistoryError = null; billResetForm(); refreshMain(); });
+  if(hist) hist.addEventListener('click', ()=>{ billScreen = 'history'; bphFilter = { cat:'all', status:'all', month:'all' }; billHistory = []; billTopups = []; billHistoryLoaded = false; billHistoryError = null; billResetForm(); refreshMain(); });
 }
 
 /* ---------------- Plan helpers (live Bigisub data) ---------------- */
@@ -11550,6 +11555,11 @@ function bpFundingRowHtml(t){
   if(document.getElementById('bph-style')) return;
   const st = document.createElement('style'); st.id = 'bph-style';
   st.textContent = `
+  .bph-filters{display:flex;gap:10px;margin-bottom:10px;}
+  .bph-filters select,.bph-sum select{flex:1;min-width:0;appearance:auto;background:var(--paper, #fff);color:inherit;border:1px solid var(--line, rgba(128,140,170,.35));border-radius:12px;padding:11px 12px;font:inherit;font-weight:600;font-size:14px;}
+  .bph-sum{display:flex;flex-direction:column;gap:8px;border:1px solid var(--line, rgba(128,140,170,.3));border-radius:14px;padding:12px;margin-bottom:6px;}
+  .bph-sum select{flex:none;width:auto;align-self:flex-start;border:0;padding:4px 0;font-size:17px;font-weight:800;background:transparent;}
+  .bph-tot{display:flex;gap:18px;font-size:13px;opacity:.85;flex-wrap:wrap;} .bph-tot b{font-weight:800;}
   .bph-list{padding:0 2px;}
   .bph-row{display:flex;align-items:center;gap:12px;padding:15px 0;border-bottom:1px solid var(--line, rgba(128,140,170,.25));cursor:pointer;}
   .bph-row:last-child{border-bottom:0;}
@@ -11557,7 +11567,7 @@ function bpFundingRowHtml(t){
   .bph-ic.bad{background:var(--red-bg);color:var(--red);} .bph-ic.wait{background:var(--amber-bg);color:var(--marigold-dark);}
   .bph-main{flex:1;min-width:0;}
   .bph-t{font-weight:700;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .bph-d{font-size:12px;opacity:.65;margin-top:3px;}
+  .bph-d{font-size:12px;opacity:.65;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .bph-r{flex:0 0 auto;text-align:right;}
   .bph-amt{font-weight:800;font-size:15px;white-space:nowrap;} .bph-amt.in{color:var(--green);}
   .bph-chip{display:inline-block;margin-top:5px;padding:2px 8px;border-radius:6px;font-size:10.5px;font-weight:700;background:var(--green-bg);color:var(--green);}
@@ -11586,12 +11596,17 @@ const BPH_CLOCK = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" s
 const BPH_CHECK = `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10"/></svg>`;
 
 // One normalised view of a row (purchase or wallet funding) so the list and the details sheet agree.
+function bphShortDate(iso){
+  const d = new Date(iso); if(isNaN(d.getTime())) return String(iso||'');
+  return d.toLocaleString(undefined, { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
+}
 function bphModel(t){
   if(t._funding){
     const ref = String(t.provider_reference || '');
     const how = ref.startsWith('squadva:') ? 'Dedicated account' : ref.startsWith('squad:') ? 'Pay Now (card / bank)' : ref.startsWith('manual:') ? 'Credited by Admin' : 'Bank transfer';
     const refunded = t.status === 'refunded';
-    return { kind:'topup', id:t.id, title:'Wallet funding — ' + how, how, ref, in:true, tone: refunded ? 'bad' : 'ok',
+    const short = ref.startsWith('squadva:') ? 'Dedicated account' : ref.startsWith('squad:') ? 'Pay Now' : ref.startsWith('manual:') ? 'Admin credit' : 'Bank transfer';
+    return { kind:'topup', id:t.id, title:'Wallet funding — ' + how, how, short, ref, in:true, tone: refunded ? 'bad' : 'ok',
              label: refunded ? 'Refunded' : 'Credited', amount: Number(t.amount||0), at: t.created_at, raw:t };
   }
   const tone = t.status==='success' ? 'ok' : t.status==='failed' ? 'bad' : 'wait';
@@ -11605,9 +11620,53 @@ function bphRowHtml(t){
   const m = bphModel(t);
   return `<div class="bph-row" data-bph-open="${escAttr(m.kind)}:${escAttr(String(m.id))}" role="button" tabindex="0">
     <div class="bph-ic ${m.tone==='ok'?'':m.tone}">${bphIcon(m)}</div>
-    <div class="bph-main"><div class="bph-t">${escapeHtml(m.kind==='topup' ? 'Wallet funding' : m.title)}</div><div class="bph-d">${m.kind==='topup' ? escapeHtml(m.how) + ' · ' : ''}${m.at?fmtDateTimeFull(m.at):''}</div></div>
+    <div class="bph-main"><div class="bph-t">${escapeHtml(m.kind==='topup' ? 'Wallet funding' : m.title)}</div><div class="bph-d">${m.kind==='topup' ? escapeHtml(m.short) + ' · ' : ''}${m.at?bphShortDate(m.at):''}</div></div>
     <div class="bph-r"><div class="bph-amt ${m.in && m.tone==='ok'?'in':''}">${escapeHtml(bphAmount(m))}</div><span class="bph-chip ${m.tone==='ok'?'':m.tone}">${escapeHtml(m.label)}</span></div>
   </div>`;
+}
+const BPH_CATS = [['all','All Categories'],['airtime','Airtime'],['data','Data Bundles'],['cable','Cable TV'],['electricity','Electricity'],['betting','Betting'],['result','Result Checker PINs'],['isp','Internet (ISP)'],['funding','Wallet funding']];
+const BPH_STATUSES = [['all','All Status'],['success','Successful'],['pending','Pending'],['failed','Failed']];
+let bphFilter = { cat:'all', status:'all', month:'all' };
+function bphCategory(m){
+  if(m.kind==='topup') return 'funding';
+  const s = String((m.raw.service||'') + ' ' + (m.raw.service_label||'')).toLowerCase();
+  if(/airtime|vtu/.test(s)) return 'airtime';
+  if(/data/.test(s)) return 'data';
+  if(/cable|\btv\b|dstv|gotv|startime/.test(s)) return 'cable';
+  if(/electric|disco|prepaid|postpaid|token/.test(s)) return 'electricity';
+  if(/bet/.test(s)) return 'betting';
+  if(/result|waec|neco|jamb|nabteb/.test(s)) return 'result';
+  if(/isp|smile|spectranet|internet/.test(s)) return 'isp';
+  return 'other';
+}
+function bphStatusKey(m){ return m.tone==='ok' ? 'success' : m.tone==='bad' ? 'failed' : 'pending'; }
+function bphMonthKey(iso){ const d = new Date(iso); return isNaN(d.getTime()) ? '' : d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0'); }
+function bphMonthLabel(k){ const [y,mo] = k.split('-'); return new Date(Number(y), Number(mo)-1, 1).toLocaleString(undefined, { month:'short', year:'numeric' }); }
+function bphFilteredHtml(){
+  const all = bpHistoryRows();
+  const months = [...new Set(all.map(t=>bphMonthKey(t.created_at)).filter(Boolean))];
+  if(bphFilter.month!=='all' && !months.includes(bphFilter.month)) bphFilter.month = 'all';
+  let inSum = 0, outSum = 0;
+  const shown = all.filter(t=>{
+    const m = bphModel(t);
+    if(bphFilter.cat!=='all' && bphCategory(m)!==bphFilter.cat) return false;
+    if(bphFilter.status!=='all' && bphStatusKey(m)!==bphFilter.status) return false;
+    if(bphFilter.month!=='all' && bphMonthKey(t.created_at)!==bphFilter.month) return false;
+    if(m.tone==='ok'){ if(m.in) inSum += m.amount; else outSum += m.amount; }
+    return true;
+  });
+  const opt = (list, cur)=> list.map(([v,l])=>`<option value="${escAttr(v)}"${v===cur?' selected':''}>${escapeHtml(l)}</option>`).join('');
+  const monthOpts = `<option value="all"${bphFilter.month==='all'?' selected':''}>All time</option>` + months.map(k=>`<option value="${k}"${k===bphFilter.month?' selected':''}>${escapeHtml(bphMonthLabel(k))}</option>`).join('');
+  return `
+    <div class="bph-filters">
+      <select id="bph-f-cat" aria-label="Category">${opt(BPH_CATS, bphFilter.cat)}</select>
+      <select id="bph-f-status" aria-label="Status">${opt(BPH_STATUSES, bphFilter.status)}</select>
+    </div>
+    <div class="bph-sum">
+      <select id="bph-f-month" aria-label="Month">${monthOpts}</select>
+      <div class="bph-tot"><span>In: <b>${escapeHtml(fmtMoney(inSum))}</b></span><span>Out: <b>${escapeHtml(fmtMoney(outSum))}</b></span></div>
+    </div>
+    ${shown.length ? `<div class="bph-list">${shown.map(bphRowHtml).join('')}</div>` : `<p class="subtle" style="text-align:center;padding:24px 0;">No transactions match these filters.</p>`}`;
 }
 function screenBillHistory(){
   return `
@@ -11617,7 +11676,7 @@ function screenBillHistory(){
         <p class="subtle" style="color:var(--red);margin-bottom:10px;">Couldn't load your transaction history: ${escapeHtml(billHistoryError)}</p>
         <button class="btn btn-outline btn-sm" id="bp-history-retry">Retry</button>
       </div>
-    ` : ((billHistory.length===0 && billTopups.length===0) ? `<p class="subtle">No transactions yet.</p>` : `<div class="bph-list">${bpHistoryRows().map(bphRowHtml).join('')}</div>`)}
+    ` : ((billHistory.length===0 && billTopups.length===0) ? `<p class="subtle">No transactions yet.</p>` : bphFilteredHtml())}
   `;
 }
 // Full date + time (day, month, year, hour and minute) — used on both the
@@ -11721,7 +11780,7 @@ function layoutAndDrawBillReceipt(tx, shop, biz, ctx, logoImg){
     const parts = chunk(canvasSafeText(String(value)), o.chars || 26);
     T(label, PAD, 'left', '400 11.5px '+FONT, GREY);
     parts.forEach((pt, i)=>{
-      T(pt, W-PAD, 'right', (o.light ? '400 11px ' : '700 12px ')+FONT, o.light ? '#4B5563' : INK);
+      T(pt, W-PAD, 'right', (o.light ? '400 10.5px ' : '700 12px ')+FONT, o.light ? '#4B5563' : INK);
       y += 17;
     });
     y += 5;
@@ -11732,8 +11791,8 @@ function layoutAndDrawBillReceipt(tx, shop, biz, ctx, logoImg){
   row('Payment method', 'ZeeShop Bill Wallet');
   y += 6; LINE(true); y += 22;
   const ref = tx.reference || tx.id;
-  row('Reference', ref, { light: true, chars: 30 });
-  if(providerTid) row('Transaction ID', providerTid, { light: true, chars: 30 });
+  row('Reference', ref, { light: true, chars: 40 });
+  if(providerTid) row('Transaction ID', providerTid, { light: true, chars: 40 });
   y += 4; LINE(true); y += 24;
 
   // ---- footer ----
@@ -11764,8 +11823,8 @@ function openBillTxReceiptModal(txId){
       <canvas id="bill-receipt-canvas" style="max-width:100%;height:auto;display:block;"></canvas>
     </div>
     <div style="display:flex;gap:10px;margin-bottom:6px;">
-      <button class="btn btn-primary" id="share-bill-receipt-img" style="flex:1;">${ICON_EXPORT} Share Receipt</button>
-      <button class="btn btn-outline" id="download-bill-receipt-img" style="flex:1;">⬇️ Download</button>
+      <button class="btn btn-primary" id="share-bill-receipt-img" style="flex:1;white-space:nowrap;display:flex;align-items:center;justify-content:center;gap:8px;">${ICON_EXPORT}<span>Share</span></button>
+      <button class="btn btn-outline" id="download-bill-receipt-img" style="flex:1;white-space:nowrap;display:flex;align-items:center;justify-content:center;gap:8px;"><span>Download</span></button>
     </div>
     <p class="subtle">Share opens your phone's share sheet with the actual receipt image attached — pick WhatsApp, Email, or any app there.</p>
   `);
@@ -11792,6 +11851,24 @@ function openBillTxReceiptModal(txId){
       logAudit('bill_tx_shared', `Downloaded receipt for ${tx.service_label||tx.service||'bill'} transaction (${tx.status})`);
     }, 'image/png');
   });
+}
+// Share the receipt image straight to the phone's share sheet (no extra screen).
+async function shareBillReceiptDirect(tx){
+  const canvas = document.createElement('canvas');
+  await drawBillReceiptToCanvas(canvas, tx);
+  const blob = await new Promise(res=>canvas.toBlob(res, 'image/png'));
+  if(!blob){ toast('Could not generate the receipt image.'); return; }
+  const name = `bill-receipt-${String(tx.id||'').slice(-6)}.png`;
+  const file = new File([blob], name, {type:'image/png'});
+  if(navigator.canShare && navigator.canShare({files:[file]})){
+    try{ await navigator.share({files:[file], title:(business()?.name||'ZeeShop')+' — Receipt'}); logAudit('bill_tx_shared', `Shared receipt for ${tx.service_label||tx.service||'bill'} transaction (${tx.status})`); }
+    catch(e){ /* user cancelled the share sheet */ }
+  } else {
+    const url = URL.createObjectURL(blob);
+    const l = document.createElement('a'); l.href=url; l.download=name; l.click();
+    setTimeout(()=>URL.revokeObjectURL(url), 2000);
+    toast('Sharing images is not supported here, so the receipt was downloaded.');
+  }
 }
 // Token / units / PINs a purchase carries (electricity token, result-checker PINs …).
 function bphSecrets(tx){
@@ -11850,7 +11927,14 @@ function openBillTxDetail(kind, id){
     toast('Copied');
   }));
   const share = document.getElementById('bph-share');
-  if(share) share.addEventListener('click', ()=> openBillTxReceiptModal(id));
+  if(share) share.addEventListener('click', async ()=>{
+    const tx = billHistory.find(x=>x.id===id) || src;
+    if(!tx){ toast('Could not find that transaction.'); return; }
+    share.disabled = true;
+    try{ await shareBillReceiptDirect(tx); }
+    catch(e){ console.warn('Receipt share failed:', e); toast('Could not share the receipt.'); }
+    share.disabled = false;
+  });
   const chk = document.getElementById('bph-check');
   if(chk) chk.addEventListener('click', async ()=>{
     chk.disabled = true; chk.textContent = 'Checking…';
@@ -11867,6 +11951,10 @@ function bindBillHistoryEvents(){
   if(!billHistoryLoaded && !billHistoryLoading && !billHistoryError) bpLoadHistory();
   const historyRetry = document.getElementById('bp-history-retry');
   if(historyRetry) historyRetry.addEventListener('click', ()=> bpLoadHistory());
+  [['bph-f-cat','cat'],['bph-f-status','status'],['bph-f-month','month']].forEach(([id,key])=>{
+    const el = document.getElementById(id);
+    if(el) el.addEventListener('change', ()=>{ bphFilter[key] = el.value; refreshMain(); });
+  });
   document.querySelectorAll('[data-bph-open]').forEach(row=>{
     const open = ()=>{ const v = row.dataset.bphOpen; const i = v.indexOf(':'); openBillTxDetail(v.slice(0,i), v.slice(i+1)); };
     row.addEventListener('click', open);
@@ -12222,8 +12310,12 @@ const FAQ_GROUPS = [
   ]},
   { category: "Bill Payments", items: [
     { q:"What can I pay for with Bill Payments?", a:"Airtime, Data Bundles, Cable TV, Electricity, Betting wallet funding, Result Checker PINs, and Internet (Smile and Spectranet). Find them under More → Bill Payments, or tap the Airtime, Data, or Electricity tiles on Home." },
-    { q:"How do I fund my Bill Wallet?", a:"Tap Fund Wallet on Home or inside Bill Payments and follow the steps. You can also transfer from any bank app to your wallet's account details for instant funding. Deposit fees depend on how you fund it — a dedicated account gives you lower deposit fees." },
-    { q:"Where can I see my past bill payments?", a:"Open More → Bill Payments → Transaction History. It lists every purchase with its status, so you can see what went through and what's still pending." },
+    { q:"How do I fund my Bill Wallet?", a:"Tap Fund Wallet on Home or Add Money inside Bill Payments. There are two ways, both through Squad: a free Dedicated Account (transfer from any bank app to your own account number) and Pay Now, which needs no verification at all — you can use it straight away with a card or bank transfer. Funding is instant either way, and every funding shows in your Transaction History." },
+    { q:"How do I hide my Bill Wallet balance?", a:"Tap the eye icon on the Bill Wallet card (on Bill Payments or on Home). The balance shows as •••••• until you tap it again. It's separate from the other cards on Home." },
+    { q:"Where can I see my past bill payments?", a:"Open More → Bill Payments → Transaction History (or tap History on the Wallet card). It lists every purchase and every wallet funding, newest first, each with its status (Successful, Pending or Failed)." },
+    { q:"How do I filter my Transaction History?", a:"Use the All Categories and All Status boxes at the top to narrow the list — for example Airtime only, or Failed only — and pick a month (or All time) just below them. The In and Out totals update to match what you've filtered: In is money that came into your wallet, Out is money spent on successful purchases." },
+    { q:"How do I see the full details or share a receipt?", a:"Tap any transaction in the history to open its details — amount, status, reference, and your electricity token or PINs when there are any. Tap Share Receipt and your phone's share sheet opens straight away with the receipt image attached, so you can send it on WhatsApp, email or any other app." },
+    { q:"What does a Pending transaction mean?", a:"The provider hasn't confirmed it yet. Open it and tap Check status — the status updates to Successful or Failed. If it stays pending for long, contact support." },
     { q:"Who is allowed to make bill payments?", a:"The Owner always can. Staff need the Bill Payments permission, which the Owner turns on for them under More → Staff. Viewers can't make bill payments." },
   ]},
   { category: "Plans & Billing", items: [

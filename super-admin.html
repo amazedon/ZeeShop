@@ -498,6 +498,21 @@
         <div class="subtle" id="df-save-status" style="margin-top:8px;"></div>
         </div></div></div>
       </div>
+
+      <div class="acc-item" id="test-receipts-card">
+        <button class="acc-head" type="button">
+          <span class="acc-ico">✉️</span>
+          <span class="acc-main"><span class="acc-title">Test receipt emails</span><div class="acc-sub">Send sample receipts to check the templates</div></span>
+          <span class="acc-chev">⌄</span>
+        </button>
+        <div class="acc-body"><div class="acc-inner"><div class="acc-pad">
+        <p class="subtle">Sends three sample receipts (electricity, airtime and result-checker PIN) to the address below, using the real Termii templates. Nothing is bought and no wallet is touched.</p>
+        <div class="field"><label for="tr-to">Send to</label>
+          <input id="tr-to" type="email" inputmode="email" placeholder="you@example.com"></div>
+        <button class="btn btn-primary btn-sm" id="tr-send" style="margin-top:10px;">Send 3 test receipts</button>
+        <div id="tr-status" style="margin-top:10px;font-size:13px;line-height:1.6;"></div>
+        </div></div></div>
+      </div>
     </div>
 
     <div id="content-section" class="tab-panel">
@@ -1417,6 +1432,29 @@
         st.style.color='var(--green)'; st.textContent='Saved ✅ — applies to the next funding payment.';
       }catch(e){ st.style.color='var(--red)'; st.textContent='Error: ' + e.message; }
       save.disabled = false;
+    });
+  })();
+
+
+  // ---------- Test receipt emails ----------
+  (function wireTestReceipts(){
+    const el = document.getElementById('test-receipts-card'); if(!el) return;
+    el.querySelector('.acc-head').addEventListener('click', ()=> el.classList.toggle('open'));
+    const btn = document.getElementById('tr-send'), st = document.getElementById('tr-status');
+    btn.addEventListener('click', async ()=>{
+      const to = document.getElementById('tr-to').value.trim();
+      if(!to){ st.style.color = 'var(--red)'; st.textContent = 'Enter an email address first.'; return; }
+      st.style.color = 'var(--text-dim)'; st.textContent = 'Sending…'; btn.disabled = true;
+      try{
+        const r = await callAdminApi('send_test_receipts', { to });
+        st.innerHTML = (r.results || []).map(x => {
+          const good = x.ok && x.provider === 'termii-template';
+          const colour = good ? 'var(--green)' : (x.ok ? 'var(--amber, #b7791f)' : 'var(--red)');
+          const note = good ? 'sent with the branded template' : (x.ok ? 'sent, but with the OLD layout (' + escapeHtml(String(x.provider)) + ') — check the Termii template ID secret' : 'failed: ' + escapeHtml(String(x.detail || 'unknown error')));
+          return '<div style="color:' + colour + ';">' + escapeHtml(x.label) + ' — ' + note + '</div>';
+        }).join('');
+      }catch(e){ st.style.color = 'var(--red)'; st.textContent = 'Error: ' + e.message; }
+      btn.disabled = false;
     });
   })();
 

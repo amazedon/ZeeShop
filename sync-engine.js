@@ -605,7 +605,7 @@ async function pullSync(){
 
     mergeUpdate('shop_notes', notes, state.shopNotes, r=>({
       id:r.id, businessId:r.business_id, shopId:r.shop_id, authorUserId:r.author_user_id,
-      title:r.title, text:r.text||'', createdAt:r.created_at, updatedAt:r.updated_at, isHandover:!!r.is_handover
+      title:r.title, text:r.text||'', createdAt:r.created_at, updatedAt:r.updated_at, isHandover:!!r.is_handover, isPrivate:!!r.is_private
     }));
 
     mergeUpdate('audit_log', auditRows, state.auditLog, r=>({

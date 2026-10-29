@@ -10835,9 +10835,34 @@ function bpBenSave(type, value, label){
   const list = bpBenList(type).filter(b=>bpBenNorm(type, b.value) !== value);
   list.unshift({ value, label: label || (prev && prev.label) || '' });     // most recently used first
   try{ localStorage.setItem(bpBenKey(type), JSON.stringify(list.slice(0, 30))); }catch(_e){}
+  // Also keep it on the server, so it is still there after logout / on another phone.
+  callBigisub('ben_save', { type, value, label: label || (prev && prev.label) || '' }).catch(()=>{});
+}
+const BP_BEN_TYPES = ['phone','card','meter','bet','smile','spectranet'];
+let bpBenSynced = false;
+// Pull the saved numbers from the server (once per session) and merge them with this phone's list.
+async function bpBenSync(){
+  if(bpBenSynced || !navigator.onLine) return;
+  bpBenSynced = true;
+  try{
+    const r = await callBigisub('ben_list', {});
+    const items = (r && r.items) || [];
+    let changed = false;
+    BP_BEN_TYPES.forEach(t=>{
+      const server = items.filter(i=>i.type===t).map(i=>({ value:i.value, label:i.label||'' }));
+      const local = bpBenList(t);
+      const seen = new Set(server.map(b=>bpBenNorm(t, b.value)));
+      const localOnly = local.filter(b=>!seen.has(bpBenNorm(t, b.value)));
+      const merged = server.concat(localOnly).slice(0, 30);
+      if(JSON.stringify(merged) !== JSON.stringify(local)){ try{ localStorage.setItem(bpBenKey(t), JSON.stringify(merged)); changed = true; }catch(_e){} }
+      localOnly.forEach(b=>callBigisub('ben_save', { type:t, value:b.value, label:b.label }).catch(()=>{}));   // numbers saved before the server copy existed
+    });
+    if(changed && route==='billpayments') refreshMain();
+  }catch(_e){ bpBenSynced = false; }
 }
 function bpBenRemove(type, value){
   try{ localStorage.setItem(bpBenKey(type), JSON.stringify(bpBenList(type).filter(b=>b.value !== value))); }catch(_e){}
+  callBigisub('ben_remove', { type, value }).catch(()=>{});
 }
 const BP_ICON_SAVED = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`;
 // Every number / code used in a successful purchase is saved automatically; the latest few show here as one-tap chips.
@@ -10892,12 +10917,12 @@ function bpAttachSuggest(type, inputId, onPick){
 }
 function bpBindBen(type, inputId, onPick){
   bpAttachSuggest(type, inputId, onPick);
+  bpBenSync();
   // Phone fields start with the most recently used number, so nobody has to retype it.
   const first = document.getElementById(inputId);
   if(type==='phone' && first && !first.value && billForm && !billForm._phonePrefilled){
-    billForm._phonePrefilled = true;
     const last = bpBenList('phone')[0];
-    if(last){ first.value = last.value; first.dispatchEvent(new Event('input', { bubbles:true })); if(onPick) onPick(last.value); }
+    if(last){ billForm._phonePrefilled = true; first.value = last.value; first.dispatchEvent(new Event('input', { bubbles:true })); if(onPick) onPick(last.value); }
   }
   document.querySelectorAll(`[data-ben-chip="${type}"]`).forEach(btn=>btn.addEventListener('click', ()=>{
     const input = document.getElementById(inputId);

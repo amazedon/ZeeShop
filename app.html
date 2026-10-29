@@ -8452,12 +8452,34 @@ function fmtNoteStamp(iso){
   const time = d.toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit', hour12:true });
   return `${date} · ${time}`;
 }
+// ---- Note rules ----
+// Private note (isPrivate): its writer can edit/delete any time; only the writer and the Boss can see it.
+// Shared note (handover, or any note from before this rule): its writer can edit/delete only for the first 7 days.
+// The Boss can never edit someone else's note, and can delete any note only once it is 30 days old.
+const NOTE_AUTHOR_DAYS = 7, NOTE_BOSS_DAYS = 30;
+function noteDate(n, plusDays){ const d = new Date(Date.parse(n.createdAt||'') + plusDays*86400000); return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-GB', { day:'numeric', month:'long', year:'numeric' }); }
+function noteRights(n){
+  const age = Date.parse(n.createdAt||'') ? (Date.now() - Date.parse(n.createdAt)) / 86400000 : 0;
+  const mine = n.authorUserId === state.sessionUserId, boss = isMaster(), priv = !!n.isPrivate;
+  const authorOpen = mine && (priv || age < NOTE_AUTHOR_DAYS);
+  const bossOpen = boss && age >= NOTE_BOSS_DAYS;
+  return {
+    mine, boss, priv, age,
+    canEdit: authorOpen,
+    canDelete: authorOpen || bossOpen,
+    editMsg: !mine ? 'Only the person who wrote this note can edit it.' : `This note is shared, so it can't be edited after ${NOTE_AUTHOR_DAYS} days.`,
+    deleteMsg: mine && !priv && !bossOpen ? `This note is shared, so it can't be deleted after ${NOTE_AUTHOR_DAYS} days.${boss ? ' As Boss you can delete it on ' + noteDate(n, NOTE_BOSS_DAYS) + '.' : ''}`
+      : boss ? `This note can't be deleted until it is ${NOTE_BOSS_DAYS} days old — on ${noteDate(n, NOTE_BOSS_DAYS)}.`
+      : 'Only the person who wrote this note can delete it.'
+  };
+}
+function noteVisibleToMe(n){ return !n.isPrivate || n.authorUserId === state.sessionUserId || isMaster(); }
 function noteWasEdited(n){
   const c = Date.parse(n.createdAt || ''), u = Date.parse(n.updatedAt || '');
   return !!(c && u && u - c > 60000);   // more than a minute after it was written
 }
 function screenNotes(){
-  const notes = state.shopNotes.filter(n=>n.shopId===state.currentShopId)
+  const notes = state.shopNotes.filter(n=>n.shopId===state.currentShopId && noteVisibleToMe(n))
     .sort((a,b)=>new Date(b.updatedAt||b.createdAt) - new Date(a.updatedAt||a.createdAt));
   return `
     ${subHeader("Notes")}
@@ -8468,7 +8490,7 @@ function screenNotes(){
       return `<div class="card" data-open-note="${n.id}" role="button" tabindex="0" style="cursor:pointer;">
         <div class="t1" style="font-size:15px;margin-bottom:6px;">${escapeHtml(n.title)}</div>
         <p style="white-space:pre-wrap;font-size:13.5px;color:var(--text-dim);margin-bottom:10px;line-height:1.45;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;">${escapeHtml(n.text)}</p>
-        <div class="subtle" style="font-size:11.5px;">${escapeHtml(author?author.firstName:'Unknown')} · ${escapeHtml(fmtNoteStamp(n.createdAt))}</div>
+        <div class="subtle" style="font-size:11.5px;">${escapeHtml(author?author.firstName:'Unknown')} · ${escapeHtml(fmtNoteStamp(n.createdAt))}${n.isPrivate ? ' · 🔒 Private' : ''}</div>
       </div>`;
     }).join('')}
   `;
@@ -8489,7 +8511,9 @@ function screenNoteView(){
   const n = state.shopNotes.find(x=>x.id===activeNoteId);
   if(!n){ route = 'notes'; return screenNotes(); }
   const author = state.users.find(u=>u.id===n.authorUserId);
-  const canEdit = isMaster() || n.authorUserId===state.sessionUserId;
+  const rt = noteRights(n);
+  const canEdit = rt.mine;                 // only the writer ever edits
+  const canDel = rt.mine || rt.boss;        // the Delete button is shown to the writer and the Boss; the rules decide when it works
   const dots = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="12" cy="12" r="2.2"/><circle cx="12" cy="19" r="2.2"/></svg>`;
   const sq = 'background:var(--paper-dim);border:none;width:44px;height:44px;border-radius:12px;color:var(--ink-text);display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0;cursor:pointer;';
   return `
@@ -8499,9 +8523,9 @@ function screenNoteView(){
       <button id="nv-menu-btn" aria-label="More options" aria-haspopup="menu" aria-expanded="${noteMenuOpen}" style="${sq}">${dots}</button>
       ${noteMenuOpen ? `
       <div id="nv-menu" role="menu" class="card" style="position:absolute;right:0;top:54px;min-width:190px;padding:6px;margin:0;z-index:5;">
-        ${canEdit ? `<button role="menuitem" id="nv-edit" class="nv-item">✏️ Edit</button>` : ''}
+        ${canEdit ? `<button role="menuitem" id="nv-edit" class="nv-item"${rt.canEdit?'':' style="opacity:.55;"'}>✏️ Edit${rt.canEdit?'':' 🔒'}</button>` : ''}
         <button role="menuitem" id="nv-share" class="nv-item">${ICON_EXPORT} Share</button>
-        ${canEdit ? `<button role="menuitem" id="nv-delete" class="nv-item" style="color:var(--red);">🗑️ Delete</button>` : ''}
+        ${canDel ? `<button role="menuitem" id="nv-delete" class="nv-item" style="color:var(--red);${rt.canDelete?'':'opacity:.55;'}">🗑️ Delete${rt.canDelete?'':' 🔒'}</button>` : ''}
       </div>` : ''}
     </div>
     <div class="card">
@@ -8511,6 +8535,9 @@ function screenNoteView(){
         <div>Added ${escapeHtml(fmtNoteStamp(n.createdAt))}</div>
         ${noteWasEdited(n) ? `<div>Edited ${escapeHtml(fmtNoteStamp(n.updatedAt))}</div>` : ''}
         ${n.isHandover ? `<div>Handover note — shown to the next person who logs in</div>` : ''}
+        ${n.isPrivate ? `<div>🔒 Private — only ${rt.mine ? 'you and the Boss' : 'the writer and the Boss'} can see this</div>` : ''}
+        ${rt.mine && !n.isPrivate ? `<div>${rt.canEdit ? `You can edit or delete this note until ${escapeHtml(noteDate(n, NOTE_AUTHOR_DAYS))}` : 'Locked — shared notes can’t be edited or deleted after 7 days'}</div>` : ''}
+        ${rt.boss && !rt.canDelete ? `<div>The Boss can delete this note from ${escapeHtml(noteDate(n, NOTE_BOSS_DAYS))}</div>` : ''}
       </div>
       <p style="white-space:pre-wrap;font-size:16px;line-height:1.6;margin:0;word-break:break-word;">${escapeHtml(n.text) || '<span class="subtle">No details.</span>'}</p>
     </div>`;
@@ -8528,7 +8555,12 @@ function bindNoteViewEvents(){
     document.addEventListener('click', window._nvOutside);
   }
   const ed = document.getElementById('nv-edit');
-  if(ed) ed.addEventListener('click', ()=>{ noteMenuOpen = false; render(); openEditNoteModal(id); });
+  if(ed) ed.addEventListener('click', ()=>{
+    noteMenuOpen = false; render();
+    const n = state.shopNotes.find(x=>x.id===id);
+    if(n && !noteRights(n).canEdit){ toast(noteRights(n).editMsg); return; }
+    openEditNoteModal(id);
+  });
   const sh = document.getElementById('nv-share');
   if(sh) sh.addEventListener('click', ()=>{ noteMenuOpen = false; render(); openShareNoteModal(id); });
   const del = document.getElementById('nv-delete');
@@ -8575,11 +8607,17 @@ function openAddNoteModal(prefillHandover){
     <div class="sheet-head"><h3>New Note</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <div class="field"><label>Title</label><input id="note-title" placeholder="e.g. Supplier contact, Restock reminder" value="${prefillHandover?'Handover note':''}"></div>
     <div class="field"><label>Details</label><textarea id="note-text" rows="6" placeholder="Write anything worth remembering..."></textarea></div>
-    <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-bottom:16px;">
-      <input type="checkbox" id="note-handover" ${prefillHandover?'checked':''}> ${ICON_PIN} Show this to the next person who logs in (handover note)
+    <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-bottom:6px;">
+      <input type="checkbox" id="note-handover" ${prefillHandover===true?'checked':''}> ${ICON_PIN} Show this to the next person who logs in (handover note)
     </label>
+    <p id="note-vis-hint" class="subtle" style="font-size:12.5px;margin:0 0 16px;"></p>
     <button class="btn btn-primary" id="save-note-btn">Save Note</button>
   `);
+  const hc = document.getElementById('note-handover'), hint = document.getElementById('note-vis-hint');
+  const syncHint = ()=>{ hint.innerHTML = hc.checked
+    ? '⚠️ <b>Everyone will see this note.</b> After 7 days you will not be able to edit or delete it.'
+    : '🔒 <b>Private</b> — only you and the Boss can see this note. You can edit or delete it any time.'; };
+  hc.addEventListener('change', syncHint); syncHint();
   document.getElementById('save-note-btn').addEventListener('click', ()=>saveNoteFromForm(null));
 }
 function openEditNoteModal(id){
@@ -8588,9 +8626,11 @@ function openEditNoteModal(id){
     <div class="sheet-head"><h3>Edit Note</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <div class="field"><label>Title</label><input id="note-title" value="${escAttr(n.title)}"></div>
     <div class="field"><label>Details</label><textarea id="note-text" rows="6">${escapeHtml(n.text)}</textarea></div>
-    <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-bottom:16px;">
+    ${n.isPrivate ? `<p class="subtle" style="font-size:12.5px;margin:0 0 16px;">🔒 Private — only you and the Boss can see this note.</p>` : `
+    <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-bottom:6px;">
       <input type="checkbox" id="note-handover" ${n.isHandover?'checked':''}> ${ICON_PIN} Show this to the next person who logs in (handover note)
     </label>
+    <p class="subtle" style="font-size:12.5px;margin:0 0 16px;">This note is shared — you can edit it until ${escapeHtml(noteDate(n, NOTE_AUTHOR_DAYS))}, after that it is locked.</p>`}
     <button class="btn btn-primary" id="save-note-btn">Save Changes</button>
   `);
   document.getElementById('save-note-btn').addEventListener('click', ()=>saveNoteFromForm(id));
@@ -8598,21 +8638,26 @@ function openEditNoteModal(id){
 function saveNoteFromForm(existingId){
   const title = document.getElementById('note-title').value.trim();
   const text = document.getElementById('note-text').value.trim();
-  const isHandover = document.getElementById('note-handover').checked;
+  const hcEl = document.getElementById('note-handover');
   if(!title){ toast('Please give this note a title.'); return; }
   if(existingId){
     const n = state.shopNotes.find(x=>x.id===existingId);
+    if(!n || !noteRights(n).canEdit){ toast(n ? noteRights(n).editMsg : 'Note not found.'); closeSheet(); render(); return; }
+    const isHandover = hcEl ? hcEl.checked : !!n.isHandover;
     n.title = title; n.text = text; n.isHandover = isHandover; n.updatedAt = new Date().toISOString();
     enqueueSync('shop_notes','update', { id: n.id, title: n.title, text: n.text, is_handover: n.isHandover, updated_at: n.updatedAt });
     logAudit('note_edited', 'Edited note: '+title);
     toast('Note updated ✅');
   } else {
+    const isHandover = !!(hcEl && hcEl.checked);
+    const isPrivate = !isHandover;   // not shared with the next person = private
+    if(!isPrivate && !confirm("Everyone in the shop will see this note.\n\nAfter 7 days you will NOT be able to edit or delete it.\n\nSave it?")) return;
     const noteId = uid('note');
     state.shopNotes.push({ id: noteId, businessId: business().id, shopId: state.currentShopId,
-      authorUserId: state.sessionUserId, title, text, isHandover, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      authorUserId: state.sessionUserId, title, text, isHandover, isPrivate, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
     enqueueSync('shop_notes','insert', {
       id: noteId, business_id: business().id, shop_id: state.currentShopId,
-      author_user_id: state.sessionUserId, title, text, is_handover: isHandover
+      author_user_id: state.sessionUserId, title, text, is_handover: isHandover, is_private: isPrivate
     });
     logAudit('note_added', 'Added note: '+title);
     toast('Note saved ✅');
@@ -8620,6 +8665,8 @@ function saveNoteFromForm(existingId){
   closeSheet(); render();
 }
 function deleteNote(id){
+  const nn = state.shopNotes.find(x=>x.id===id);
+  if(nn && !noteRights(nn).canDelete){ toast(noteRights(nn).deleteMsg); return false; }
   if(!confirm('Delete this note? This cannot be undone.')) return false;
   state.shopNotes = state.shopNotes.filter(x=>x.id!==id);
   enqueueSync('shop_notes','delete', { id });
@@ -10600,6 +10647,7 @@ function bpStopPsaPolling(){
   .bps-token small{display:block;font-size:11.5px;letter-spacing:.08em;color:#9CB5D8;margin-bottom:6px;}
   .bps-token .tk{font-size:20px;font-weight:900;letter-spacing:.06em;word-break:break-all;}
   .bps-thanks{color:#8280AA;font-size:14px;margin:18px 0 4px;}
+  .bps-rcard{background:#fff;border-radius:16px;padding:10px;margin:2px 0 12px;display:flex;justify-content:center;}
   .bps-actions{display:flex;gap:10px;padding:12px 22px calc(16px + env(safe-area-inset-bottom,0px));border-top:1px solid #2D2B52;flex-shrink:0;}
   .bps-actions button{flex:1;padding:17px;border-radius:16px;font-size:17px;font-weight:800;cursor:pointer;font-family:inherit;border:1.5px solid #34325A;background:#27254A;color:#fff;}
   .bps-actions button.main{background:linear-gradient(135deg,#F7A108,#D97706);color:#1b1206;border:none;}
@@ -10837,44 +10885,57 @@ function bpSuccessInfo(r, label, recipientLabel, recipient, fallbackAmount, type
   };
 }
 function bpShowSuccess(info){ billSuccess = info; billScreen = 'success'; refreshMain(); }
+let bpSuccTx = null;   // the transaction object the success receipt is drawn from
+function bpSuccessTx(s){
+  const pins = s.pins || null;
+  return {
+    id: 'success-' + (s.tid || s.ref || Date.now()), service_label: s.label || s.typeLabel || 'Bill payment', recipient: s.recipient || '',
+    sale_price: Number(s.amount || 0), status: s.status === 'pending' ? 'pending' : (s.status || 'success'),
+    created_at: (s.at instanceof Date ? s.at : new Date(s.at || Date.now())).toISOString(),
+    reference: s.ref || '', token: s.token || '', units: s.units || '', pins,
+    bigisub_tranx_id: s.tid || '',
+    bigisub_response: { data: { transaction_id: s.tid || '', reference: s.ref || '', token: s.token || '', units: s.units || '', pins } }
+  };
+}
 function screenBillSuccess(){
   const s = billSuccess || {};
   const wait = s.status === 'pending';
-  const copy = (v)=> v ? `<button class="bps-copy" data-copy="${escAttr(v)}" aria-label="Copy">⧉</button>` : '';
-  const row = (k, v, c)=> v ? `<div class="bps-drow"><span>${k}</span><b>${escapeHtml(String(v))}</b>${c?copy(v):''}</div>` : '';
-  const pins = Array.isArray(s.pins) ? s.pins : (s.pins ? [s.pins] : []);
   return `<div class="bps-overlay"><div class="bps-sheet">
     <div class="bps-receipt">
-      <div class="bps-brand"><i>Z</i>ZeeShop</div>
-      <div class="bps-check ${wait?'wait':'ok'}">${wait?'…':'✓'}</div>
-      <div class="bps-state ${wait?'wait':'ok'}">${wait?'Processing':'Successful'}</div>
-      <div class="bps-bigamt">${bpN(s.amount)}</div>
-      <div class="bps-what">${escapeHtml(s.label||'')}</div>
-      ${s.token ? `<div class="bps-token"><small>TOKEN</small><div style="display:flex;align-items:center;gap:10px;justify-content:space-between;"><div class="tk">${escapeHtml(s.token)}</div>${copy(s.token)}</div>${s.units?`<div style="margin-top:6px;color:#9CB5D8;font-size:13px;">${escapeHtml(s.units)}</div>`:''}</div>` : ''}
-      ${pins.length ? `<div class="bps-token"><small>${pins.length>1?'PINS':'PIN'}</small>${pins.map(p=>`<div style="display:flex;align-items:center;gap:10px;justify-content:space-between;margin-top:4px;"><div class="tk">${escapeHtml(String(p))}</div>${copy(String(p))}</div>`).join('')}</div>` : ''}
-      <div class="bps-dcard">
-        ${row('Type', s.typeLabel)}
-        ${row('Transaction ID', s.tid, true)}
-        ${row('Reference', s.ref, true)}
-        ${row(s.recipientLabel||'Recipient', s.recipient, true)}
-        ${row('Amount Paid', bpN(s.amount))}
-        ${row('Date & Time', s.at ? new Date(s.at).toLocaleString('en-NG',{dateStyle:'medium',timeStyle:'short'}) : '')}
-      </div>
-      <div class="bps-resp"><small>RESPONSE</small>${escapeHtml((wait ? 'Your request is being processed. Check History in a moment for the final result.' : (s.message || 'Transaction successful')).toString().toUpperCase())}</div>
-      <div class="bps-thanks">Thank you for using ZeeShop</div>
+      <div class="bps-rcard"><canvas id="bps-canvas" style="max-width:100%;height:auto;display:block;"></canvas></div>
+      ${wait ? `<div class="bps-resp"><small>PROCESSING</small>Your request is being processed. Open History in a moment for the final result.</div>` : ''}
     </div>
-    <div class="bps-actions"><button id="bp-succ-hist">History</button><button class="main" id="bp-succ-done">Done</button></div>
+    <div class="bps-actions"><button class="main" id="bp-succ-done">Done</button><button id="bp-succ-share">Share</button></div>
   </div></div>`;
 }
 function bindBillSuccessEvents(){
-  document.querySelectorAll('[data-copy]').forEach(b=>b.addEventListener('click', ()=>{
-    const v = b.dataset.copy;
-    try{ navigator.clipboard.writeText(v); toast('Copied'); }catch(_e){ toast(v); }
-  }));
+  const s = billSuccess || {};
+  bpSuccTx = bpSuccessTx(s);
+  const canvas = document.getElementById('bps-canvas');
+  if(canvas) drawBillReceiptToCanvas(canvas, bpSuccTx).catch(e=>console.warn('Receipt draw failed:', e));
+  // Quietly swap in the saved history record for this purchase, so this receipt is exactly the one History shows.
+  (async ()=>{
+    try{
+      const r = await callBigisub('list_transactions', {});
+      const list = (r && r.transactions) || [];
+      const tid = String(s.tid || '');
+      const rec = (tid && list.find(x=>String(x.bigisub_tranx_id||'')===tid)) ||
+        list.find(x=>x.recipient===s.recipient && Number(x.sale_price)===Number(s.amount) && Math.abs(new Date(x.created_at) - new Date(bpSuccTx.created_at)) < 5*60*1000);
+      if(rec && billScreen==='success' && billSuccess===s){
+        billHistory = list; billTopups = (r && r.topups) || billTopups;
+        bpSuccTx = rec;
+        const c2 = document.getElementById('bps-canvas'); if(c2) await drawBillReceiptToCanvas(c2, rec);
+      }
+    }catch(_e){ /* keep the receipt drawn from the purchase result */ }
+  })();
   const done = document.getElementById('bp-succ-done');
   if(done) done.addEventListener('click', ()=>{ billScreen = 'hub'; billResetForm(); refreshMain(); });
-  const hist = document.getElementById('bp-succ-hist');
-  if(hist) hist.addEventListener('click', ()=>{ billScreen = 'history'; bphFilter = { cat:'all', status:'all', from:'', to:'' }; billHistory = []; billTopups = []; billHistoryLoaded = false; billHistoryError = null; billResetForm(); refreshMain(); });
+  const sh = document.getElementById('bp-succ-share');
+  if(sh) sh.addEventListener('click', async ()=>{
+    sh.disabled = true;
+    try{ await shareBillReceiptDirect(bpSuccTx || bpSuccessTx(s)); }catch(e){ toast('Could not share the receipt.'); }
+    sh.disabled = false;
+  });
 }
 
 /* ---------------- Plan helpers (live Bigisub data) ---------------- */
@@ -11550,6 +11611,41 @@ function bpFundingRowHtml(t){
     </div>`;
 }
 /* ---------------- MANAGE PRICES (owner only) ---------------- */
+/* ---- Money inputs: show 20,000 while typing; the app still reads plain 20000 ---- */
+(function(){
+  const NATIVE = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+  const MONEY = /(price|cost|amount|paid|salary|discount|counted|(^|-)rate$)/i;
+  const fmt = (v)=>{
+    v = String(v==null?'':v).replace(/[^0-9.]/g,'');
+    const i = v.indexOf('.');
+    let int = i<0 ? v : v.slice(0,i), dec = i<0 ? null : v.slice(i+1).replace(/\./g,'');
+    int = int.replace(/^0+(?=\d)/, '').replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return dec===null ? int : int + '.' + dec;
+  };
+  function enhance(el){
+    if(el._money) return; el._money = true;
+    try{ el.type = 'text'; }catch(_e){}
+    el.setAttribute('inputmode','decimal'); el.setAttribute('autocomplete','off');
+    Object.defineProperty(el, 'value', { configurable:true,
+      get(){ return NATIVE.get.call(el).replace(/,/g,''); },
+      set(v){ NATIVE.set.call(el, fmt(v)); } });
+    NATIVE.set.call(el, fmt(NATIVE.get.call(el)));
+    el.addEventListener('input', ()=>{
+      const raw = NATIVE.get.call(el), pos = el.selectionStart == null ? raw.length : el.selectionStart;
+      const digitsBefore = raw.slice(0,pos).replace(/,/g,'').length, f = fmt(raw);
+      if(f !== raw){
+        NATIVE.set.call(el, f);
+        let c = 0, k = 0; for(; k<f.length && c<digitsBefore; k++){ if(f[k] !== ',') c++; }
+        try{ el.setSelectionRange(k,k); }catch(_e){}
+      }
+    });
+  }
+  function scan(root){
+    (root.querySelectorAll ? root.querySelectorAll('input[type="number"]') : []).forEach(el=>{ if(el.id && MONEY.test(el.id) && !/qty|reorder|pct|guest/i.test(el.id)) enhance(el); });
+  }
+  const start = ()=>{ scan(document); new MutationObserver(ms=>{ ms.forEach(m=>m.addedNodes.forEach(n=>{ if(n.nodeType===1){ if(n.matches && n.matches('input[type="number"]') && n.id && MONEY.test(n.id) && !/qty|reorder|pct|guest/i.test(n.id)) enhance(n); scan(n); } })); }).observe(document.body, { childList:true, subtree:true }); };
+  if(document.body) start(); else document.addEventListener('DOMContentLoaded', start);
+})();
 /* ---- Transaction History: OPay-style list. Tap a row for the full details + Share Receipt. ---- */
 (function(){
   if(document.getElementById('bph-style')) return;
@@ -11828,7 +11924,7 @@ function layoutAndDrawBillReceipt(tx, shop, biz, ctx, logoImg){
   if(units) row('Units', units);
   row('Payment method', 'ZeeShop Bill Wallet');
   y += 6; LINE(true); y += 22;
-  const ref = tx.reference || tx.id;
+  const ref = String(d.reference || tx.reference || tx.id || '');
   row('Reference', ref, { light: true, chars: 40 });
   if(providerTid) row('Transaction ID', providerTid, { light: true, chars: 40 });
   y += 4; LINE(true); y += 24;
@@ -12316,6 +12412,7 @@ const FAQ_GROUPS = [
     { q:"How do I close out my day?", a:"Go to More → Close Day (or Close My Shift for staff). It totals the day's sales and cash so you can confirm everything matches before locking it in. You can also leave a note for whoever opens next — handy for handing off between shifts." },
     { q:"What is the Audit Log?", a:"A running history of key actions across your business — restocks, payments, staff changes, check-ins — visible to the Master account under More → Audit Log." },
     { q:"What are Notes for?", a:"A place to jot down anything worth remembering for your shop — a supplier's contact, a reminder, anything. Go to More → Notes. Marking a note as a handover note also surfaces it as a banner on the Home screen for the next person who logs in, until they dismiss it." },
+    { q:"Who can see, edit and delete my notes?", a:"A new note is Private by default — only you and the Boss can see it, and you can edit or delete it any time. If you tick \"Show this to the next person who logs in\" the note becomes shared: you get a warning first, and after 7 days you can no longer edit or delete it. Only the person who wrote a note can edit it. The Boss can delete any note, but only once it is 30 days old — until then the Delete button shows a lock and the date it unlocks." },
   ]},
   { category: "Home Screen", items: [
     { q:"What's the \"Today's Snapshot\" section on my Home screen?", a:"A horizontally-scrollable row of today's key numbers — Wallet Balance, Sales Today, Today's Profit (or Cash In for staff), Expenses Today, and Credit Given Today — calculated entirely from your own device. Expenses and Credit Given are only shown to the Owner." },

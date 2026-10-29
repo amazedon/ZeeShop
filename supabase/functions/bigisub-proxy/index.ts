@@ -642,6 +642,33 @@ Deno.serve(async (req: Request) => {
       return json({ customer_name: extractCustomerName(data), upstream_message: extractUpstreamMessage(data), raw: data }, 200);
     }
 
+    // ---- Saved numbers / codes (beneficiaries): kept per business on the server so they survive logout and follow the person to any phone.
+    if (action === "ben_list") {
+      const { data, error } = await admin.from("bill_beneficiaries").select("type, value, label, last_used")
+        .eq("business_id", businessId).order("last_used", { ascending: false }).limit(300);
+      if (error) return json({ error: error.message }, 500);
+      return json({ items: data || [] }, 200);
+    }
+    if (action === "ben_save" || action === "ben_remove") {
+      const type = String(params.type || "").trim();
+      const value = String(params.value || "").trim();
+      if (!["phone", "card", "meter", "bet", "smile", "spectranet"].includes(type) || !value || value.length > 64) {
+        return json({ error: "Invalid saved number." }, 400);
+      }
+      if (action === "ben_remove") {
+        const { error } = await admin.from("bill_beneficiaries").delete().eq("business_id", businessId).eq("type", type).eq("value", value);
+        if (error) return json({ error: error.message }, 500);
+        return json({ ok: true }, 200);
+      }
+      const label = String(params.label || "").trim().slice(0, 120);
+      const { error } = await admin.from("bill_beneficiaries").upsert(
+        { business_id: businessId, type, value, label, last_used: new Date().toISOString() },
+        { onConflict: "business_id,type,value" },
+      );
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true }, 200);
+    }
+
     if (action === "list_transactions") {
       const { data: txs, error } = await admin
         .from("bill_transactions")

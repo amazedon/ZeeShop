@@ -4293,7 +4293,7 @@ function notifRelTime(iso){
 function messagesRowHtml(){
   const n = annUnreadCount();
   return `<div class="nz-row" data-open-inbox role="button" tabindex="0">
-    <div class="nz-tile">📣</div>
+    <div class="nz-tile">${ICON_BELL.replace('width="18" height="18"','width="22" height="22"')}</div>
     <div class="nz-main">
       <div class="nz-t1">Messages from ZeeShop <i class="nz-dot nz-dot-inline ${n?'on':''}" data-notif-dot></i></div>
       <div class="nz-t2" data-inbox-sub>${annList.length ? escapeHtml(annList[0].title) : 'No messages yet'}</div>
@@ -10588,6 +10588,9 @@ function bpStopPsaPolling(){
   .bps-input .bps-ic svg{width:22px;height:22px;}
   .bps-input input,.bps-input select{flex:1;min-width:0;background:none;border:none;outline:none;color:#fff;font-size:16.5px;padding:16px 0;font-family:inherit;}
   .bps-input input::placeholder{color:#6F6D96;}
+  .bps-chips{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 0;}
+  .bps-chip{background:#27254A;border:1.5px solid #34325A;color:#fff;border-radius:999px;padding:9px 15px;font:inherit;font-size:14.5px;font-weight:700;cursor:pointer;display:inline-flex;flex-direction:column;align-items:flex-start;line-height:1.2;}
+  .bps-chip small{font-size:11px;font-weight:600;color:#9C9AC0;}
   .bps-link{display:inline-flex;align-items:center;gap:8px;margin-top:12px;color:#F59E0B;font-size:15.5px;font-weight:700;text-decoration:none;}
   .bps-status{font-size:13.5px;margin-top:8px;min-height:18px;}
   .bps-ok{color:#35D08A;font-weight:700;}
@@ -10797,7 +10800,13 @@ function bpBenSave(type, value, label){
 function bpBenRemove(type, value){
   try{ localStorage.setItem(bpBenKey(type), JSON.stringify(bpBenList(type).filter(b=>b.value !== value))); }catch(_e){}
 }
-function bpBenLink(type){ return `<a href="#" class="bps-link" data-ben="${type}">🔖 ${type === 'phone' ? 'Saved numbers' : 'Pick from Beneficiary'}</a>`; }
+const BP_ICON_SAVED = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`;
+// Every number / code used in a successful purchase is saved automatically; the latest few show here as one-tap chips.
+function bpBenLink(type){
+  const recent = bpBenList(type).slice(0, 4);
+  const chips = recent.length ? `<div class="bps-chips">${recent.map(b=>`<button type="button" class="bps-chip" data-ben-chip="${type}" data-v="${escAttr(b.value)}">${escapeHtml(b.value)}${b.label?`<small>${escapeHtml(b.label)}</small>`:''}</button>`).join('')}</div>` : '';
+  return `${chips}<a href="#" class="bps-link" data-ben="${type}">${BP_ICON_SAVED} ${type === 'phone' ? 'All saved numbers' : 'All saved'}</a>`;
+}
 // Inline suggestions under the field: tap the empty field to see recent numbers, or start typing (e.g. 081) to see only the
 // saved ones that start with it. Numbers are saved automatically after every successful purchase.
 function bpAttachSuggest(type, inputId, onPick){
@@ -10844,6 +10853,18 @@ function bpAttachSuggest(type, inputId, onPick){
 }
 function bpBindBen(type, inputId, onPick){
   bpAttachSuggest(type, inputId, onPick);
+  // Phone fields start with the most recently used number, so nobody has to retype it.
+  const first = document.getElementById(inputId);
+  if(type==='phone' && first && !first.value && billForm && !billForm._phonePrefilled){
+    billForm._phonePrefilled = true;
+    const last = bpBenList('phone')[0];
+    if(last){ first.value = last.value; first.dispatchEvent(new Event('input', { bubbles:true })); if(onPick) onPick(last.value); }
+  }
+  document.querySelectorAll(`[data-ben-chip="${type}"]`).forEach(btn=>btn.addEventListener('click', ()=>{
+    const input = document.getElementById(inputId);
+    if(input){ input.value = btn.dataset.v; input.dispatchEvent(new Event('input', { bubbles:true })); }
+    if(onPick) onPick(btn.dataset.v);
+  }));
   const link = document.querySelector(`[data-ben="${type}"]`); if(!link) return;
   link.addEventListener('click', (e)=>{
     e.preventDefault();

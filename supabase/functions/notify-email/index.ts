@@ -15,8 +15,11 @@
 //   4. None          — the email is logged as "skipped"; nothing breaks.
 // EMAIL_FROM (e.g. ZeeShop <no-reply@yourdomain.com>) is needed only for 2 and 3.
 //
-// The receipt template's placeholders (exactly these, none else):
-//   customer_name  transaction_id  transaction_date  payment_method  service_type  recipient_phone  amount  status  support_email
+// Template placeholders (each template uses only its own subset; every one is always sent):
+//   general:     service_type recipient_label recipient_phone plan_details customer_name transaction_id transaction_date payment_method amount status
+//   electricity: service_type token disco_name meter_number meter_type units customer_name order_amount payment_amount transaction_id
+//                transaction_time transaction_date customer_phone payment_method reference status customer_address disco_hotline amount
+//   pin:         service_type recipient_phone pins customer_name transaction_id transaction_date payment_method amount status
 //
 // Deploy:  supabase functions deploy notify-email
 // Only callers holding the service-role key are accepted.
@@ -35,10 +38,21 @@ const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") || "";
 const TERMII_API_KEY = Deno.env.get("TERMII_API_KEY") || "";
 const TERMII_BASE_URL = (Deno.env.get("TERMII_BASE_URL") || "https://api.ng.termii.com").replace(/\/+$/, "");
 const TERMII_EMAIL_CONFIG_ID = Deno.env.get("TERMII_EMAIL_CONFIG_ID") || "01a04442-c633-7ad5-8100-1bab0ab67914";
+// Three Termii templates (see the receipt-*.html files). Each is optional: a type whose template ID is not set
+// falls back to the built-in layout below, so nothing breaks while you are still setting Termii up.
+//   TERMII_RECEIPT_TEMPLATE_ID      general receipt  (airtime, data, TV, betting, ISP, wallet funding)
+//   TERMII_ELECTRICITY_TEMPLATE_ID  electricity receipt (shows the meter token)
+//   TERMII_PIN_TEMPLATE_ID          PIN receipt (result checker PINs / vouchers)
 const RECEIPT_TEMPLATE_ID = Deno.env.get("TERMII_RECEIPT_TEMPLATE_ID") || "";
-// Optional: if you add a {{token}}-style placeholder to the template, put its name here and electricity tokens will
-// also use the template. Until then electricity emails use the built-in layout below, because they MUST show the token.
-const RECEIPT_TOKEN_VAR = Deno.env.get("TERMII_RECEIPT_TOKEN_VAR") || "";
+const ELECTRICITY_TEMPLATE_ID = Deno.env.get("TERMII_ELECTRICITY_TEMPLATE_ID") || "";
+const PIN_TEMPLATE_ID = Deno.env.get("TERMII_PIN_TEMPLATE_ID") || "";
+// "ZeeShop Email OTP" template (sign-up, password reset and Bill Payments PIN codes).
+//   TERMII_OTP_TEMPLATE_ID   the template's ID. Leave unset to keep the built-in layout.
+//   TERMII_OTP_VAR           the {{variable}} that holds the code in that template (default "otp")
+//   TERMII_OTP_EXPIRY_VAR    optional: the {{variable}} that shows the minutes (only set it if the template has one)
+const OTP_TEMPLATE_ID = Deno.env.get("TERMII_OTP_TEMPLATE_ID") || "";
+const OTP_VAR = Deno.env.get("TERMII_OTP_VAR") || "otp";
+const OTP_EXPIRY_VAR = Deno.env.get("TERMII_OTP_EXPIRY_VAR") || "";
 
 // ---------- helpers ----------
 const esc = (v: unknown) =>
@@ -126,6 +140,19 @@ type Payload = { type: string; to: string; name?: string; data: Record<string, a
 function build(p: Payload): { subject: string; html: string; text: string } | null {
   const d = p.data || {};
   const g = greet(p.name);
+
+  if (p.type === "otp") {
+    const why = d.purpose === "reset" ? "reset your password" : d.purpose === "bill_pin" ? "reset your Bill Payments PIN" : "verify your email";
+    const mins = Number(d.minutes) || 5;
+    const { html, text } = shell({
+      title: "Your verification code",
+      greeting: "Hello,",
+      intro: `Use this code to ${why}. It expires in ${mins} minutes.`,
+      rows: [["Verification code", String(d.code || ""), { strong: true, mono: true }]],
+      footerNote: "Never share this code with anyone. ZeeShop will never ask you for it.",
+    });
+    return { subject: "Your ZeeShop verification code", html, text };
+  }
 
   if (p.type === "wallet_funding") {
     const byAdmin = !!d.credited_by_admin;
@@ -217,58 +244,118 @@ function build(p: Payload): { subject: string; html: string; text: string } | nu
   return null;
 }
 
+// DisCo customer-care numbers shown on the electricity receipt. Add the ones you know; anything not listed shows "—".
+// (Matched against the provider name your app sends, ignoring upper/lower case.)
+const DISCO_HOTLINES: [RegExp, string][] = [
+  [/eedc|enugu/i, "84700100"],
+  // [/ikeja|ikedc/i, "<number>"],
+  // [/eko|ekedc/i, "<number>"],
+];
+const hotlineFor = (provider: unknown) => {
+  const p = String(provider ?? "");
+  const hit = DISCO_HOTLINES.find(([re]) => re.test(p));
+  return hit ? hit[1] : "";
+};
+
 // ---------- Termii template route ----------
-// Maps one of our four email types onto the receipt template's placeholders. Returns null when this email type
-// should keep using the built-in HTML layout (electricity tokens, until the template has a token placeholder).
-function receiptVars(p: Payload): { subject: string; variables: Record<string, string> } | null {
+// Maps one of our email types onto a Termii template and that template's placeholders. Every placeholder always
+// gets a value (Termii cannot hide a row), so anything missing becomes "—". Returns null when the type has no
+// template configured; the built-in HTML layout is used instead.
+const dash = (v: unknown) => { const t = String(v ?? "").trim(); return t || "—"; };
+
+// 4861 8975 8310 0744 4456 → 4861-8975-8310-0744-4456 when it is a plain number
+const dashToken = (token: unknown) => {
+  const t = String(token ?? "").trim();
+  return /^\d{12,}$/.test(t) ? t.replace(/(\d{4})(?=\d)/g, "$1-") : t;
+};
+
+function receiptVars(p: Payload): { subject: string; templateId: string; variables: Record<string, string> } | null {
   const d = p.data || {};
-  const name = String(p.name || "").trim().split(" ")[0] || "Customer";
+  const name = String(p.name || d.customer_name || "").trim().split(" ")[0] || "Customer";
   const common = {
     customer_name: name,
     transaction_date: when(d.date),
     status: "SUCCESSFUL",
     support_email: SUPPORT_EMAIL || "help@ememart.com",
+    transaction_id: dash(d.reference),
+    payment_method: "ZeeShop Bill Wallet",
+    amount: naira(d.amount),
   };
+
+  if (!RECEIPT_TEMPLATE_ID && !ELECTRICITY_TEMPLATE_ID && !PIN_TEMPLATE_ID) return null;
+
+  if (p.type === "electricity_token") {
+    if (!ELECTRICITY_TEMPLATE_ID || !d.token) return null;   // no token yet → built-in "token not available yet" layout
+    return {
+      subject: `Electricity token: ${d.meter_number || ""} (${naira(d.amount)})`,
+      templateId: ELECTRICITY_TEMPLATE_ID,
+      variables: { ...common, service_type: "Electricity", token: dashToken(d.token), disco_name: dash(d.provider),
+        meter_number: dash(d.meter_number), meter_type: dash(d.meter_type), units: dash(d.units),
+        customer_name: dash(d.customer_name || name),
+        order_amount: naira(d.amount), payment_amount: naira(d.amount),
+        transaction_id: dash(d.tx_id || d.reference), reference: dash(d.reference),
+        transaction_time: when(d.created_at || d.date),
+        customer_phone: dash(d.customer_phone), customer_address: dash(d.customer_address),
+        disco_hotline: dash(hotlineFor(d.provider)) },
+    };
+  }
+
+  if (p.type === "bill_payment") {
+    const pinRow = Array.isArray(d.extra) ? d.extra.find((e: any) => /^PIN/i.test(String(e?.label || ""))) : null;
+    if (pinRow && PIN_TEMPLATE_ID) {
+      return {
+        subject: `${d.service || "PIN purchase"} successful: ${naira(d.amount)}`,
+        templateId: PIN_TEMPLATE_ID,
+        variables: { ...common, service_type: dash(d.service), recipient_phone: dash(d.recipient), pins: String(pinRow.value) },
+      };
+    }
+    if (!RECEIPT_TEMPLATE_ID) return null;
+    return {
+      subject: `${d.service || "Bill payment"} successful: ${naira(d.amount)}`,
+      templateId: RECEIPT_TEMPLATE_ID,
+      variables: { ...common, service_type: dash(d.service), recipient_label: dash(d.recipient_label || "Account / customer ID"),
+        recipient_phone: dash(d.recipient), plan_details: dash([d.provider, d.plan].filter(Boolean).join(" · ")) },
+    };
+  }
+
+  if (!RECEIPT_TEMPLATE_ID) return null;
+
   if (p.type === "wallet_funding") {
     const byAdmin = !!d.credited_by_admin;
     return {
       subject: `${byAdmin ? "Wallet credited by Admin" : "Wallet funded"}: ${naira(d.amount)}`,
-      variables: { ...common, transaction_id: String(d.reference || "—"), payment_method: String(d.method || (byAdmin ? "Admin credit" : "Bank transfer")),
-        service_type: byAdmin ? "Wallet credited by Admin" : "Wallet funding", recipient_phone: "ZeeShop Bill Wallet", amount: naira(d.amount) },
+      templateId: RECEIPT_TEMPLATE_ID,
+      variables: { ...common, payment_method: String(d.method || (byAdmin ? "Admin credit" : "Bank transfer")),
+        service_type: byAdmin ? "Wallet credited by Admin" : "Wallet funding", recipient_label: "Credited to",
+        recipient_phone: "ZeeShop Bill Wallet", plan_details: Number(d.fee) > 0 ? `Fee charged ${naira(d.fee)}` : "No fee" },
+    };
+  }
+  if (p.type === "otp") {
+    if (!OTP_TEMPLATE_ID || !d.code) return null;
+    return {
+      subject: "Your ZeeShop verification code",
+      templateId: OTP_TEMPLATE_ID,
+      variables: { [OTP_VAR]: String(d.code), ...(OTP_EXPIRY_VAR ? { [OTP_EXPIRY_VAR]: String(Number(d.minutes) || 5) } : {}) },
     };
   }
   if (p.type === "vtu_purchase") {
     return {
       subject: `${d.service || "Purchase"} successful: ${d.phone || ""} (${naira(d.amount)})`,
-      variables: { ...common, transaction_id: String(d.reference || "—"), payment_method: "ZeeShop Bill Wallet",
-        service_type: [d.service, d.network, d.plan].filter(Boolean).join(" · ") || "Purchase", recipient_phone: String(d.phone || "—"), amount: naira(d.amount) },
-    };
-  }
-  if (p.type === "bill_payment") {
-    return {
-      subject: `${d.service || "Bill payment"} successful: ${naira(d.amount)}`,
-      variables: { ...common, transaction_id: String(d.reference || "—"), payment_method: "ZeeShop Bill Wallet",
-        service_type: [d.service, d.provider, d.plan].filter(Boolean).join(" · ") || "Bill payment", recipient_phone: String(d.recipient || "—"), amount: naira(d.amount) },
-    };
-  }
-  if (p.type === "electricity_token" && RECEIPT_TOKEN_VAR && d.token) {
-    return {
-      subject: `Electricity token: ${d.meter_number || ""} (${naira(d.amount)})`,
-      variables: { ...common, transaction_id: String(d.reference || "—"), payment_method: "ZeeShop Bill Wallet",
-        service_type: [ "Electricity", d.provider, d.meter_type ].filter(Boolean).join(" · "), recipient_phone: String(d.meter_number || "—"), amount: naira(d.amount),
-        [RECEIPT_TOKEN_VAR]: String(d.token) },
+      templateId: RECEIPT_TEMPLATE_ID,
+      variables: { ...common, service_type: dash(d.service), recipient_label: "Phone Number",
+        recipient_phone: dash(d.phone), plan_details: dash([d.network, d.plan].filter(Boolean).join(" · ")) },
     };
   }
   return null;
 }
 
-async function sendTermiiTemplate(to: string, subject: string, variables: Record<string, string>) {
+async function sendTermiiTemplate(to: string, subject: string, templateId: string, variables: Record<string, string>) {
   const res = await fetch(`${TERMII_BASE_URL}/api/templates/send-email`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       api_key: TERMII_API_KEY, email: to, subject, email_configuration_id: TERMII_EMAIL_CONFIG_ID,
-      template_id: RECEIPT_TEMPLATE_ID, variables,
+      template_id: templateId, variables,
     }),
   });
   const data = await res.json().catch(() => null);
@@ -327,9 +414,9 @@ Deno.serve(async (req: Request) => {
   const errors: string[] = [];
 
   // 1) The approved Termii receipt template (the branded layout), when configured.
-  const tpl = (TERMII_API_KEY && RECEIPT_TEMPLATE_ID) ? receiptVars(payload) : null;
+  const tpl = TERMII_API_KEY ? receiptVars(payload) : null;
   if (tpl) {
-    try { await sendTermiiTemplate(to, tpl.subject, tpl.variables); await log("sent", "termii-template", tpl.subject); return reply({ ok: true, provider: "termii-template" }); }
+    try { await sendTermiiTemplate(to, tpl.subject, tpl.templateId, tpl.variables); await log("sent", "termii-template", tpl.subject); return reply({ ok: true, provider: "termii-template" }); }
     catch (e) { errors.push("termii-template: " + (e instanceof Error ? e.message : String(e))); console.error("notify-email Termii template failed:", errors[0]); }
   }
 

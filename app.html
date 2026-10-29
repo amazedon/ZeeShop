@@ -11545,6 +11545,70 @@ function bpFundingRowHtml(t){
     </div>`;
 }
 /* ---------------- MANAGE PRICES (owner only) ---------------- */
+/* ---- Transaction History: OPay-style list. Tap a row for the full details + Share Receipt. ---- */
+(function(){
+  if(document.getElementById('bph-style')) return;
+  const st = document.createElement('style'); st.id = 'bph-style';
+  st.textContent = `
+  .bph-list{padding:0 2px;}
+  .bph-row{display:flex;align-items:center;gap:12px;padding:15px 0;border-bottom:1px solid var(--line, rgba(128,140,170,.25));cursor:pointer;}
+  .bph-row:last-child{border-bottom:0;}
+  .bph-ic{flex:0 0 44px;width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:var(--green-bg);color:var(--green);}
+  .bph-ic.bad{background:var(--red-bg);color:var(--red);} .bph-ic.wait{background:var(--amber-bg);color:var(--marigold-dark);}
+  .bph-main{flex:1;min-width:0;}
+  .bph-t{font-weight:700;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .bph-d{font-size:12px;opacity:.65;margin-top:3px;}
+  .bph-r{flex:0 0 auto;text-align:right;}
+  .bph-amt{font-weight:800;font-size:15px;white-space:nowrap;} .bph-amt.in{color:var(--green);}
+  .bph-chip{display:inline-block;margin-top:5px;padding:2px 8px;border-radius:6px;font-size:10.5px;font-weight:700;background:var(--green-bg);color:var(--green);}
+  .bph-chip.bad{background:var(--red-bg);color:var(--red);} .bph-chip.wait{background:var(--amber-bg);color:var(--marigold-dark);}
+  .bph-hero{text-align:center;padding:6px 0 18px;}
+  .bph-hero .bph-ic{width:60px;height:60px;flex-basis:60px;margin:0 auto 12px;}
+  .bph-hero .bph-ht{font-weight:700;font-size:15px;opacity:.85;}
+  .bph-hero .bph-ha{font-weight:800;font-size:34px;margin:8px 0 6px;letter-spacing:-.5px;}
+  .bph-hero .bph-hs{font-weight:800;font-size:15px;color:var(--green);} .bph-hero .bph-hs.bad{color:var(--red);} .bph-hero .bph-hs.wait{color:var(--marigold-dark);}
+  .bph-card{background:var(--paper-dim, rgba(128,140,170,.12));border-radius:14px;padding:6px 14px;margin-bottom:14px;}
+  .bph-card h4{margin:12px 0 4px;font-size:14px;}
+  .bph-kv{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:11px 0;border-top:1px solid var(--line, rgba(128,140,170,.25));font-size:13.5px;}
+  .bph-kv:first-of-type{border-top:0;}
+  .bph-kv span:first-child{opacity:.65;flex:0 0 auto;} .bph-kv span:last-child{font-weight:700;text-align:right;word-break:break-all;display:flex;gap:8px;align-items:center;justify-content:flex-end;}
+  .bph-copy{background:none;border:0;padding:2px;cursor:pointer;color:inherit;opacity:.6;font-size:15px;line-height:1;}
+  .bph-secret{border:1.5px dashed #F2A93B;background:rgba(242,169,59,.12);border-radius:12px;padding:12px 14px;margin-bottom:14px;text-align:center;}
+  .bph-secret small{display:block;font-size:10.5px;font-weight:800;letter-spacing:.08em;opacity:.75;margin-bottom:6px;}
+  .bph-secret .tk{font-family:"Courier New",Courier,monospace;font-weight:800;font-size:18px;letter-spacing:1px;word-break:break-all;}
+  `;
+  document.head.appendChild(st);
+})();
+const BPH_ARROW_UP = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>`;
+const BPH_ARROW_DOWN = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>`;
+const BPH_CROSS = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12"/><path d="M18 6 6 18"/></svg>`;
+const BPH_CLOCK = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>`;
+const BPH_CHECK = `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10"/></svg>`;
+
+// One normalised view of a row (purchase or wallet funding) so the list and the details sheet agree.
+function bphModel(t){
+  if(t._funding){
+    const ref = String(t.provider_reference || '');
+    const how = ref.startsWith('squadva:') ? 'Dedicated account' : ref.startsWith('squad:') ? 'Pay Now (card / bank)' : ref.startsWith('manual:') ? 'Credited by Admin' : 'Bank transfer';
+    const refunded = t.status === 'refunded';
+    return { kind:'topup', id:t.id, title:'Wallet funding — ' + how, how, ref, in:true, tone: refunded ? 'bad' : 'ok',
+             label: refunded ? 'Refunded' : 'Credited', amount: Number(t.amount||0), at: t.created_at, raw:t };
+  }
+  const tone = t.status==='success' ? 'ok' : t.status==='failed' ? 'bad' : 'wait';
+  const label = t.status==='success' ? 'Successful' : t.status==='failed' ? 'Failed' : (t.status ? String(t.status).charAt(0).toUpperCase()+String(t.status).slice(1) : 'Pending');
+  return { kind:'tx', id:t.id, title:(t.service_label || t.service || 'Bill payment') + (t.recipient ? ' — ' + t.recipient : ''),
+           service:(t.service_label || t.service || 'Bill payment'), in:false, tone, label, amount:Number(t.sale_price||0), at:t.created_at, raw:t };
+}
+function bphIcon(m){ return m.tone==='bad' ? BPH_CROSS : m.tone==='wait' ? BPH_CLOCK : (m.in ? BPH_ARROW_DOWN : BPH_ARROW_UP); }
+function bphAmount(m){ return (m.tone==='ok' ? (m.in ? '+' : '-') : '') + fmtMoney(m.amount); }
+function bphRowHtml(t){
+  const m = bphModel(t);
+  return `<div class="bph-row" data-bph-open="${escAttr(m.kind)}:${escAttr(String(m.id))}" role="button" tabindex="0">
+    <div class="bph-ic ${m.tone==='ok'?'':m.tone}">${bphIcon(m)}</div>
+    <div class="bph-main"><div class="bph-t">${escapeHtml(m.kind==='topup' ? 'Wallet funding' : m.title)}</div><div class="bph-d">${m.kind==='topup' ? escapeHtml(m.how) + ' · ' : ''}${m.at?fmtDateTimeFull(m.at):''}</div></div>
+    <div class="bph-r"><div class="bph-amt ${m.in && m.tone==='ok'?'in':''}">${escapeHtml(bphAmount(m))}</div><span class="bph-chip ${m.tone==='ok'?'':m.tone}">${escapeHtml(m.label)}</span></div>
+  </div>`;
+}
 function screenBillHistory(){
   return `
     ${bpHeader('Transaction History')}
@@ -11553,21 +11617,7 @@ function screenBillHistory(){
         <p class="subtle" style="color:var(--red);margin-bottom:10px;">Couldn't load your transaction history: ${escapeHtml(billHistoryError)}</p>
         <button class="btn btn-outline btn-sm" id="bp-history-retry">Retry</button>
       </div>
-    ` : ((billHistory.length===0 && billTopups.length===0) ? `<p class="subtle">No transactions yet.</p>` : bpHistoryRows().map(tx=> tx._funding ? bpFundingRowHtml(tx) : `
-      <div class="list-row">
-        <div class="info">
-          <div class="t1">${escapeHtml(tx.service_label || tx.service)} — ${escapeHtml(tx.recipient||'')}</div>
-          <div class="t2 subtle">${tx.created_at?fmtDateTimeFull(tx.created_at):''} · ${fmtMoney(tx.sale_price)}</div>
-        </div>
-        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;">
-          <span class="pill ${tx.status==='success'?'pill-green':tx.status==='failed'?'pill-red':'pill-amber'}">${tx.status}</span>
-          <div style="display:flex;gap:6px;">
-            ${tx.status==='pending' ? `<button class="btn btn-outline btn-sm" data-bp-requery="${tx.id}">Check</button>` : ''}
-            <button class="btn btn-outline btn-sm" data-bp-receipt="${tx.id}" aria-label="View and share receipt" title="Receipt">${ICON_EXPORT}</button>
-          </div>
-        </div>
-      </div>
-    `).join(''))}
+    ` : ((billHistory.length===0 && billTopups.length===0) ? `<p class="subtle">No transactions yet.</p>` : `<div class="bph-list">${bpHistoryRows().map(bphRowHtml).join('')}</div>`)}
   `;
 }
 // Full date + time (day, month, year, hour and minute) — used on both the
@@ -11743,37 +11793,84 @@ function openBillTxReceiptModal(txId){
     }, 'image/png');
   });
 }
-function bindBillHistoryEvents(){
-
-  if(!billHistoryLoaded && !billHistoryLoading && !billHistoryError) bpLoadHistory();
-  document.querySelectorAll('[data-topup-toggle]').forEach(row=>{
-    const toggle = ()=>{
-      const d = row.querySelector('.bp-topup-details'); if(!d) return;
-      const open = d.hasAttribute('hidden');
-      if(open) d.removeAttribute('hidden'); else d.setAttribute('hidden','');
-      row.setAttribute('aria-expanded', String(open));
-      const c = row.querySelector('.bp-chev'); if(c) c.style.transform = open ? 'rotate(180deg)' : '';
-    };
-    row.addEventListener('click', toggle);
-    row.addEventListener('keydown', e=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); toggle(); } });
+// Token / units / PINs a purchase carries (electricity token, result-checker PINs …).
+function bphSecrets(tx){
+  const body = (tx && tx.bigisub_response) || {};
+  const d = (body && body.data && typeof body.data === 'object') ? body.data : (body || {});
+  const pinsRaw = tx.pins || d.pins || null;
+  return { token: String(tx.token || d.token || '').trim(), units: String(tx.units || d.units || '').trim(),
+           pins: Array.isArray(pinsRaw) ? pinsRaw : (pinsRaw ? [pinsRaw] : []), providerTid: String(d.transaction_id || d.tranx_id || '').trim() };
+}
+function openBillTxDetail(kind, id){
+  const src = kind==='topup' ? billTopups.find(x=>String(x.id)===String(id)) : billHistory.find(x=>String(x.id)===String(id));
+  if(!src){ toast('Could not find that transaction.'); return; }
+  const m = bphModel(kind==='topup' ? Object.assign({}, src, { _funding:true }) : src);
+  const copy = v => v ? `<button class="bph-copy" data-bph-copy="${escAttr(String(v))}" aria-label="Copy">⧉</button>` : '';
+  const kv = (k, v, c) => (v===null || v===undefined || String(v).trim()==='') ? '' : `<div class="bph-kv"><span>${k}</span><span>${escapeHtml(String(v))}${c?copy(v):''}</span></div>`;
+  let rows = '', secret = '', actions = '';
+  if(m.kind === 'tx'){
+    const sc = bphSecrets(src);
+    if(m.tone==='ok' && sc.token){
+      const g = /^\d{12,}$/.test(sc.token) ? sc.token.replace(/(\d{4})(?=\d)/g, '$1 ') : sc.token;
+      secret += `<div class="bph-secret"><small>YOUR METER TOKEN</small><div class="tk">${escapeHtml(g)}</div>${copy(sc.token)}</div>`;
+    }
+    if(m.tone==='ok' && sc.pins.length){
+      secret += `<div class="bph-secret"><small>${sc.pins.length>1?'YOUR PINS':'YOUR PIN'}</small>${sc.pins.map(pn=>`<div class="tk">${escapeHtml(typeof pn==='object'?JSON.stringify(pn):String(pn))}</div>`).join('')}</div>`;
+    }
+    const by = (typeof billTxMadeByName === 'function') ? billTxMadeByName(src) : null;
+    rows = kv('Recipient', src.recipient, true) + kv('Transaction type', m.service) + (sc.units ? kv('Units', sc.units) : '') +
+           kv('Payment method', 'ZeeShop Bill Wallet') + kv('Transaction date', src.created_at ? fmtDateTimeFull(src.created_at) : '') +
+           kv('Reference', src.reference || src.id, true) + (sc.providerTid ? kv('Transaction ID', sc.providerTid, true) : '') + (by ? kv('Processed by', by) : '');
+    actions = (src.status==='pending' ? `<button class="btn btn-outline" id="bph-check" style="flex:1;">Check status</button>` : '') +
+              `<button class="btn btn-primary" id="bph-share" style="flex:1;">${ICON_EXPORT} Share Receipt</button>`;
+  } else {
+    const fee = Number(src.fee||0), gross = Number(src.gross_amount||0);
+    const isTransfer = m.how === 'Bank transfer' || m.how === 'Dedicated account';
+    rows = (isTransfer ? kv('From', src.sender_name || 'Not shown by the sender’s bank') : '') + kv('Sender bank', src.sender_bank) +
+           kv('Sender account', src.sender_account ? '••••' + String(src.sender_account).slice(-4) : '') +
+           (gross>0 && gross!==Number(src.amount) ? kv('Amount sent', fmtMoney(gross)) : '') + (fee>0 ? kv('Fee', fmtMoney(fee)) : '') +
+           kv('Credited to wallet', fmtMoney(src.amount)) + kv('Method', m.how) + kv('Note', src.narration) +
+           kv('Reference', m.ref.replace(/^(flw|squadva|squad|manual):/, ''), true) + kv('Time', src.created_at ? fmtDateTimeFull(src.created_at) : '');
+  }
+  openSheet(`
+    <div class="sheet-head"><h3>Transaction Details</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
+    <div class="bph-hero">
+      <div class="bph-ic ${m.tone==='ok'?'':m.tone}">${m.tone==='ok' ? BPH_CHECK : bphIcon(m)}</div>
+      <div class="bph-ht">${escapeHtml(m.kind==='tx' ? m.service : m.title)}</div>
+      <div class="bph-ha">${escapeHtml(bphAmount(m))}</div>
+      <div class="bph-hs ${m.tone==='ok'?'':m.tone}">${escapeHtml(m.label)}</div>
+    </div>
+    ${secret}
+    <div class="bph-card">${rows}</div>
+    ${actions ? `<div style="display:flex;gap:10px;margin-bottom:6px;">${actions}</div>` : ''}
+  `);
+  document.querySelectorAll('[data-bph-copy]').forEach(b=>b.addEventListener('click', e=>{
+    e.stopPropagation();
+    try{ if(navigator.clipboard) navigator.clipboard.writeText(b.dataset.bphCopy); }catch(_e){}
+    toast('Copied');
+  }));
+  const share = document.getElementById('bph-share');
+  if(share) share.addEventListener('click', ()=> openBillTxReceiptModal(id));
+  const chk = document.getElementById('bph-check');
+  if(chk) chk.addEventListener('click', async ()=>{
+    chk.disabled = true; chk.textContent = 'Checking…';
+    try{
+      const action = (src.service==='betting') ? 'betting_requery' : 'requery';
+      const r = await callBigisub(action, { transaction_id: id });
+      src.status = r.status || src.status;
+      toast('Status: ' + (r.status || 'unknown'));
+      closeSheet(); refreshMain();
+    }catch(e){ toast(e.message); chk.disabled = false; chk.textContent = 'Check status'; }
   });
+}
+function bindBillHistoryEvents(){
+  if(!billHistoryLoaded && !billHistoryLoading && !billHistoryError) bpLoadHistory();
   const historyRetry = document.getElementById('bp-history-retry');
   if(historyRetry) historyRetry.addEventListener('click', ()=> bpLoadHistory());
-  document.querySelectorAll('[data-bp-requery]').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      const id = btn.dataset.bpRequery;
-      btn.disabled = true; btn.textContent = '…';
-      try{
-        const tx = billHistory.find(x=>x.id===id);
-        const action = (tx && tx.service==='betting') ? 'betting_requery' : 'requery';
-        const r = await callBigisub(action, { transaction_id: id });
-        if(tx) tx.status = r.status || tx.status;
-        toast('Status: '+(r.status||'unknown')); refreshMain();
-      }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='Check'; }
-    });
-  });
-  document.querySelectorAll('[data-bp-receipt]').forEach(btn=>{
-    btn.addEventListener('click', ()=> openBillTxReceiptModal(btn.dataset.bpReceipt));
+  document.querySelectorAll('[data-bph-open]').forEach(row=>{
+    const open = ()=>{ const v = row.dataset.bphOpen; const i = v.indexOf(':'); openBillTxDetail(v.slice(0,i), v.slice(i+1)); };
+    row.addEventListener('click', open);
+    row.addEventListener('keydown', e=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); open(); } });
   });
 }
 

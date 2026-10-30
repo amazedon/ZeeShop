@@ -65,12 +65,14 @@ Deno.serve(async (req: Request) => {
     const ipBlocked = await checkAndBumpRateLimit(admin, `code:${ip}`);
     if (ipBlocked) return json({ error: "Too many attempts. Please wait 15 minutes and try again." }, 429);
 
-    const { data: biz } = await admin
-      .from("businesses")
-      .select("id")
-      .eq("connect_code", String(connect_code).trim())
-      .maybeSingle();
-    if (!biz) return json({ error: "Incorrect connect code." }, 400);
+    const codeText = String(connect_code).trim();
+    const { data: codeRow } = await admin.from("staff_connect_codes").select("code, business_id, expires_at").eq("code", codeText).maybeSingle();
+    if (!codeRow) return json({ error: "Incorrect or already used connect code. Ask the owner for a new one." }, 400);
+    if (new Date(codeRow.expires_at) < new Date()) {
+      await admin.from("staff_connect_codes").delete().eq("code", codeText);
+      return json({ error: "This connect code has expired — ask the owner for a new one." }, 400);
+    }
+    const biz = { id: codeRow.business_id };
 
     // Stage 2 rate limit: guessing a specific staff member's PIN. Keyed by
     // phone number within this business, separate from the code-guessing
@@ -98,6 +100,10 @@ Deno.serve(async (req: Request) => {
     // buckets and re-authenticate the EXISTING account by rotating its
     // synthetic password, exactly like join-business does for a brand new
     // one. This never creates a new app_users row.
+    // ONE use: burn the code now. If two people try at the same moment, only one delete returns a row.
+    const { data: burned } = await admin.from("staff_connect_codes").delete().eq("code", codeText).select("code");
+    if (!burned || burned.length === 0) return json({ error: "This connect code has already been used — ask the owner for a new one." }, 400);
+
     await clearRateLimit(admin, `code:${ip}`);
     await clearRateLimit(admin, `pin:${biz.id}:${phone}`);
 

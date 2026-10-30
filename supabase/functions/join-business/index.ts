@@ -27,9 +27,16 @@ Deno.serve(async (req: Request) => {
 
     const businessId = codeRow.business_id;
 
+    // ONE person per code: claim (delete) it now. If two people submit the same code at the same moment,
+    // only one delete returns a row; the other is told the code was already used.
+    const { data: claimed } = await admin.from("join_codes").delete().eq("id", codeRow.id).select("id");
+    if (!claimed || claimed.length === 0) return json({ error: "This code has already been used — ask the owner for a new one." }, 400);
+    // If anything below fails before the person is really added, give the code back so the owner need not start over.
+    const giveCodeBack = async () => { await admin.from("join_codes").insert({ business_id: businessId, code: codeRow.code, expires_at: codeRow.expires_at }); };
+
     // Check business + plan
     const { data: biz } = await admin.from("businesses").select("name, country, currency, subscription_plan, subscription_expires_at").eq("id", businessId).single();
-    if (!biz) return json({ error: "Business not found." }, 404);
+    if (!biz) { await giveCodeBack(); return json({ error: "Business not found." }, 404); }
 
     const planExpired = biz.subscription_expires_at && new Date(biz.subscription_expires_at) <= new Date();
     const effectivePlan = (!biz.subscription_plan || biz.subscription_plan === "free" || planExpired) ? "free" : biz.subscription_plan;
@@ -43,6 +50,7 @@ Deno.serve(async (req: Request) => {
     // forever, even though that person has zero real access to anything.
     const { count: staffCount } = await admin.from("app_users").select("id", { count: "exact", head: true }).eq("business_id", businessId).eq("role", "staff").eq("is_active", true);
     if ((staffCount ?? 0) >= staffLimit) {
+      await giveCodeBack();
       return json({ error: `This business's plan allows up to ${staffLimit} staff. Ask the owner to upgrade.` }, 400);
     }
 
@@ -54,7 +62,7 @@ Deno.serve(async (req: Request) => {
     const syntheticPassword = crypto.randomUUID() + crypto.randomUUID();
 
     const { data: authUser, error: authErr } = await admin.auth.admin.createUser({ email: syntheticEmail, password: syntheticPassword, email_confirm: true });
-    if (authErr || !authUser?.user) return json({ error: "Could not create account: " + (authErr?.message || "unknown") }, 500);
+    if (authErr || !authUser?.user) { await giveCodeBack(); return json({ error: "Could not create account: " + (authErr?.message || "unknown") }, 500); }
 
     const username = (first_name + (last_name || "")).toLowerCase().replace(/[^a-z0-9]/g, "") + Math.floor(Math.random() * 1000);
 
@@ -74,6 +82,7 @@ Deno.serve(async (req: Request) => {
     });
     if (userInsertErr) {
       await admin.auth.admin.deleteUser(authUser.user.id);
+      await giveCodeBack();
       return json({ error: "Staff record failed: " + userInsertErr.message }, 500);
     }
 

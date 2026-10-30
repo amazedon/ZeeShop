@@ -398,6 +398,19 @@ input:checked + .slider-tog::before{transform:translateX(19px);}
   background:var(--ink);color:var(--marigold);font-size:32px;font-weight:900;letter-spacing:.15em;
   text-align:center;padding:20px;border-radius:12px;margin:14px 0;
 }
+/* collapsible rows (Staff page) */
+details.acc{background:var(--card,#fff);border:1px solid var(--line);border-radius:14px;margin-bottom:10px;overflow:hidden;}
+details.acc>summary{list-style:none;display:flex;align-items:center;gap:10px;padding:12px 14px;cursor:pointer;-webkit-tap-highlight-color:transparent;}
+details.acc>summary::-webkit-details-marker{display:none;}
+details.acc>summary .acc-main{flex:1;min-width:0;}
+details.acc>summary .acc-title{font-weight:800;font-size:15px;color:var(--ink);line-height:1.25;}
+details.acc>summary .acc-sub{font-size:12.5px;color:var(--text-dim);margin-top:2px;}
+details.acc>summary .acc-chev{flex-shrink:0;width:20px;height:20px;color:var(--text-dim);transition:transform .2s;}
+details.acc[open]>summary .acc-chev{transform:rotate(180deg);}
+details.acc[open]>summary{border-bottom:1px solid var(--line);}
+details.acc>.acc-body{padding:12px 14px 14px;}
+details.acc.acc-alert{border-color:var(--marigold-dark);}
+.acc-dot{width:9px;height:9px;border-radius:50%;background:var(--marigold-dark);flex-shrink:0;}
 .progress-bar{height:6px;background:var(--paper-dim);border-radius:4px;overflow:hidden;margin-top:6px;}
 .progress-bar .fill{height:100%;background:var(--marigold);border-radius:4px;}
 
@@ -1709,9 +1722,20 @@ window.addEventListener('online', ()=>syncSettingsWithServer(true));
 window.addEventListener('load', ()=>{ setTimeout(()=>syncSettingsWithServer(true), 2500); });
 setInterval(()=>{ if(Object.keys(spLoad()).length) syncSettingsWithServer(true); }, 15000);
 
+let staffOpen = new Set();   // which collapsible rows on the Staff page are open
+const ICON_ACC_CHEV = '<svg class="acc-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
+function accRow(key, headHtml, bodyHtml, extraClass){
+  return `<details class="acc ${extraClass||''}" data-acc="${key}" ${staffOpen.has(key)?'open':''}><summary>${headHtml}${ICON_ACC_CHEV}</summary><div class="acc-body">${bodyHtml}</div></details>`;
+}
+document.addEventListener('toggle', e=>{
+  const d = e.target;
+  if(!d || !d.matches || !d.matches('details.acc[data-acc]')) return;
+  const k = d.getAttribute('data-acc');
+  if(d.open) staffOpen.add(k); else staffOpen.delete(k);
+}, true);
 let freshConnectCode = null;   // a Staff Connect Code is only shown on the visit it was generated in
 function render(){
-  if(route !== 'staff'){ freshConnectCode = null; if(state.joinCode) state.joinCode = null; }   // codes vanish when you leave the Staff page
+  if(route !== 'staff'){ staffOpen.clear(); freshConnectCode = null; if(state.joinCode) state.joinCode = null; }   // codes vanish when you leave the Staff page
   if(!state.sessionUserId && route === 'note-view') route = 'notes';   // never leave a note open on the lock screen
   if(route !== 'note-view') noteMenuOpen = false;
   if(route !== 'goods'){ goodsFilter = 'all'; goodsTab = 'active'; }    // filters apply only while you are on Goods
@@ -6840,10 +6864,7 @@ function screenStaff(){
   const staff = state.users.filter(u=>u.businessId===business().id && u.id!==currentUser().id && u.role!=='master');
   const codeActive = state.joinCode && Date.now()<state.joinCode.expiresAt;
   const pendingCount = staff.filter(u=>u.nameChangeRequest && canManageThisUser(u)).length;
-  return `
-    ${subHeader("Staff")}
-    <div class="card">
-      <div class="t1" style="margin-bottom:6px;">1 · Add a NEW staff member</div>
+  const joinBody = `
       <p class="t2" style="margin-bottom:10px;">Use this when the person has never used ZeeShop on your business before.</p>
       <ol class="t2" style="margin:0 0 12px;padding-left:20px;line-height:1.6;">
         <li>Tap <b>Generate Join Code</b> — a 6-digit code appears.</li>
@@ -6855,10 +6876,8 @@ function screenStaff(){
       ${codeActive? `
         <div class="code-display">${state.joinCode.code}</div>
         <p class="subtle" style="text-align:center;">Valid for ${Math.ceil((state.joinCode.expiresAt-Date.now())/60000)} more minutes · works for one person only.</p>
-      ` : `<button class="btn btn-primary" id="gen-code">Generate Join Code</button>`}
-    </div>
-    <div class="card">
-      <div class="t1" style="margin-bottom:6px;">2 · Staff already on your team — second phone</div>
+      ` : `<button class="btn btn-primary" id="gen-code" style="width:100%;">Generate Join Code</button>`}`;
+  const connectBody = `
       <p class="t2" style="margin-bottom:10px;">Use this when a staff member who already has an account gets a new phone or wants to sign in on another phone. Nobody is added twice.</p>
       <ol class="t2" style="margin:0 0 12px;padding-left:20px;line-height:1.6;">
         <li>Tap <b>Generate Connect Code</b> — an 8-digit code appears.</li>
@@ -6872,12 +6891,17 @@ function screenStaff(){
           <button class="btn btn-outline btn-sm" id="copy-connect-code" style="flex:1;">Copy</button>
           <button class="btn btn-outline btn-sm" id="reset-connect-code" style="flex:1;">New Code</button>
         </div>
-      ` : `<button class="btn btn-outline btn-sm" id="reset-connect-code">Generate Connect Code</button>`}
-    </div>
-    <button class="btn btn-outline" id="offer-letter-btn" style="width:100%;margin-bottom:14px;">${ICON_MAIL} Send Offer Letter to a Candidate</button>
+      ` : `<button class="btn btn-outline btn-sm" id="reset-connect-code">Generate Connect Code</button>`}`;
+  const recordOnly = state.recordOnlyStaff.filter(p=>p.businessId===business().id);
+  return `
+    ${subHeader("Staff")}
+    <div class="section-head"><h3>Add someone</h3></div>
+    ${accRow('join', `<div class="acc-main"><div class="acc-title">New staff member</div><div class="acc-sub">Never used ZeeShop on your business</div></div>`, joinBody)}
+    ${accRow('connect', `<div class="acc-main"><div class="acc-title">Staff on a second phone</div><div class="acc-sub">Already on your team, new or extra phone</div></div>`, connectBody)}
+    <button class="btn btn-outline" id="offer-letter-btn" style="width:100%;margin:4px 0 14px;">${ICON_MAIL} Send Offer Letter to a Candidate</button>
     ${pendingCount>0?`<div class="card" style="border-color:var(--marigold-dark);"><b>${ICON_EDIT_NOTE} ${pendingCount} name change request${pendingCount>1?'s':''}</b> waiting below.</div>`:''}
     <div class="section-head"><h3>Team</h3></div>
-    ${staff.length===0?`<p class="subtle">No staff yet. Generate a code above to invite one.</p>`:staff.map(u=>{
+    ${staff.length===0?`<p class="subtle">No staff yet. Open “New staff member” above to invite one.</p>`:staff.map(u=>{
       const restrictions = [];
       if(u.role==='staff'){
         if(u.canSell===false) restrictions.push('Sales off');
@@ -6888,18 +6912,19 @@ function screenStaff(){
       }
       const manageable = canManageThisUser(u);
       const shopNames = (u.managesShopIds||[]).map(sid=>{ const s=state.shops.find(x=>x.id===sid); return s?s.name:null; }).filter(Boolean);
-      return `
-      <div class="card" ${u.nameChangeRequest?'style="border-color:var(--marigold-dark);"':''}>
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:${(restrictions.length||u.isSuperAdmin)?'8px':'12px'};">
-          <div class="avatar" style="width:40px;height:40px;font-size:14px;flex-shrink:0;background:${u.isActive?'var(--ink)':'var(--line)'};">${initials(u.firstName,u.lastName)}</div>
-          <div style="flex:1;min-width:0;">
-            <div class="t1" style="font-size:15px;white-space:normal;overflow:visible;">${u.firstName} ${u.lastName}</div>
-            <div class="t2">@${u.username} · ${u.role}${u.isActive===false?' · deactivated':''}</div>
-          </div>
+      const hasReq = !!(u.nameChangeRequest && manageable);
+      const head = `
+        <div class="avatar" style="width:40px;height:40px;font-size:14px;flex-shrink:0;background:${u.isActive?'var(--ink)':'var(--line)'};">${initials(u.firstName,u.lastName)}</div>
+        <div class="acc-main">
+          <div class="acc-title">${escapeHtml(u.firstName+' '+u.lastName)}</div>
+          <div class="acc-sub">${u.isSuperAdmin?'⭐ Super Admin · ':''}${escapeHtml(u.role)}${u.isActive===false?' · deactivated':''}</div>
         </div>
-        ${u.isSuperAdmin?`<div style="margin-bottom:12px;"><span class="pill pill-amber">⭐ Super Admin</span> ${shopNames.length?`<span class="subtle">· manages ${shopNames.join(', ')}</span>`:`<span class="subtle">· no shops assigned yet</span>`}</div>`:''}
+        ${hasReq?'<span class="acc-dot" title="Name change request"></span>':''}`;
+      const body = `
+        <div class="t2" style="margin-bottom:10px;">@${escapeHtml(u.username)}</div>
+        ${u.isSuperAdmin?`<div style="margin-bottom:12px;"><span class="pill pill-amber">⭐ Super Admin</span> ${shopNames.length?`<span class="subtle">· manages ${escapeHtml(shopNames.join(', '))}</span>`:`<span class="subtle">· no shops assigned yet</span>`}</div>`:''}
         ${restrictions.length?`<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:12px;">${restrictions.map(r=>`<span class="pill pill-amber">${r}</span>`).join('')}</div>`:''}
-        ${(u.nameChangeRequest && manageable)?`
+        ${hasReq?`
         <div style="background:var(--amber-bg);border-radius:10px;padding:10px 12px;margin-bottom:12px;">
           <div style="font-size:12.5px;margin-bottom:8px;">Wants to be renamed to <b>${escapeHtml(u.nameChangeRequest.firstName+' '+u.nameChangeRequest.lastName)}</b></div>
           <div style="display:flex;gap:8px;">
@@ -6913,28 +6938,30 @@ function screenStaff(){
           <button class="btn btn-sm btn-outline" data-employment-record="${u.id}">${ICON_CLIPBOARD} Employment Record</button>
           <button class="btn btn-sm btn-outline" data-reset-pin="${u.id}">Reset PIN</button>
           <button class="btn btn-sm ${u.isActive===false?'btn-outline':'btn-danger'}" data-toggle-active="${u.id}">${u.isActive===false?'Reactivate':'Remove'}</button>
-        </div>` : `<p class="subtle">Managed by the Owner only.</p>`}
-      </div>`;
+        </div>` : `<p class="subtle">Managed by the Owner only.</p>`}`;
+      return accRow('u-'+u.id, head, body, hasReq?'acc-alert':'');
     }).join('')}
 
-    <div class="section-head"><h3>People Without App Access <span class="subtle" style="font-weight:400;">(paid staff or apprentices who won't use the app)</span></h3></div>
+    <div class="section-head"><h3>People Without App Access</h3></div>
+    <p class="subtle" style="margin:-6px 0 10px;">Paid staff or apprentices who won't use the app.</p>
     <button class="btn btn-outline" id="add-recordonly-btn" style="width:100%;margin-bottom:12px;">＋ Add a Person (No App Access)</button>
-    ${state.recordOnlyStaff.filter(p=>p.businessId===business().id).length===0 ? `<p class="subtle">Nobody added here yet.</p>` :
-    state.recordOnlyStaff.filter(p=>p.businessId===business().id).map(p=>`
-      <div class="card">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
-          <div class="avatar" style="width:40px;height:40px;font-size:14px;flex-shrink:0;background:${p.isActive===false?'var(--line)':'var(--text-dim)'};">${initials(p.firstName,p.lastName)}</div>
-          <div style="flex:1;min-width:0;">
-            <div class="t1" style="font-size:15px;">${p.firstName} ${p.lastName}</div>
-            <div class="t2">No app account${p.phone?' · '+p.phone:''}${p.isActive===false?' · left':''}</div>
-          </div>
-        </div>
+    ${recordOnly.length===0 ? `<p class="subtle">Nobody added here yet.</p>` :
+    recordOnly.map(p=>{
+      const head = `
+        <div class="avatar" style="width:40px;height:40px;font-size:14px;flex-shrink:0;background:${p.isActive===false?'var(--line)':'var(--text-dim)'};">${initials(p.firstName,p.lastName)}</div>
+        <div class="acc-main">
+          <div class="acc-title">${escapeHtml(p.firstName+' '+p.lastName)}</div>
+          <div class="acc-sub">No app account${p.isActive===false?' · left':''}</div>
+        </div>`;
+      const body = `
+        ${p.phone?`<div class="t2" style="margin-bottom:10px;">${escapeHtml(p.phone)}</div>`:''}
         <div style="display:flex;gap:6px;flex-wrap:wrap;">
           <button class="btn btn-sm btn-outline" data-employment-record="${p.id}">${ICON_CLIPBOARD} Employment Record</button>
           <button class="btn btn-sm ${p.isActive===false?'btn-outline':'btn-danger'}" data-toggle-recordonly-active="${p.id}">${p.isActive===false?'Mark as Active':'Mark as Left'}</button>
           ${!employmentRecordFor(p.id) ? `<button class="btn btn-sm btn-outline" data-delete-recordonly="${p.id}" style="color:var(--red);">Delete</button>` : ''}
-        </div>
-      </div>`).join('')}
+        </div>`;
+      return accRow('r-'+p.id, head, body);
+    }).join('')}
   `;
 }
 /* ============================================================

@@ -499,18 +499,16 @@
         </div></div></div>
       </div>
 
-      <div class="acc-item" id="test-receipts-card">
+      <div class="acc-item" id="deleted-accounts-card">
         <button class="acc-head" type="button">
-          <span class="acc-ico">✉️</span>
-          <span class="acc-main"><span class="acc-title">Test receipt emails</span><div class="acc-sub">Send sample receipts to check the templates</div></span>
+          <span class="acc-ico">♻️</span>
+          <span class="acc-main"><span class="acc-title">Deleted accounts</span><div class="acc-sub">Restore an owner's account within 30 days</div></span>
           <span class="acc-chev">⌄</span>
         </button>
         <div class="acc-body"><div class="acc-inner"><div class="acc-pad">
-        <p class="subtle">Sends three sample receipts (electricity, airtime and result-checker PIN) to the address below, using the real Termii templates. Nothing is bought and no wallet is touched.</p>
-        <div class="field"><label for="tr-to">Send to</label>
-          <input id="tr-to" type="email" inputmode="email" placeholder="you@example.com"></div>
-        <button class="btn btn-primary btn-sm" id="tr-send" style="margin-top:10px;">Send 3 test receipts</button>
-        <div id="tr-status" style="margin-top:10px;font-size:13px;line-height:1.6;"></div>
+        <p class="subtle">Accounts the owner asked to delete. Each is removed for good 30 days after the request — until then you can restore it, with all its data.</p>
+        <div id="da-list" style="margin-top:10px;"><p class="subtle">Open this card to load…</p></div>
+        <button class="btn btn-outline btn-sm" id="da-refresh" style="margin-top:10px;">Refresh</button>
         </div></div></div>
       </div>
     </div>
@@ -1436,26 +1434,44 @@
   })();
 
 
-  // ---------- Test receipt emails ----------
-  (function wireTestReceipts(){
-    const el = document.getElementById('test-receipts-card'); if(!el) return;
-    el.querySelector('.acc-head').addEventListener('click', ()=> el.classList.toggle('open'));
-    const btn = document.getElementById('tr-send'), st = document.getElementById('tr-status');
-    btn.addEventListener('click', async ()=>{
-      const to = document.getElementById('tr-to').value.trim();
-      if(!to){ st.style.color = 'var(--red)'; st.textContent = 'Enter an email address first.'; return; }
-      st.style.color = 'var(--text-dim)'; st.textContent = 'Sending…'; btn.disabled = true;
+  // ---------- Deleted accounts (restore within 30 days) ----------
+  (function wireDeletedAccounts(){
+    const el = document.getElementById('deleted-accounts-card'); if(!el) return;
+    const box = document.getElementById('da-list');
+    let loaded = false;
+    async function load(){
+      box.innerHTML = '<p class="subtle">Loading…</p>';
       try{
-        const r = await callAdminApi('send_test_receipts', { to });
-        st.innerHTML = (r.results || []).map(x => {
-          const good = x.ok && x.provider === 'termii-template';
-          const colour = good ? 'var(--green)' : (x.ok ? 'var(--amber, #b7791f)' : 'var(--red)');
-          const note = good ? 'sent with the branded template' : (x.ok ? 'sent, but with the OLD layout (' + escapeHtml(String(x.provider)) + ') — check the Termii template ID secret' : 'failed: ' + escapeHtml(String(x.detail || 'unknown error')));
-          return '<div style="color:' + colour + ';">' + escapeHtml(x.label) + ' — ' + note + '</div>';
+        const r = await callAdminApi('list_pending_deletions', {});
+        const items = r.items || [];
+        if(!items.length){ box.innerHTML = '<p class="subtle">No accounts are waiting to be deleted.</p>'; return; }
+        box.innerHTML = items.map(x => {
+          const o = x.owner || {};
+          const when = new Date(x.requested_at).toLocaleDateString();
+          const status = x.can_restore
+            ? '<span style="color:var(--green);font-weight:800;">' + x.days_left + ' day' + (x.days_left===1?'':'s') + ' left to restore</span>'
+            : '<span style="color:var(--red);font-weight:800;">Restore window passed</span>';
+          return '<div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px;">' +
+            '<div style="font-weight:800;">' + escapeHtml(x.name || '—') + ' <span class="subtle">· ' + escapeHtml(x.country || '') + '</span></div>' +
+            '<div class="subtle" style="font-size:12px;margin:3px 0;">' + escapeHtml(o.name || 'No owner record') + ' · ' + escapeHtml(o.email || 'no email') + ' · ' + escapeHtml(o.phone || 'no phone') + '</div>' +
+            '<div style="font-size:12.5px;margin-bottom:8px;">Deletion requested ' + escapeHtml(when) + ' · ' + status + '</div>' +
+            (x.can_restore ? '<button class="btn btn-primary btn-sm" data-restore="' + x.id + '" data-name="' + escapeHtml(x.name || '') + '">Restore account</button>' : '') +
+            '<div class="subtle" style="font-size:12px;margin-top:6px;" id="da-st-' + x.id + '"></div></div>';
         }).join('');
-      }catch(e){ st.style.color = 'var(--red)'; st.textContent = 'Error: ' + e.message; }
-      btn.disabled = false;
-    });
+        box.querySelectorAll('[data-restore]').forEach(btn => btn.addEventListener('click', async () => {
+          const id = btn.dataset.restore, st = document.getElementById('da-st-' + id);
+          if(!confirm('Restore "' + btn.dataset.name + '"? The owner and staff will be able to use it again.')) return;
+          btn.disabled = true; st.style.color = 'var(--text-dim)'; st.textContent = 'Restoring…';
+          try{
+            await callAdminApi('restore_business', { business_id: id });
+            st.style.color = 'var(--green)'; st.textContent = 'Restored. Ask the owner to sign in again.';
+            setTimeout(load, 1500);
+          }catch(e){ st.style.color = 'var(--red)'; st.textContent = 'Error: ' + e.message; btn.disabled = false; }
+        }));
+      }catch(e){ box.innerHTML = '<div class="err">Could not load: ' + escapeHtml(e.message) + '</div>'; }
+    }
+    el.querySelector('.acc-head').addEventListener('click', () => { el.classList.toggle('open'); if(el.classList.contains('open') && !loaded){ loaded = true; load(); } });
+    document.getElementById('da-refresh').addEventListener('click', load);
   })();
 
   async function loadPlatformPricing(){
@@ -1769,6 +1785,7 @@
               <span class="subtle">${u.is_active===false?'Inactive':'Active'}</span>
             </div>
             <div class="subtle" style="font-size:11px;">@${escapeHtml(u.username||'—')} · ${escapeHtml(u.phone||'no phone')} · ${escapeHtml(u.email||'no email')}</div>
+            ${u.role==='master' ? `<button class="btn-outline-sm" style="margin-top:6px;" data-change-email="${bizId}" data-current="${escapeHtml(u.email||'')}">✏️ Change email</button><div id="ce-st-${bizId}" style="font-size:11px;margin-top:4px;line-height:1.5;"></div>` : ''}
           </div>
         `).join('')}
         <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line);">
@@ -1781,6 +1798,23 @@
           <div id="recover-status-${bizId}" style="font-size:11px;margin-top:8px;line-height:1.5;"></div>
         </div>
       `;
+      const ceBtn = cell.querySelector(`[data-change-email="${bizId}"]`);
+      if(ceBtn) ceBtn.addEventListener('click', async ()=>{
+        const cur = ceBtn.dataset.current || '';
+        const nv = (prompt('New email address for this owner' + (cur ? '\n(current: ' + cur + ')' : '') + ':', '') || '').trim();
+        if(!nv) return;
+        if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nv)){ alert('That is not a valid email address.'); return; }
+        if(!confirm('Change this owner\'s email to ' + nv + '?\n\nOnly do this after you have verified the person\'s identity. They will sign in with the new email from now on.')) return;
+        const st = document.getElementById(`ce-st-${bizId}`);
+        st.style.color = 'var(--text-dim)'; st.textContent = 'Changing…';
+        try{
+          const result = await callAdminApi('override_owner_contact', { business_id: bizId, new_email: nv });
+          const flw = result.flutterwave ? ' · ' + result.flutterwave : '';
+          st.style.color = /NOT updated/.test(flw) ? 'var(--red)' : 'var(--green)';
+          st.textContent = 'Done: ' + (result.changed||[]).join(', ') + flw;
+          delete bizDetailCache[bizId];
+        }catch(e){ st.style.color = 'var(--red)'; st.textContent = 'Error: ' + e.message; }
+      });
       const recoverBtn = cell.querySelector(`[data-recover-btn="${bizId}"]`);
       if(recoverBtn) recoverBtn.addEventListener('click', async ()=>{
         const new_email = document.getElementById(`recover-email-${bizId}`).value.trim();

@@ -127,6 +127,13 @@ nav a:hover{color:var(--ink);}
 .btn-primary{background:var(--marigold);color:var(--ink);}
 .btn-outline{border-color:var(--line);color:var(--ink);}
 
+.play-btn{display:inline-flex;align-items:center;gap:10px;background:var(--ink);color:#fff;text-decoration:none;padding:10px 18px;border-radius:10px;margin-top:14px;}
+.play-btn svg{width:22px;height:22px;flex:none;fill:var(--marigold);}
+.play-btn small{display:block;font-size:10px;letter-spacing:.06em;text-transform:uppercase;opacity:.8;line-height:1.2;}
+.play-btn b{display:block;font-size:15px;font-weight:800;line-height:1.2;}
+.play-btn:hover{background:#0b1730;}
+.footer-play{display:inline-flex;align-items:center;gap:6px;text-decoration:none;font-weight:700;color:var(--ink);}
+
 /* signature: mock stock ticket */
 .ticket{
   background:#fff;border:1.5px solid var(--line);border-radius:14px;
@@ -204,6 +211,7 @@ footer{border-top:1px solid var(--line);padding:28px 0;}
       <a href="#about">About</a>
       <a href="#features">What it does</a>
       <a href="#contact">Contact</a>
+      <a href="https://play.google.com/store/apps/details?id=com.ememart.zeeshop" target="_blank" rel="noopener">Get the App</a>
       <a href="app.html">Log In</a>
     </nav>
   </div>
@@ -218,6 +226,10 @@ footer{border-top:1px solid var(--line);padding:28px 0;}
         <a class="btn btn-primary" href="app.html">Log In to ZeeShop</a>
         <a class="btn btn-outline" href="#features">See what it does</a>
       </div>
+      <a class="play-btn" href="https://play.google.com/store/apps/details?id=com.ememart.zeeshop" target="_blank" rel="noopener" aria-label="Get ZeeShop on Google Play">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 2.5v19a1 1 0 0 0 1.5.86l16-9.5a1 1 0 0 0 0-1.72l-16-9.5A1 1 0 0 0 4 2.5z"/></svg>
+        <span><small>Get it on</small><b>Google Play</b></span>
+      </a>
     </div>
     <div class="ticket">
       <div class="ticket-head"><b>STOCK TICKET</b><span>BATCH B4821</span></div>
@@ -306,7 +318,7 @@ footer{border-top:1px solid var(--line);padding:28px 0;}
 <footer>
   <div class="wrap footer-inner">
     <span>Ememart Solutions — makers of ZeeShop</span>
-    <span><a href="privacy.html" style="text-decoration:none;">Privacy Policy</a></span>
+    <span><a class="footer-play" href="https://play.google.com/store/apps/details?id=com.ememart.zeeshop" target="_blank" rel="noopener">Get ZeeShop on Google Play</a> &nbsp;·&nbsp; <a href="privacy.html" style="text-decoration:none;">Privacy Policy</a></span>
   </div>
 </footer>
 

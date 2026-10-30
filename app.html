@@ -5535,7 +5535,11 @@ function layoutAndDrawReceipt(s, shop, cust, seller, ctx, logoImg){
 
   T('Receipt #'+s.id.slice(-6).toUpperCase(), PAD, 'left', '700 12px Arial,Helvetica,sans-serif', '#242B38');
   T(fmtDate(s.date), W-PAD, 'right', '400 12px Arial,Helvetica,sans-serif'); y += 17;
-  T('Sold by: '+seller.firstName+' '+seller.lastName, PAD, 'left', '400 12px Arial,Helvetica,sans-serif', '#6B7280'); y += 16;
+  T('Sold by: '+seller.firstName+' '+seller.lastName, PAD, 'left', '400 12px Arial,Helvetica,sans-serif', '#6B7280');
+  if(s.createdAt && !isNaN(new Date(s.createdAt).getTime())){
+    T(new Date(s.createdAt).toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit', hour12:true }), W-PAD, 'right', '400 12px Arial,Helvetica,sans-serif', '#6B7280');
+  }
+  y += 16;
   T('Txn ID: '+s.id, PAD, 'left', '400 9px Arial,Helvetica,sans-serif', '#B0B5BD'); y += 13;
   T('Buyer: '+(cust ? cust.fullName : (s.walkInName || 'Walk-in customer')), PAD, 'left', '700 12.5px Arial,Helvetica,sans-serif', '#12213B');
   const buyerPhone = cust ? cust.phoneE164 : s.walkInPhone;
@@ -5609,7 +5613,7 @@ async function drawReceiptToCanvas(canvas, s, shop, cust, seller){
   layoutAndDrawReceipt(s, shop, cust, seller, ctx, logoImg); // real draw pass, now sized correctly
 }
 function receiptText(s,shop,cust){
-  let t = `${shop.name}${business().businessType?' ('+business().businessType+')':''}\n${shop.address?shop.address+'\n':''}${business().registrationNumber?'Reg. No: '+business().registrationNumber+'\n':''}Receipt #${s.id.slice(-6).toUpperCase()} — ${fmtDate(s.date)}\nTxn ID: ${s.id}\nBuyer: ${cust?cust.fullName:(s.walkInName||'Walk-in customer')}\n`;
+  let t = `${shop.name}${business().businessType?' ('+business().businessType+')':''}\n${shop.address?shop.address+'\n':''}${business().registrationNumber?'Reg. No: '+business().registrationNumber+'\n':''}Receipt #${s.id.slice(-6).toUpperCase()} — ${fmtDate(s.date)}${s.createdAt && !isNaN(new Date(s.createdAt).getTime()) ? ', '+new Date(s.createdAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true}) : ''}\nTxn ID: ${s.id}\nBuyer: ${cust?cust.fullName:(s.walkInName||'Walk-in customer')}\n`;
   s.items.forEach((it,idx)=>{ const g=state.goods.find(x=>x.id===it.goodId); const itemLabel = it.variantLabel ? `${g.name} (${it.variantLabel})` : g.name; t+=`${idx+1}. ${itemLabel} x${it.qty} — ${fmtMoney(it.priceUsed*it.qty)}\n`; if(it.note) t+=`   (${it.note})\n`; });
   if(s.note) t += `${s.note}\n`;
   if((s.discount>0) || (s.taxAmount>0)){

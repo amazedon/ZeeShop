@@ -1,0 +1,11 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.ememart.zeeshop",
+      "sha256_cert_fingerprints":
+        ["7F:F2:BD:78:05:9E:B1:AD:34:BA:04:A0:DD:4B:7C:9E:02:44:F8:F2:5B:59:F4:B4:BE:FA:54:66:AD:BF:2E:3C"]
+    }
+  }
+]

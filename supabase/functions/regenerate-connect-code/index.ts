@@ -40,20 +40,25 @@ Deno.serve(async (req: Request) => {
       return json({ error: "Only the business owner can reset the connect code." }, 403);
     }
 
-    // Generate an 8-digit numeric code, retrying on the rare collision.
+    // Each press creates a NEW single-use code (valid 10 minutes). Old expired ones are cleaned up here.
+    await admin.from("staff_connect_codes").delete().lt("expires_at", new Date().toISOString());
+
     let code = "";
-    for (let attempt = 0; attempt < 5; attempt++) {
-      code = String(Math.floor(10_000_000 + Math.random() * 90_000_000));
-      const { data: clash } = await admin.from("businesses").select("id").eq("connect_code", code).maybeSingle();
-      if (!clash) break;
-      code = "";
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const c = String(Math.floor(10_000_000 + Math.random() * 90_000_000));
+      const { data: clash } = await admin.from("staff_connect_codes").select("code").eq("code", c).maybeSingle();
+      if (!clash) { code = c; break; }
     }
     if (!code) return json({ error: "Could not generate a unique code — please try again." }, 500);
 
-    const { error: updErr } = await admin.from("businesses").update({ connect_code: code }).eq("id", business_id);
-    if (updErr) return json({ error: updErr.message }, 500);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    const { error: insErr } = await admin.from("staff_connect_codes").insert({ code, business_id, expires_at: expiresAt });
+    if (insErr) return json({ error: insErr.message }, 500);
 
-    return json({ connect_code: code }, 200);
+    // The old permanent business-wide code is retired so it can never be reused.
+    await admin.from("businesses").update({ connect_code: null }).eq("id", business_id);
+
+    return json({ connect_code: code, expires_at: expiresAt }, 200);
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : "Unexpected error" }, 500);
   }

@@ -926,14 +926,14 @@ async function handlePurchase(
     const { network, phone_number, amount } = params as { network: number; phone_number: string; amount: number };
     if (!network || !phone_number || !amount) return json({ error: "Missing network, phone_number, or amount." }, 400);
     if (Number(amount) < MIN_AMOUNT.airtime) return json({ error: `The minimum airtime purchase is ₦${MIN_AMOUNT.airtime}.` }, 400);
-    serviceLabel = "Airtime"; recipient = String(phone_number); estimatedCost = Number(amount); pricingService = "airtime";
+    serviceLabel = ((NETWORK_NAMES[String(network)] || "") + " Airtime").trim(); recipient = String(phone_number); estimatedCost = Number(amount); pricingService = "airtime";
     providerName = NETWORK_NAMES[String(network)] || ""; planName = `₦${Number(amount).toLocaleString()} airtime`;
     bigisubCall = () => bigisub("POST", EP.AIRTIME_PURCHASE, { network, phone_number, amount: String(amount), airtime_type: "vtu", pin: BIGISUB_PIN });
 
   } else if (action === "data_purchase") {
     const { network, phone_number, plan, ported_number } = params as { network: number; phone_number: string; plan: number; ported_number?: boolean };
     if (!network || !phone_number || !plan) return json({ error: "Missing network, phone_number, or plan." }, 400);
-    serviceLabel = "Data"; recipient = String(phone_number); pricingService = "data"; planKey = String(plan);
+    serviceLabel = ((NETWORK_NAMES[String(network)] || "") + " Data").trim(); recipient = String(phone_number); pricingService = "data"; planKey = String(plan);
     // Only a plan ID comes from the client — verify its real price against
     // Bigisub's own plan list rather than trusting whatever the client
     // displayed (client-side prices are for UI only, never authoritative).

@@ -4658,16 +4658,14 @@ function handoverNoteBanner(){
   if(notes.length===0) return '';
   const n = notes[0];
   const author = state.users.find(u=>u.id===n.authorUserId);
+  const more = notes.length - 1;
   return `
-    <div class="card" style="border-color:var(--marigold-dark);background:var(--amber-bg);margin-bottom:14px;">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
-        <div>
-          <div style="font-weight:800;font-size:13.5px;margin-bottom:2px;">${ICON_PIN} ${escapeHtml(n.title)}</div>
-          <div style="font-size:13px;white-space:pre-wrap;">${escapeHtml(n.text)}</div>
-          <div class="subtle" style="font-size:11px;margin-top:6px;">${author?author.firstName:'A teammate'} · ${fmtDate(n.createdAt.slice(0,10))}</div>
-        </div>
+    <div class="card" data-open-note="${n.id}" role="button" tabindex="0" style="border-color:var(--marigold-dark);background:var(--amber-bg);margin-bottom:12px;padding:9px 12px;cursor:pointer;display:flex;align-items:center;gap:10px;">
+      <div style="flex:1;min-width:0;">
+        <div style="font-weight:800;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${ICON_PIN} ${escapeHtml(n.title)}${more>0?` <span class="subtle" style="font-weight:600;">+${more} more</span>`:''}</div>
+        <div class="subtle" style="font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(author?author.firstName:'A teammate')} · ${escapeHtml(String(n.text||'').replace(/\s+/g,' '))}</div>
       </div>
-      <button data-dismiss-handover="${n.id}" class="btn btn-outline btn-sm" style="margin-top:10px;">${t('dash_got_it')}</button>
+      <button data-dismiss-handover="${n.id}" aria-label="Dismiss" style="flex:0 0 auto;border:none;background:rgba(0,0,0,.08);color:inherit;border-radius:10px;padding:7px 11px;font:inherit;font-size:12.5px;font-weight:800;cursor:pointer;">${t('dash_got_it')}</button>
     </div>`;
 }
 
@@ -4792,7 +4790,9 @@ function timeAgo(iso){
 }
 function bindDashboardEvents(){
   bindHomeExtras();
-  document.querySelectorAll('[data-dismiss-handover]').forEach(b=>b.addEventListener('click', ()=>{
+  document.querySelectorAll('.card[data-open-note]').forEach(c=>c.addEventListener('click', ()=> openNoteView(c.dataset.openNote)));
+  document.querySelectorAll('[data-dismiss-handover]').forEach(b=>b.addEventListener('click', (ev)=>{
+    ev.stopPropagation();
     const id = b.dataset.dismissHandover;
     if(!state.dismissedHandoverIds.includes(id)) state.dismissedHandoverIds.push(id);
     save();
@@ -11781,6 +11781,20 @@ function bphShortDate(iso){
   const d = new Date(iso); if(isNaN(d.getTime())) return String(iso||'');
   return d.toLocaleString(undefined, { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
 }
+function bphNetworkOf(t){
+  const body = (t && t.bigisub_response) || {};
+  const d = (body && body.data && typeof body.data === 'object') ? body.data : (body || {});
+  for(const v of [d.network_name, d.network, d.provider, d.provider_name, t && t.network, t && t.provider]){
+    const s = (v==null) ? '' : String(v).trim();
+    if(s && !/^\d+$/.test(s) && s.length <= 20) return s;
+  }
+  return '';
+}
+function bphServiceTitle(t){
+  const label = String(t.service_label || t.service || 'Bill payment');
+  const net = bphNetworkOf(t);
+  return (net && !label.toLowerCase().includes(net.toLowerCase())) ? net + ' ' + label : label;
+}
 function bphModel(t){
   if(t._funding){
     const ref = String(t.provider_reference || '');
@@ -11792,8 +11806,8 @@ function bphModel(t){
   }
   const tone = t.status==='success' ? 'ok' : t.status==='failed' ? 'bad' : 'wait';
   const label = t.status==='success' ? 'Successful' : t.status==='failed' ? 'Failed' : (t.status ? String(t.status).charAt(0).toUpperCase()+String(t.status).slice(1) : 'Pending');
-  return { kind:'tx', id:t.id, title:(t.service_label || t.service || 'Bill payment') + (t.recipient ? ' — ' + t.recipient : ''),
-           service:(t.service_label || t.service || 'Bill payment'), in:false, tone, label, amount:Number(t.sale_price||0), at:t.created_at, raw:t };
+  return { kind:'tx', id:t.id, title:bphServiceTitle(t) + (t.recipient ? ' — ' + t.recipient : ''),
+           service:bphServiceTitle(t), in:false, tone, label, amount:Number(t.sale_price||0), at:t.created_at, raw:t };
 }
 function bphIcon(m){ return m.tone==='bad' ? BPH_CROSS : m.tone==='wait' ? BPH_CLOCK : (m.in ? BPH_ARROW_DOWN : BPH_ARROW_UP); }
 function bphAmount(m){ return (m.tone==='ok' ? (m.in ? '+' : '-') : '') + fmtMoney(m.amount); }
@@ -11911,111 +11925,93 @@ function fmtDateTimeFull(iso){
 // checker PINs, ISP, and failed/pending attempts alike, since there's
 // always a real amount, date/time, and reference worth a formal receipt.
 function layoutAndDrawBillReceipt(tx, shop, biz, ctx, logoImg){
-  const W = 380, PAD = 24, FONT = 'Arial,Helvetica,sans-serif', NAVY = '#12213B', GOLD = '#F2A93B', GREY = '#6B7280', INK = '#1F2733';
-  let y = 38;
+  const W = 380, PAD = 22, FONT = 'Arial,Helvetica,sans-serif', NAVY = '#12213B', GOLD = '#F2A93B', GREY = '#6B7280', INK = '#1F2733';
+  let y = 36;
   const T = (text, x, align, font, color) => {
     if(!ctx) return;
     ctx.textAlign = align; if(font) ctx.font = font; if(color) ctx.fillStyle = color;
     ctx.fillText(text, x, y);
   };
-  const LINE = (dashed) => {
+  const LINE = (x1, x2, color) => {
     if(!ctx) return;
-    ctx.save(); ctx.strokeStyle = dashed ? '#D9DDE3' : '#E5E8EC'; ctx.lineWidth = 1; if(dashed) ctx.setLineDash([4,3]);
-    ctx.beginPath(); ctx.moveTo(PAD, y); ctx.lineTo(W-PAD, y); ctx.stroke(); ctx.restore();
+    ctx.save(); ctx.strokeStyle = color || '#E5E8EC'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x1, y); ctx.lineTo(x2, y); ctx.stroke(); ctx.restore();
   };
-  // Long unbroken text (references, tokens) is cut into lines of n characters.
   const chunk = (str, n) => { const out = []; str = String(str); for(let i=0;i<str.length;i+=n) out.push(str.slice(i,i+n)); return out.length ? out : ['']; };
+  const rrect = (x, yy, w, h, r) => { ctx.beginPath(); ctx.moveTo(x+r, yy); ctx.lineTo(x+w-r, yy); ctx.quadraticCurveTo(x+w, yy, x+w, yy+r); ctx.lineTo(x+w, yy+h-r);
+    ctx.quadraticCurveTo(x+w, yy+h, x+w-r, yy+h); ctx.lineTo(x+r, yy+h); ctx.quadraticCurveTo(x, yy+h, x, yy+h-r); ctx.lineTo(x, yy+r); ctx.quadraticCurveTo(x, yy, x+r, yy); ctx.closePath(); };
 
-  // What this transaction carries beyond the basics: electricity token / units, PINs, provider's own transaction id.
-  const body = (tx && tx.bigisub_response) || {};
-  const d = (body && body.data && typeof body.data === 'object') ? body.data : (body || {});
-  const token = String(tx.token || d.token || '').trim();
-  const units = String(tx.units || d.units || '').trim();
-  const pinsRaw = tx.pins || d.pins || null;
-  const pins = Array.isArray(pinsRaw) ? pinsRaw : (pinsRaw ? [pinsRaw] : []);
-  const providerTid = String(d.transaction_id || d.tranx_id || '').trim();
+  const R = bphReceiptData(tx);          // same data as the Transaction Details screen
+  const st = R.tone;                      // ok | bad | wait
+  const color = st==='ok' ? '#1E8E4E' : st==='bad' ? '#C0392B' : '#D98E1E';
+  const tint  = st==='ok' ? '#E6F3E9' : st==='bad' ? '#FBE9E7' : '#FFF1D9';
 
-  // ---- header: the ZeeShop brand and the person's name (never the business name) ----
-  const u = (typeof currentUser === 'function') ? currentUser() : null;
-  const personName = String(billTxMadeByName(tx) || (u ? ((u.firstName||'') + ' ' + (u.lastName||'')).trim() : '') || '').trim();
-  T('ZeeShop', W/2, 'center', '800 24px '+FONT, NAVY); y += 22;
-  T('BILL PAYMENT RECEIPT', W/2, 'center', '700 10.5px '+FONT, GOLD); y += 18;
-  if(personName){ T(canvasSafeText(personName), W/2, 'center', '700 13px '+FONT, INK); y += 16; }
-  y += 14; LINE(false); y += 28;
+  // ---- brand ----
+  T('ZeeShop', W/2, 'center', '800 22px '+FONT, NAVY); y += 18;
+  T('BILL PAYMENT RECEIPT', W/2, 'center', '700 10px '+FONT, GOLD); y += 14;
+  y += 14; LINE(PAD, W-PAD); y += 30;
 
-  // ---- status, amount, date ----
-  const st = tx.status === 'success' ? 'ok' : tx.status === 'failed' ? 'bad' : 'wait';
-  const statusLabel = st==='ok' ? 'Successful' : st==='bad' ? 'Failed' : (tx.status ? String(tx.status).charAt(0).toUpperCase()+String(tx.status).slice(1) : 'Pending');
-  const statusColor = st==='ok' ? '#1E8E4E' : st==='bad' ? '#C0392B' : '#D98E1E';
+  // ---- hero: status circle, service, amount, status ----
   if(ctx){
-    const cx = W/2, cy = y + 20;
+    const cx = W/2, cy = y + 30;
     ctx.save();
-    ctx.strokeStyle = statusColor; ctx.fillStyle = statusColor; ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    ctx.beginPath(); ctx.arc(cx, cy, 20, 0, Math.PI*2); ctx.stroke();
+    ctx.fillStyle = tint; ctx.beginPath(); ctx.arc(cx, cy, 30, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     ctx.beginPath();
-    if(st==='ok'){ ctx.moveTo(cx-8, cy+1); ctx.lineTo(cx-2, cy+7); ctx.lineTo(cx+9, cy-6); ctx.stroke(); }
-    else if(st==='bad'){ ctx.moveTo(cx-7, cy-7); ctx.lineTo(cx+7, cy+7); ctx.moveTo(cx+7, cy-7); ctx.lineTo(cx-7, cy+7); ctx.stroke(); }
-    else { [-9,0,9].forEach(dx=>{ ctx.beginPath(); ctx.arc(cx+dx, cy, 2.4, 0, Math.PI*2); ctx.fill(); }); }
+    if(st==='ok'){ ctx.moveTo(cx-10, cy+1); ctx.lineTo(cx-3, cy+8); ctx.lineTo(cx+11, cy-8); ctx.stroke(); }
+    else if(st==='bad'){ ctx.moveTo(cx-9, cy-9); ctx.lineTo(cx+9, cy+9); ctx.moveTo(cx+9, cy-9); ctx.lineTo(cx-9, cy+9); ctx.stroke(); }
+    else { [-11,0,11].forEach(dx=>{ ctx.beginPath(); ctx.arc(cx+dx, cy, 3, 0, Math.PI*2); ctx.fill(); }); }
     ctx.restore();
   }
-  y += 40 + 26;
-  T(statusLabel, W/2, 'center', '800 18px '+FONT, statusColor); y += 40;
-  T(fmtMoneyCanvas(tx.sale_price), W/2, 'center', '800 32px '+FONT, NAVY); y += 22;
-  T(tx.created_at ? fmtDateTimeFull(tx.created_at) : '—', W/2, 'center', '400 11.5px '+FONT, GREY); y += 20;
-  y += 8; LINE(true); y += 24;
+  y += 60 + 28;
+  T(canvasSafeText(R.title), W/2, 'center', '700 16px '+FONT, '#4B5563'); y += 36;
+  T(R.amountText, W/2, 'center', '800 36px '+FONT, NAVY); y += 28;
+  T(R.label, W/2, 'center', '800 16px '+FONT, color); y += 32;
 
-  // ---- token / PINs (the part the customer actually needs) ----
+  // ---- token / PINs ----
   const secretBox = (label, lines, note) => {
     const lineH = 22, h = 14 + 14 + lines.length*lineH + (note ? 18 : 0) + 8;
     if(ctx){
-      ctx.save();
-      ctx.fillStyle = '#FFF8E6'; ctx.strokeStyle = GOLD; ctx.lineWidth = 1.5; ctx.setLineDash([5,3]);
-      const x = PAD, w = W-2*PAD, r = 10;
-      ctx.beginPath(); ctx.moveTo(x+r, y); ctx.lineTo(x+w-r, y); ctx.quadraticCurveTo(x+w, y, x+w, y+r); ctx.lineTo(x+w, y+h-r);
-      ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h); ctx.lineTo(x+r, y+h); ctx.quadraticCurveTo(x, y+h, x, y+h-r); ctx.lineTo(x, y+r);
-      ctx.quadraticCurveTo(x, y, x+r, y); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore();
+      ctx.save(); ctx.fillStyle = '#FFF8E6'; ctx.strokeStyle = GOLD; ctx.lineWidth = 1.5; ctx.setLineDash([5,3]);
+      rrect(PAD, y, W-2*PAD, h, 10); ctx.fill(); ctx.stroke(); ctx.restore();
     }
     const top = y; y = top + 22;
     T(label, W/2, 'center', '700 10.5px '+FONT, '#856404'); y += 24;
     lines.forEach(l=>{ T(l, W/2, 'center', '800 17px "Courier New",Courier,monospace', '#533F03'); y += lineH; });
     if(note){ y -= 2; T(note, W/2, 'center', '400 10px '+FONT, '#856404'); }
-    y = top + h + 30;
+    y = top + h + 18;
   };
-  if(st==='ok' && token){
-    const grouped = /^\d{12,}$/.test(token) ? token.replace(/(\d{4})(?=\d)/g, '$1 ') : token;
+  if(st==='ok' && R.sc.token){
+    const tk = R.sc.token, grouped = /^\d{12,}$/.test(tk) ? tk.replace(/(\d{4})(?=\d)/g, '$1 ') : tk;
     secretBox('YOUR METER TOKEN', chunk(grouped, 24), 'Keep this token private.');
   }
-  if(st==='ok' && pins.length){
-    const lines = []; pins.forEach(pn=>{ chunk(typeof pn==='object' ? JSON.stringify(pn) : String(pn), 24).forEach(c=>lines.push(c)); });
-    secretBox(pins.length>1 ? 'YOUR PINS' : 'YOUR PIN', lines, 'Keep your PIN private.');
+  if(st==='ok' && R.sc.pins.length){
+    const lines = []; R.sc.pins.forEach(pn=>{ chunk(typeof pn==='object' ? JSON.stringify(pn) : String(pn), 24).forEach(c=>lines.push(c)); });
+    secretBox(R.sc.pins.length>1 ? 'YOUR PINS' : 'YOUR PIN', lines, 'Keep your PIN private.');
   }
 
-  // ---- details ----
-  const row = (label, value, opts) => {
-    if(value === undefined || value === null || String(value).trim() === '') return;
-    const o = opts || {};
-    const parts = chunk(canvasSafeText(String(value)), o.chars || 26);
-    T(label, PAD, 'left', '400 11.5px '+FONT, GREY);
-    parts.forEach((pt, i)=>{
-      T(pt, W-PAD, 'right', (o.light ? '400 10.5px ' : '700 12px ')+FONT, o.light ? '#4B5563' : INK);
-      y += 17;
-    });
-    y += 5;
-  };
-  row('Service', tx.service_label || tx.service || 'Bill Payment');
-  row('Recipient', tx.recipient);
-  if(units) row('Units', units);
-  row('Payment method', 'ZeeShop Bill Wallet');
-  y += 6; LINE(true); y += 22;
-  const ref = String(d.reference || tx.reference || tx.id || '');
-  row('Reference', ref, { light: true, chars: 40 });
-  if(providerTid) row('Transaction ID', providerTid, { light: true, chars: 40 });
-  y += 4; LINE(true); y += 24;
+  // ---- details card (same rows as the details screen) ----
+  const CARDX = PAD, CARDW = W - 2*PAD, IN = 16, VAL_X = W - PAD - IN, LAB_W = 112;
+  const rows = R.rows.map(([k, v])=>{
+    const parts = chunk(canvasSafeText(String(v)), 28);
+    return { k, parts, h: 22 + parts.length*17 };
+  });
+  const cardH = rows.reduce((s,r)=>s+r.h, 0) + 8;
+  if(ctx){ ctx.save(); ctx.fillStyle = '#F3F0EA'; rrect(CARDX, y, CARDW, cardH, 14); ctx.fill(); ctx.restore(); }
+  const cardTop = y; y = cardTop + 4;
+  rows.forEach((r, i)=>{
+    if(i > 0){ LINE(CARDX+IN, CARDX+CARDW-IN, '#E2DDD2'); }
+    let yy = y + 26;
+    const saved = y; y = yy; T(r.k, CARDX+IN, 'left', '400 12.5px '+FONT, GREY);
+    r.parts.forEach((pt, j)=>{ T(pt, VAL_X, 'right', '700 12.5px '+FONT, INK); y += 17; });
+    y = saved + r.h;
+  });
+  y = cardTop + cardH + 26;
 
   // ---- footer ----
   T('Thank you for your patronage', W/2, 'center', '400 12px '+FONT, GREY); y += 17;
   T('Powered by ZeeShop', W/2, 'center', '700 10px '+FONT, '#9AA0AB'); y += 14;
-  y += 14; // bottom padding
+  y += 14;
   return y;
 }
 async function drawBillReceiptToCanvas(canvas, tx){
@@ -12095,6 +12091,27 @@ function bphSecrets(tx){
   return { token: String(tx.token || d.token || '').trim(), units: String(tx.units || d.units || '').trim(),
            pins: Array.isArray(pinsRaw) ? pinsRaw : (pinsRaw ? [pinsRaw] : []), providerTid: String(d.transaction_id || d.tranx_id || '').trim() };
 }
+// ONE receipt: everything the details sheet and the shared/downloaded image show comes from here.
+function bphReceiptData(tx){
+  const m = bphModel(tx);
+  const sc = bphSecrets(tx);
+  const body = (tx && tx.bigisub_response) || {};
+  const d = (body && body.data && typeof body.data === 'object') ? body.data : (body || {});
+  let by = (typeof billTxMadeByName === 'function') ? billTxMadeByName(tx) : null;
+  if(!by && String(tx.id||'').startsWith('success-')){ const u = currentUser(); by = u ? ((u.firstName||'') + ' ' + (u.lastName||'')).trim() : ''; }
+  const ref = String(d.reference || tx.reference || tx.id || '').replace(/^success-/, '');
+  const rows = [
+    ['Recipient', tx.recipient, true],
+    ['Transaction type', m.service, false],
+    ['Units', sc.units, false],
+    ['Payment method', 'ZeeShop Bill Wallet', false],
+    ['Transaction date', tx.created_at ? fmtDateTimeFull(tx.created_at) : '', false],
+    ['Reference', ref, true],
+    ['Transaction ID', sc.providerTid, true],
+    ['Processed by', by, false],
+  ].filter(r=>r[1]!==undefined && r[1]!==null && String(r[1]).trim()!=='');
+  return { m, sc, tone:m.tone, label:m.label, title:m.service, amountText:bphAmount(m), rows };
+}
 function openBillTxDetail(kind, id){
   const src = kind==='topup' ? billTopups.find(x=>String(x.id)===String(id)) : billHistory.find(x=>String(x.id)===String(id));
   if(!src){ toast('Could not find that transaction.'); return; }
@@ -12111,10 +12128,7 @@ function openBillTxDetail(kind, id){
     if(m.tone==='ok' && sc.pins.length){
       secret += `<div class="bph-secret"><small>${sc.pins.length>1?'YOUR PINS':'YOUR PIN'}</small>${sc.pins.map(pn=>`<div class="tk">${escapeHtml(typeof pn==='object'?JSON.stringify(pn):String(pn))}</div>`).join('')}</div>`;
     }
-    const by = (typeof billTxMadeByName === 'function') ? billTxMadeByName(src) : null;
-    rows = kv('Recipient', src.recipient, true) + kv('Transaction type', m.service) + (sc.units ? kv('Units', sc.units) : '') +
-           kv('Payment method', 'ZeeShop Bill Wallet') + kv('Transaction date', src.created_at ? fmtDateTimeFull(src.created_at) : '') +
-           kv('Reference', src.reference || src.id, true) + (sc.providerTid ? kv('Transaction ID', sc.providerTid, true) : '') + (by ? kv('Processed by', by) : '');
+    rows = bphReceiptData(src).rows.map(r=>kv(r[0], r[1], r[2])).join('');
     actions = (src.status==='pending' ? `<button class="btn btn-outline" id="bph-check" style="flex:1;">Check status</button>` : '') +
               `<button class="btn btn-primary" id="bph-share" style="flex:1;">${ICON_EXPORT} Share Receipt</button>`;
   } else {

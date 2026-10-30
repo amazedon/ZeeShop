@@ -74,7 +74,10 @@ Deno.serve(async (req: Request) => {
     if (!targetRow) return json({ error: "Target account not found." }, 404);
 
     if (action === "request" || action === "cancel") {
-      if (callerRow.id !== targetRow.id) return json({ error: "You can only manage your own request." }, 403);
+      // A staff member signed in on a shared phone (Lock / Switch User) is using the OWNER's server session, so the
+      // caller here is the Owner. Allow that, but only for a person in the Owner's own business.
+      const sharedOwnerDevice = callerRow.role === "master" && callerRow.business_id === targetRow.business_id;
+      if (callerRow.id !== targetRow.id && !sharedOwnerDevice) return json({ error: "You can only manage your own request." }, 403);
 
       const payload = action === "request"
         ? { name_change_request: { firstName: first_name, lastName: last_name, requestedAt: new Date().toISOString() } }

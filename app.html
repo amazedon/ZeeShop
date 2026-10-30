@@ -1697,7 +1697,9 @@ window.addEventListener('online', ()=>syncSettingsWithServer(true));
 window.addEventListener('load', ()=>{ setTimeout(()=>syncSettingsWithServer(true), 2500); });
 setInterval(()=>{ if(Object.keys(spLoad()).length) syncSettingsWithServer(true); }, 15000);
 
+let freshConnectCode = null;   // a Staff Connect Code is only shown on the visit it was generated in
 function render(){
+  if(route !== 'staff'){ freshConnectCode = null; if(state.joinCode) state.joinCode = null; }   // codes vanish when you leave the Staff page
   if(!state.sessionUserId && route === 'note-view') route = 'notes';   // never leave a note open on the lock screen
   if(route !== 'note-view') noteMenuOpen = false;
   if(route !== 'goods'){ goodsFilter = 'all'; goodsTab = 'active'; }    // filters apply only while you are on Goods
@@ -6815,19 +6817,34 @@ function screenStaff(){
   return `
     ${subHeader("Staff")}
     <div class="card">
+      <div class="t1" style="margin-bottom:6px;">1 · Add a NEW staff member</div>
+      <p class="t2" style="margin-bottom:10px;">Use this when the person has never used ZeeShop on your business before.</p>
+      <ol class="t2" style="margin:0 0 12px;padding-left:20px;line-height:1.6;">
+        <li>Tap <b>Generate Join Code</b> — a 6-digit code appears.</li>
+        <li>Give the code to the person (call, WhatsApp, or in person).</li>
+        <li>On their own phone they open ZeeShop and tap <b>Join Shop</b> on the sign-in page, type the code, then enter their name and a PIN.</li>
+        <li>They are now on your team — you can set what they are allowed to do below.</li>
+      </ol>
+      <p class="t2" style="margin-bottom:12px;"><b>One person, one code:</b> it works once and expires after 10 minutes. It disappears when you leave this page, so generate a fresh one for each person.</p>
       ${codeActive? `
         <div class="code-display">${state.joinCode.code}</div>
-        <p class="subtle" style="text-align:center;">Valid for ${Math.ceil((state.joinCode.expiresAt-Date.now())/60000)} more minutes. Staff opens ZeeShop on their device → Join Business → enters this code.</p>
+        <p class="subtle" style="text-align:center;">Valid for ${Math.ceil((state.joinCode.expiresAt-Date.now())/60000)} more minutes · works for one person only.</p>
       ` : `<button class="btn btn-primary" id="gen-code">Generate Join Code</button>`}
     </div>
     <div class="card">
-      <div class="t1" style="margin-bottom:6px;">Staff Connect Code</div>
-      <p class="t2" style="margin-bottom:10px;">For a staff member signing into a SECOND phone — their own account, not a new one. Anyone with this code, a staff phone number, and that person's PIN can reconnect as them, so reset it if it's ever shared somewhere it shouldn't be.</p>
-      ${business().connectCode ? `
-        <div class="code-display" style="text-align:center;padding:14px;">${business().connectCode.replace(/(\d{4})(\d{4})/,'$1 $2')}</div>
+      <div class="t1" style="margin-bottom:6px;">2 · Staff already on your team — second phone</div>
+      <p class="t2" style="margin-bottom:10px;">Use this when a staff member who already has an account gets a new phone or wants to sign in on another phone. Nobody is added twice.</p>
+      <ol class="t2" style="margin:0 0 12px;padding-left:20px;line-height:1.6;">
+        <li>Tap <b>Generate Connect Code</b> — an 8-digit code appears.</li>
+        <li>Give it to that staff member.</li>
+        <li>On the new phone they open ZeeShop, tap <b>Join Shop</b>, type the 8-digit code, then enter their phone number and PIN.</li>
+      </ol>
+      <p class="t2" style="margin-bottom:12px;"><b>One person, one code:</b> it works once and expires after 10 minutes. It disappears when you leave this page, so generate a new one each time. Never share it publicly.</p>
+      ${freshConnectCode ? `
+        <div class="code-display" style="text-align:center;padding:14px;">${freshConnectCode.replace(/(\d{4})(\d{4})/,'$1 $2')}</div>
         <div style="display:flex;gap:8px;margin-top:10px;">
           <button class="btn btn-outline btn-sm" id="copy-connect-code" style="flex:1;">Copy</button>
-          <button class="btn btn-outline btn-sm" id="reset-connect-code" style="flex:1;">Generate New Code</button>
+          <button class="btn btn-outline btn-sm" id="reset-connect-code" style="flex:1;">New Code</button>
         </div>
       ` : `<button class="btn btn-outline btn-sm" id="reset-connect-code">Generate Connect Code</button>`}
     </div>
@@ -7566,13 +7583,13 @@ function openStaffPermissionsModal(userId){
 function bindStaffEvents(){
   const copyCode = document.getElementById('copy-connect-code');
   if(copyCode) copyCode.addEventListener('click', async ()=>{
-    try{ await navigator.clipboard.writeText(business().connectCode); toast('Code copied ✅'); }
-    catch(e){ toast('Could not copy — code is '+business().connectCode); }
+    try{ await navigator.clipboard.writeText(freshConnectCode); toast('Code copied ✅'); }
+    catch(e){ toast('Could not copy — code is '+freshConnectCode); }
   });
   const resetCode = document.getElementById('reset-connect-code');
   if(resetCode) resetCode.addEventListener('click', async ()=>{
-    const isReset = !!business().connectCode;
-    if(isReset && !await appConfirm('Generate a new code? The current code will stop working immediately. Staff already signed in on their devices are not affected.')) return;
+    const isReset = !!freshConnectCode;
+    if(isReset && !await appConfirm('Generate a new code? The code on screen will stop working. Staff already signed in on their devices are not affected.')) return;
     resetCode.disabled = true; resetCode.textContent = 'Generating…';
     try{
       const { data: sessionData } = await window.sb.auth.getSession();
@@ -7584,7 +7601,8 @@ function bindStaffEvents(){
       });
       const result = await res.json();
       if(!res.ok || result.error){ toast(result.error || 'Could not generate a code.'); return; }
-      business().connectCode = result.connect_code;
+      freshConnectCode = String(result.connect_code || '');
+      business().connectCode = null;
       logAudit('connect_code_reset', 'Generated a new staff connect code');
       toast(isReset ? 'New code generated ✅' : 'Connect code created ✅');
       render();

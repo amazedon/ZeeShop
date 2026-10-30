@@ -413,6 +413,18 @@ input:checked + .slider-tog::before{transform:translateX(19px);}
 <meta name="color-scheme" content="light">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-180.png">
+<meta name="description" content="ZeeShop — inventory, sales, receipts, wallet, airtime, data and bill payments for your shop, all in one app.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="ZeeShop">
+<meta property="og:title" content="ZeeShop — Your Shop, In Your Pocket">
+<meta property="og:description" content="Inventory, sales, receipts, wallet, airtime, data and bill payments — everything your shop needs in one app.">
+<meta property="og:url" content="https://zeeshop.ememart.com/">
+<meta property="og:image" content="https://zeeshop.ememart.com/icon-512.png">
+<meta property="og:image:width" content="512">
+<meta property="og:image:height" content="512">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="ZeeShop — Your Shop, In Your Pocket">
+<meta name="twitter:image" content="https://zeeshop.ememart.com/icon-512.png">
 <script src="https://checkout.flutterwave.com/v3.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
@@ -1912,6 +1924,7 @@ function renderLogin(){
       <div class="link-row">${t('login_join_staff')} <a href="#" id="go-join-shop" style="color:var(--teal);font-weight:800;">${t('login_enter_code')}</a></div>
     </div>
     <div style="text-align:center;margin-top:18px;font-size:11.5px;color:rgba(255,255,255,0.55);">
+      ${androidBrowserOnly() ? `<a href="${PLAY_STORE_URL}" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:8px;margin-bottom:12px;padding:9px 16px;border-radius:999px;border:1.5px solid rgba(255,255,255,0.35);color:#fff;font-weight:700;font-size:13px;text-decoration:none;">Get the Android app on Google Play</a><br>` : ''}
       <a href="privacy.html" target="_blank" rel="noopener" style="color:rgba(255,255,255,0.8);text-decoration:underline;">${t('privacy_policy')}</a>
       <div style="margin-top:8px;">${languageSwitcherHTML(true)}</div>
     </div>
@@ -2283,6 +2296,7 @@ function renderSignup(){
       <div class="link-row">${t('signup_have_biz')} <a href="#" id="go-login" style="color:var(--marigold-dark);font-weight:800;">${t('signup_login_link')}</a></div>
     </div>
     <div style="text-align:center;margin-top:18px;font-size:11.5px;color:rgba(255,255,255,0.55);">
+      ${androidBrowserOnly() ? `<a href="${PLAY_STORE_URL}" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:8px;margin-bottom:12px;padding:9px 16px;border-radius:999px;border:1.5px solid rgba(255,255,255,0.35);color:#fff;font-weight:700;font-size:13px;text-decoration:none;">Get the Android app on Google Play</a><br>` : ''}
       <a href="privacy.html" target="_blank" rel="noopener" style="color:rgba(255,255,255,0.8);text-decoration:underline;">${t('privacy_policy')}</a>
       <div style="margin-top:8px;">${languageSwitcherHTML(true)}</div>
     </div>
@@ -4675,6 +4689,9 @@ function handoverNoteBanner(){
 // Visual identity for each metric card — a full colored gradient
 // background (Kuda-style), set inline per card so it renders identically
 // in both the light theme and Dark/Market Mode with no extra CSS needed.
+const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=com.ememart.zeeshop';
+const ICON_STAR_RATE = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
+function androidBrowserOnly(){ return /Android/i.test(navigator.userAgent) && !isStandalone() && !/\bwv\b|; wv\)/i.test(navigator.userAgent); }
 const CARD_META = {
   billwallet: { from:'#E8962A', to:'#F2B04F' },
   sales:      { from:'#17A470', to:'#4FD8A0' },
@@ -6502,6 +6519,9 @@ function screenMore(){
     <div class="list-row" id="do-share-app" style="cursor:pointer;">
       <div class="thumb">${ICON_EXPORT}</div><div class="info"><div class="t1">${t('more_share_app')}</div><div class="t2 subtle">${t('more_share_app_hint')}</div></div><div>›</div>
     </div>
+    <div class="list-row" id="do-rate-app" style="cursor:pointer;">
+      <div class="thumb">${ICON_STAR_RATE}</div><div class="info"><div class="t1">Rate ZeeShop</div><div class="t2 subtle">Enjoying the app? Leave a review on Google Play</div></div><div>›</div>
+    </div>
     <div class="divider"></div>
     <div class="list-row" id="do-logout" style="cursor:pointer;">
       <div class="thumb">${ICON_LOCK}</div><div class="info"><div class="t1">${t('more_lock')}</div></div><div>›</div>
@@ -6514,12 +6534,14 @@ function screenMore(){
 function bindMoreEvents(){
   const inboxRow = document.querySelector('[data-open-inbox]');
   if(inboxRow){ inboxRow.addEventListener('click', openInbox); inboxRow.addEventListener('keydown', e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openInbox(); } }); }
+  const rateAppBtn = document.getElementById('do-rate-app');
+  if(rateAppBtn) rateAppBtn.addEventListener('click', ()=>{ window.open(PLAY_STORE_URL, '_blank', 'noopener'); });
   const shareAppBtn = document.getElementById('do-share-app');
   if(shareAppBtn) shareAppBtn.addEventListener('click', async ()=>{
     const shareData = {
       title: 'ZeeShop — Your Shop, In Your Pocket',
       text: 'I use ZeeShop to manage sales, stock and customers right from my phone. Check it out:',
-      url: window.location.origin + '/index.html'
+      url: PLAY_STORE_URL
     };
     if(navigator.share){
       try{ await navigator.share(shareData); logAudit('app_shared', 'Shared the app'); }
@@ -12563,6 +12585,10 @@ const FAQ_GROUPS = [
     { q:"What is Lock / Switch User?", a:"More → Lock / Switch User takes you back to the PIN screen without signing the business out, so another person can unlock their own profile. It's the quickest way to protect the app when you step away. Log Out is different: it fully signs the business out of that device." },
     { q:"What is the Bill Payments PIN?", a:"A 4-digit PIN, set by the Owner under More → Privacy & Security, that's asked for before every airtime, data, electricity, or other bill payment — so nobody using an unlocked phone can spend your Bill Wallet. If you forget it, tap Reset Payment PIN; we email a 6-digit code to the email on your account (valid for 5 minutes) and you choose a new PIN." },
     { q:"Can I change my phone number or username?", a:"The Owner can change their phone number and username under More → My Profile — you'll need to enter your current password to confirm. Staff can change their phone number with their current PIN; a staff username can't be changed, and a staff name change needs the Owner's approval. Your email can't be changed in the app (see above)." },
+  ]},
+  { category: "Getting the App", items: [
+    { q:"Is there an Android app?", a:"Yes. ZeeShop is on Google Play — search for ZeeShop or open https://play.google.com/store/apps/details?id=com.ememart.zeeshop on your phone. You can also keep using it in your browser; your business, staff and data are the same either way." },
+    { q:"How can I tell another shop owner about ZeeShop?", a:"Go to More → Share This App. It sends your friend the Google Play link with a short message. If you enjoy ZeeShop, More → Rate ZeeShop lets you leave a review on Google Play." },
   ]},
   { category: "Bill Payments", items: [
     { q:"What can I pay for with Bill Payments?", a:"Airtime, Data Bundles, Cable TV, Electricity, Betting wallet funding, Result Checker PINs, and Internet (Smile and Spectranet). Find them under More → Bill Payments, or tap the Airtime, Data, or Electricity tiles on Home." },

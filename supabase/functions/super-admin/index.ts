@@ -462,6 +462,48 @@ Deno.serve(async (req: Request) => {
       }, 200);
     }
 
+    // =====================================================================
+    // DELETED ACCOUNTS — businesses whose owner asked for deletion (businesses.deletion_requested_at). They are removed for good
+    // 30 days after the request, so until then a Super Admin can restore them.
+    // =====================================================================
+    if (action === "list_pending_deletions") {
+      const { data: rows, error } = await admin.from("businesses").select("id, name, country, deletion_requested_at, is_active")
+        .not("deletion_requested_at", "is", null).order("deletion_requested_at", { ascending: false });
+      if (error) return json({ error: error.message }, 500);
+      const ids = (rows || []).map((r: { id: string }) => r.id);
+      const owners: Record<string, { name: string; email: string | null; phone: string | null }> = {};
+      if (ids.length) {
+        const { data: ppl } = await admin.from("app_users").select("business_id, first_name, last_name, email, phone").eq("role", "master").in("business_id", ids);
+        (ppl || []).forEach((u: { business_id: string; first_name: string; last_name: string; email: string | null; phone: string | null }) => {
+          owners[u.business_id] = { name: `${u.first_name || ""} ${u.last_name || ""}`.trim(), email: u.email, phone: u.phone };
+        });
+      }
+      const DAY = 86_400_000;
+      const items = (rows || []).map((r: { id: string; name: string; country: string; deletion_requested_at: string }) => {
+        const deleteOn = new Date(new Date(r.deletion_requested_at).getTime() + 30 * DAY);
+        const daysLeft = Math.ceil((deleteOn.getTime() - Date.now()) / DAY);
+        return { id: r.id, name: r.name, country: r.country, requested_at: r.deletion_requested_at, delete_on: deleteOn.toISOString(), days_left: daysLeft, can_restore: daysLeft > 0, owner: owners[r.id] || null };
+      });
+      return json({ items }, 200);
+    }
+
+    if (action === "restore_business") {
+      const businessId = params.business_id;
+      if (!businessId) return json({ error: "Missing business_id" }, 400);
+      const { data: biz } = await admin.from("businesses").select("id, name, deletion_requested_at").eq("id", businessId).maybeSingle();
+      if (!biz) return json({ error: "That business no longer exists — it may already have been permanently deleted." }, 404);
+      if (!biz.deletion_requested_at) return json({ error: "This business is not scheduled for deletion." }, 400);
+      const deleteOn = new Date(biz.deletion_requested_at).getTime() + 30 * 86_400_000;
+      if (Date.now() >= deleteOn) return json({ error: "The 30-day restore window has passed, so this account can no longer be restored." }, 400);
+      const { error: updErr } = await admin.from("businesses").update({ deletion_requested_at: null, is_active: true }).eq("id", businessId);
+      if (updErr) return json({ error: updErr.message }, 500);
+      await admin.from("audit_log_platform").insert({
+        actor_auth_user_id: callerData.user.id, action: "restore_business", target_business_id: businessId,
+        detail: `Restored "${biz.name}" — deletion requested ${biz.deletion_requested_at} was cancelled.`,
+      }).then((r) => { if (r.error) console.log("audit_log_platform insert skipped:", r.error.message); });
+      return json({ ok: true, name: biz.name }, 200);
+    }
+
     if (action === "get_flw_fee_settings") {
       const { data, error } = await admin.from("platform_settings").select("flw_fee_type, flw_fee_value, flw_fee_cap").eq("id", 1).maybeSingle();
       if (error) return json({ error: "Flutterwave fee settings aren't set up yet — run flutterwave-fee.sql in Supabase first. (" + error.message + ")" }, 500);

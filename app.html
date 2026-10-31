@@ -4443,6 +4443,19 @@ function bellItems(){
   return items;
 }
 function bellCount(){ return bellItems().reduce((t,i)=>t+i.n, 0); }
+// One line summing up the shop's stock, shown in the bell even when everything is fine.
+function bellStockSummary(){
+  const goods = state.goods.filter(g=>g.shopId===state.currentShopId && isGoodActive(g));
+  if(!goods.length) return 'No goods yet';
+  const a = alertCountsRaw();
+  const out = goods.filter(g=>totalStock(g)<=0).length;
+  const bits = [];
+  if(out) bits.push(out+' out of stock');
+  if(a.lowStock) bits.push(a.lowStock+' running low');
+  if(a.expiring) bits.push(a.expiring+' expiring soon');
+  const total = goods.length+' item'+(goods.length>1?'s':'');
+  return bits.length ? total+' · '+bits.join(' · ') : total+' · all healthy';
+}
 function openBell(){
   const items = bellItems();
   const rows = items.length ? items.map((i,ix)=>`
@@ -4459,6 +4472,12 @@ function openBell(){
       </div></div>
     <div class="section-head" style="margin:4px 0 8px;"><h3 style="font-size:15px;">Needs attention</h3></div>
     ${rows}
+    <div class="section-head" style="margin:14px 0 8px;"><h3 style="font-size:15px;">Stock</h3></div>
+    <div class="nz-row" id="bell-stock-row" role="button" tabindex="0">
+      <div class="nz-tile">📦</div>
+      <div class="nz-main"><div class="nz-t1">Stock</div><div class="nz-t2">${escapeHtml(bellStockSummary())}</div></div>
+      <div class="nz-chev">›</div>
+    </div>
     <div class="section-head" style="margin:14px 0 8px;"><h3 style="font-size:15px;">Messages</h3></div>
     ${messagesRowHtml()}`);
   if(!ov) return;
@@ -4474,6 +4493,12 @@ function openBell(){
     el.addEventListener('click', go);
     el.addEventListener('keydown', e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); go(); } });
   });
+  const stockRow = document.getElementById('bell-stock-row');
+  if(stockRow){
+    const openStock = ()=>{ nzClose('nz-bell'); goodsTab='active'; goodsFilter='all'; route='goods'; render(); };
+    stockRow.addEventListener('click', openStock);
+    stockRow.addEventListener('keydown', e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openStock(); } });
+  }
   const inboxRow = ov.querySelector('[data-open-inbox]');
   if(inboxRow){
     const openIt = ()=>{ nzClose('nz-bell'); setTimeout(openInbox, 200); };

@@ -3824,7 +3824,7 @@ function renderShell(){
       </select>
       ${isMaster() ? `<button class="icon-btn" id="add-shop-btn" title="Add shop">＋</button>`:''}
       <span id="sync-dot" class="sync-dot" title="Sync status"></span>
-      <button class="icon-btn badge-dot" data-count="${alerts.expiring+alerts.dueSoon+alerts.overdue+alerts.lowStock}" id="alerts-btn">${ICON_BELL}</button>
+      <button class="icon-btn badge-dot" data-count="${bellCount()}" id="alerts-btn" aria-label="Notifications">${ICON_BELL}</button>
     </div>
     <main id="main-content">${renderRoute()}</main>
     <div class="bottomnav">
@@ -3876,7 +3876,7 @@ function bindShellEvents(){
   const addShop = document.getElementById('add-shop-btn');
   if(addShop) addShop.addEventListener('click', ()=>handleAddShop());
   const alertsBtn = document.getElementById('alerts-btn');
-  if(alertsBtn) alertsBtn.addEventListener('click', ()=>{ route='goods'; render(); toast('Showing stock needing attention'); });
+  if(alertsBtn) alertsBtn.addEventListener('click', openBell);
 
   document.querySelectorAll('.nav-item[data-route]').forEach(b=>{
     b.addEventListener('click', ()=>{ route=b.dataset.route; cart = route==='sale'?cart:cart; render(); });
@@ -4425,6 +4425,62 @@ function openInbox(){
   pushApi('mark_read').catch(()=>{});
   if(annFetchedAt && Date.now()-annFetchedAt > 30000) loadAnnouncements();
 }
+// ---------- Bell: one place for everything that needs attention ----------
+// Each line = something the person can act on. The bell number is the total of these lines, and it matches
+// the "Needs Attention" cards on Home. People only see lines they are allowed to act on.
+function bellItems(){
+  const items = [];
+  const a = alertCounts();
+  const goods = state.goods.filter(g=>g.shopId===state.currentShopId && isGoodActive(g));
+  const outStock = inAppAlertsOn() ? goods.filter(g=>totalStock(g)<=0).length : 0;
+  const nameReqs = canManageStaff() ? state.users.filter(u=>u.businessId===business().id && u.nameChangeRequest && canManageThisUser(u)).length : 0;
+  if(nameReqs>0) items.push({ n:nameReqs, icon:ICON_EDIT_NOTE, text:`<b>${nameReqs} name change request${nameReqs>1?'s':''}</b> waiting for your approval`, route:'staff' });
+  if(isMaster() && a.overdue>0) items.push({ n:a.overdue, icon:ICON_ALERT_DOT, text:`<b>${a.overdue} customer${a.overdue>1?'s':''}</b> overdue on credit`, route:'credit' });
+  if(isMaster() && a.dueSoon>0) items.push({ n:a.dueSoon, icon:ICON_CARD, text:`<b>${a.dueSoon} customer${a.dueSoon>1?'s':''}</b> owe you, due within 2 days`, route:'credit' });
+  if(a.expiring>0) items.push({ n:a.expiring, icon:'⏰', text:`<b>${a.expiring} item${a.expiring>1?'s':''}</b> expiring within 14 days`, route:'goods' });
+  if(a.lowStock>0) items.push({ n:a.lowStock, icon:ICON_TREND_DOWN, text:`<b>${a.lowStock} item${a.lowStock>1?'s':''}</b> running low`, route:'goods', filter:'low' });
+  if(outStock>0) items.push({ n:outStock, icon:ICON_INBOX_EMPTY, text:`<b>${outStock} item${outStock>1?'s':''}</b> out of stock`, route:'goods', filter:'out' });
+  return items;
+}
+function bellCount(){ return bellItems().reduce((t,i)=>t+i.n, 0); }
+function openBell(){
+  const items = bellItems();
+  const rows = items.length ? items.map((i,ix)=>`
+    <div class="nz-row" data-bell-go="${ix}" role="button" tabindex="0">
+      <div class="nz-tile">${i.icon}</div>
+      <div class="nz-main"><div class="nz-t1" style="font-weight:600;white-space:normal;">${i.text}</div></div>
+      <div class="nz-chev">›</div>
+    </div>`).join('') : `<div class="nz-empty"><div class="e">✅</div><b>All clear</b><div style="font-size:13px;margin-top:4px;">Nothing needs your attention right now.</div></div>`;
+  const ov = nzOverlay('nz-bell', `
+    <div class="nz-head"><h3>Notifications</h3>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button class="nz-x" aria-label="Notification settings" id="nz-bell-settings">⚙</button>
+        <button class="nz-x" aria-label="Close" id="nz-bell-x">✕</button>
+      </div></div>
+    <div class="section-head" style="margin:4px 0 8px;"><h3 style="font-size:15px;">Needs attention</h3></div>
+    ${rows}
+    <div class="section-head" style="margin:14px 0 8px;"><h3 style="font-size:15px;">Messages</h3></div>
+    ${messagesRowHtml()}`);
+  if(!ov) return;
+  document.getElementById('nz-bell-x').addEventListener('click', ()=>nzClose('nz-bell'));
+  document.getElementById('nz-bell-settings').addEventListener('click', ()=>{ nzClose('nz-bell'); openNotifSettings(); });
+  ov.querySelectorAll('[data-bell-go]').forEach(el=>{
+    const go = ()=>{
+      const it = items[Number(el.dataset.bellGo)]; if(!it) return;
+      nzClose('nz-bell');
+      if(it.route==='goods'){ goodsTab='active'; goodsFilter = it.filter || 'all'; }
+      route = it.route; render();
+    };
+    el.addEventListener('click', go);
+    el.addEventListener('keydown', e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); go(); } });
+  });
+  const inboxRow = ov.querySelector('[data-open-inbox]');
+  if(inboxRow){
+    const openIt = ()=>{ nzClose('nz-bell'); setTimeout(openInbox, 200); };
+    inboxRow.addEventListener('click', openIt);
+    inboxRow.addEventListener('keydown', e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openIt(); } });
+  }
+}
 // kept for the optional popup mode
 function showUnseenAnnouncement(){ /* disabled unless ANN_POPUP = true; the unread dot + push banner replace it */ }
 
@@ -4560,7 +4616,7 @@ function notifRefreshAll(){
   const sheet = document.getElementById('nz-settings-body'); if(sheet) sheet.innerHTML = notifSettingsInner();
   const sum = document.getElementById('nz-settings-summary'); if(sum) sum.textContent = notifSummaryText();
   bindNotifPrompt(); bindNotifSettings();
-  if(typeof alertCounts === 'function'){ const b = document.getElementById('alerts-btn'); if(b){ const a = alertCounts(); b.setAttribute('data-count', a.expiring+a.dueSoon+a.overdue+a.lowStock); } }
+  if(typeof bellCount === 'function'){ const b = document.getElementById('alerts-btn'); if(b) b.setAttribute('data-count', bellCount()); }
 }
 
 // ---------- Home prompt (only after sign-in; never on the login screen) ----------

@@ -410,6 +410,8 @@ details.acc[open]>summary .acc-chev{transform:rotate(180deg);}
 details.acc[open]>summary{border-bottom:1px solid var(--line);}
 details.acc>.acc-body{padding:12px 14px 14px;}
 details.acc.acc-alert{border-color:var(--marigold-dark);}
+.acc-tag{display:inline-block;font-size:10.5px;font-weight:800;padding:2px 8px;border-radius:99px;background:var(--paper-dim);color:var(--text-dim);margin-right:6px;letter-spacing:.02em;}
+.acc-tag.app{background:#DDF3E6;color:#1E7A4A;}
 .acc-dot{width:9px;height:9px;border-radius:50%;background:var(--marigold-dark);flex-shrink:0;}
 .progress-bar{height:6px;background:var(--paper-dim);border-radius:4px;overflow:hidden;margin-top:6px;}
 .progress-bar .fill{height:100%;background:var(--marigold);border-radius:4px;}
@@ -1722,7 +1724,7 @@ window.addEventListener('online', ()=>syncSettingsWithServer(true));
 window.addEventListener('load', ()=>{ setTimeout(()=>syncSettingsWithServer(true), 2500); });
 setInterval(()=>{ if(Object.keys(spLoad()).length) syncSettingsWithServer(true); }, 15000);
 
-let staffOpen = new Set();   // which collapsible rows on the Staff page are open
+let staffOpen = new Set(['team']);   // which collapsible rows on the Staff page are open
 const ICON_ACC_CHEV = '<svg class="acc-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
 function accRow(key, headHtml, bodyHtml, extraClass){
   return `<details class="acc ${extraClass||''}" data-acc="${key}" ${staffOpen.has(key)?'open':''}><summary>${headHtml}${ICON_ACC_CHEV}</summary><div class="acc-body">${bodyHtml}</div></details>`;
@@ -1735,7 +1737,7 @@ document.addEventListener('toggle', e=>{
 }, true);
 let freshConnectCode = null;   // a Staff Connect Code is only shown on the visit it was generated in
 function render(){
-  if(route !== 'staff'){ staffOpen.clear(); freshConnectCode = null; if(state.joinCode) state.joinCode = null; }   // codes vanish when you leave the Staff page
+  if(route !== 'staff'){ staffOpen = new Set(['team']); freshConnectCode = null; if(state.joinCode) state.joinCode = null; }   // codes vanish when you leave the Staff page
   if(!state.sessionUserId && route === 'note-view') route = 'notes';   // never leave a note open on the lock screen
   if(route !== 'note-view') noteMenuOpen = false;
   if(route !== 'goods'){ goodsFilter = 'all'; goodsTab = 'active'; }    // filters apply only while you are on Goods
@@ -6908,14 +6910,15 @@ function screenStaff(){
       ` : `<button class="btn btn-outline btn-sm" id="reset-connect-code">Generate Connect Code</button>`}`;
   const recordOnly = state.recordOnlyStaff.filter(p=>p.businessId===business().id);
   const noAppBody = `
-      <button class="btn btn-outline" id="add-recordonly-btn" style="width:100%;margin-bottom:12px;">＋ Add a Person (No App Access)</button>
-      ${recordOnly.length===0 ? `<p class="subtle">Nobody added here yet.</p>` :
+      <p class="t2" style="margin-bottom:12px;">For paid staff or apprentices who won't use the app. They are added to your Team list below, marked “No app access”, so their employment records stay in one place.</p>
+      <button class="btn btn-outline" id="add-recordonly-btn" style="width:100%;">＋ Add a Person (No App Access)</button>`;
+  const recordRows = recordOnly.length===0 ? `<p class="subtle">Nobody added here yet.</p>` :
     recordOnly.map(p=>{
       const head = `
         <div class="avatar" style="width:40px;height:40px;font-size:14px;flex-shrink:0;background:${p.isActive===false?'var(--line)':'var(--text-dim)'};">${initials(p.firstName,p.lastName)}</div>
         <div class="acc-main">
           <div class="acc-title">${escapeHtml(p.firstName+' '+p.lastName)}</div>
-          <div class="acc-sub">No app account${p.isActive===false?' · left':''}</div>
+          <div class="acc-sub"><span class="acc-tag">No app access</span>${p.isActive===false?'left':''}</div>
         </div>`;
       const body = `
         ${p.phone?`<div class="t2" style="margin-bottom:10px;">${escapeHtml(p.phone)}</div>`:''}
@@ -6925,18 +6928,8 @@ function screenStaff(){
           ${!employmentRecordFor(p.id) ? `<button class="btn btn-sm btn-outline" data-delete-recordonly="${p.id}" style="color:var(--red);">Delete</button>` : ''}
         </div>`;
       return accRow('r-'+p.id, head, body);
-    }).join('')}`;
-  return `
-    ${subHeader("Staff")}
-    <div class="section-head"><h3>Add someone</h3></div>
-    ${accRow('join', `<div class="acc-main"><div class="acc-title">New staff member</div><div class="acc-sub">Never used ZeeShop on your business</div></div>`, joinBody)}
-    ${accRow('connect', `<div class="acc-main"><div class="acc-title">Staff on a second phone</div><div class="acc-sub">Already on your team, new or extra phone</div></div>`, connectBody)}
-    ${accRow('noapp', `<div class="acc-main"><div class="acc-title">People Without App Access</div><div class="acc-sub">Paid staff or apprentices who won't use the app${recordOnly.length?' · '+recordOnly.length:''}</div></div>`, noAppBody)}
-    <button class="btn btn-outline" id="offer-letter-btn" style="width:100%;margin:2px 0 6px;">${ICON_MAIL} Send Offer Letter to a Candidate</button>
-    ${pendingCount>0?`<div class="card" style="border-color:var(--marigold-dark);"><b>${ICON_EDIT_NOTE} ${pendingCount} name change request${pendingCount>1?'s':''}</b> waiting below.</div>`:''}
-    <div class="divider" style="margin:22px 0 6px;"></div>
-    <div class="section-head"><h3>Team</h3></div>
-    ${staff.length===0?`<p class="subtle">No staff yet. Open “New staff member” above to invite one.</p>`:staff.map(u=>{
+    }).join('');
+  const staffRows = staff.length===0?`<p class="subtle">No staff yet. Open “New staff member” above to invite one.</p>`:staff.map(u=>{
       const restrictions = [];
       if(u.role==='staff'){
         if(u.canSell===false) restrictions.push('Sales off');
@@ -6952,7 +6945,7 @@ function screenStaff(){
         <div class="avatar" style="width:40px;height:40px;font-size:14px;flex-shrink:0;background:${u.isActive?'var(--ink)':'var(--line)'};">${initials(u.firstName,u.lastName)}</div>
         <div class="acc-main">
           <div class="acc-title">${escapeHtml(u.firstName+' '+u.lastName)}</div>
-          <div class="acc-sub">${u.isSuperAdmin?'⭐ Super Admin · ':''}${escapeHtml(u.role)}${u.isActive===false?' · deactivated':''}</div>
+          <div class="acc-sub"><span class="acc-tag app">App user</span>${u.isSuperAdmin?'⭐ Super Admin · ':''}${escapeHtml(u.role)}${u.isActive===false?' · deactivated':''}</div>
         </div>
         ${hasReq?'<span class="acc-dot" title="Name change request"></span>':''}`;
       const body = `
@@ -6975,8 +6968,17 @@ function screenStaff(){
           <button class="btn btn-sm ${u.isActive===false?'btn-outline':'btn-danger'}" data-toggle-active="${u.id}">${u.isActive===false?'Reactivate':'Remove'}</button>
         </div>` : `<p class="subtle">Managed by the Owner only.</p>`}`;
       return accRow('u-'+u.id, head, body, hasReq?'acc-alert':'');
-    }).join('')}
-
+    }).join('');
+  const teamBody = (staff.length+recordOnly.length)===0 ? `<p class="subtle">Nobody on your team yet. Open “New staff member” above to invite someone.</p>` : staffRows + recordRows;
+  return `
+    ${subHeader("Staff")}
+    <div class="section-head"><h3>Add someone</h3></div>
+    ${accRow('join', `<div class="acc-main"><div class="acc-title">New staff member</div><div class="acc-sub">Never used ZeeShop on your business</div></div>`, joinBody)}
+    ${accRow('connect', `<div class="acc-main"><div class="acc-title">Staff on a second phone</div><div class="acc-sub">Already on your team, new or extra phone</div></div>`, connectBody)}
+    ${accRow('noapp', `<div class="acc-main"><div class="acc-title">People Without App Access</div><div class="acc-sub">Paid staff or apprentices who won't use the app</div></div>`, noAppBody)}
+    <button class="btn btn-outline" id="offer-letter-btn" style="width:100%;margin:2px 0 6px;">${ICON_MAIL} Send Offer Letter to a Candidate</button>
+    ${pendingCount>0?`<div class="card" style="border-color:var(--marigold-dark);"><b>${ICON_EDIT_NOTE} ${pendingCount} name change request${pendingCount>1?'s':''}</b> waiting below.</div>`:''}
+    ${accRow('team', `<div class="acc-main"><div class="acc-title">Team</div><div class="acc-sub">${staff.length+recordOnly.length} ${(staff.length+recordOnly.length)===1?'person':'people'} · tap to show or hide</div></div>`, teamBody)}
   `;
 }
 /* ============================================================

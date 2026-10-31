@@ -7271,10 +7271,155 @@ function drawGreetingCanvas(canvas, filled, styleIx, withFooter){
     ctx.globalAlpha = 1;
   }
 }
+/* ---------- Animated GIF cards (made inside the app — no outside service) ---------- */
+const GREET_EFFECTS = [ {id:'confetti', label:'Confetti'}, {id:'hearts', label:'Hearts'}, {id:'sparkle', label:'Sparkles'} ];
+function greetDefaultEffect(g){
+  const k = g.season || g.cat;
+  if(['love','valentine','mothers'].includes(k)) return 'hearts';
+  if(['quotes','motivation','thanks','ramadan','eid','easter','fathers'].includes(k)) return 'sparkle';
+  return 'confetti';
+}
+const GREET_PARTICLES = [
+  ['#F2A93B','#FFFFFF','#FF7AA8','#7FD6FF','#7CE3A1'],
+  ['#F6C768','#FFFFFF','#FF9EB5','#9FE8FF','#B5F5C8'],
+  ['#12213B','#FFFFFF','#C2417A','#1F7A63','#7A1F4B'],
+  ['#FFE3B0','#FFFFFF','#FFB3D1','#FFD1E3','#FF7AA8']
+];
+function greetRng(seed){ let a = seed>>>0; return ()=>{ a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a>>>15, 1|a); t = t + Math.imul(t ^ t>>>7, 61|t) ^ t; return ((t ^ t>>>14)>>>0)/4294967296; }; }
+function greetHeart(ctx, x, y, s){
+  ctx.beginPath(); ctx.moveTo(x, y + s*0.35);
+  ctx.bezierCurveTo(x - s, y - s*0.3, x - s*0.55, y - s*1.05, x, y - s*0.5);
+  ctx.bezierCurveTo(x + s*0.55, y - s*1.05, x + s, y - s*0.3, x, y + s*0.35);
+  ctx.closePath(); ctx.fill();
+}
+function greetStar(ctx, x, y, r){
+  ctx.beginPath();
+  for(let i=0;i<8;i++){ const rr = i%2 ? r*0.22 : r, an = Math.PI/4*i - Math.PI/2; ctx.lineTo(x + Math.cos(an)*rr, y + Math.sin(an)*rr); }
+  ctx.closePath(); ctx.fill();
+}
+// Draws one frame of the effect. f runs 0..F-1 and everything is periodic, so the GIF loops smoothly.
+function greetDrawEffect(ctx, effect, f, F, W, H, colors){
+  const rnd = greetRng(effect==='hearts' ? 7 : effect==='sparkle' ? 21 : 99), t = f/F;
+  if(effect==='confetti'){
+    for(let i=0;i<46;i++){
+      const x0 = rnd()*W, y0 = rnd()*H, sp = 1 + Math.floor(rnd()*2), w = 8+rnd()*10, h = 14+rnd()*14, col = colors[Math.floor(rnd()*colors.length)], rot0 = rnd()*6.28, spin = 1 + Math.floor(rnd()*3), sway = 10+rnd()*16, ph = rnd()*6.28;
+      const y = ((y0 + t*H*sp) % (H+60)) - 30, x = x0 + Math.sin(ph + t*6.283*sp)*sway;
+      ctx.save(); ctx.translate(x, y); ctx.rotate(rot0 + t*6.283*spin); ctx.fillStyle = col; ctx.globalAlpha = .9; ctx.fillRect(-w/2, -h/2, w, h); ctx.restore();
+    }
+  } else if(effect==='hearts'){
+    for(let i=0;i<20;i++){
+      const x0 = rnd()*W, y0 = rnd()*(H+80), s = 10+rnd()*20, col = colors[Math.floor(rnd()*colors.length)], ph = rnd()*6.28, sway = 12+rnd()*18;
+      const y = H + 40 - ((y0 + t*(H+80)) % (H+80)), x = x0 + Math.sin(ph + t*6.283)*sway;
+      ctx.save(); ctx.globalAlpha = .55 + .35*Math.sin(ph + t*6.283); ctx.fillStyle = col; greetHeart(ctx, x, y, s); ctx.restore();
+    }
+  } else {
+    for(let i=0;i<26;i++){
+      const x = rnd()*W, y = rnd()*H, r0 = 8+rnd()*16, col = colors[Math.floor(rnd()*colors.length)], ph = rnd();
+      const k = 0.5 + 0.5*Math.sin(6.283*(t + ph)), r = r0*(0.35+0.65*k);
+      ctx.save(); ctx.globalAlpha = .25 + .7*k; ctx.fillStyle = col; greetStar(ctx, x, y, r); ctx.restore();
+    }
+  }
+}
+// ----- colour reduction (median cut) + GIF writer -----
+function gifPalette(samples){
+  // samples: flat Uint8 array of r,g,b
+  const n = samples.length/3;
+  let boxes = [{ idx: Uint32Array.from({length:n}, (_,i)=>i) }];
+  const range = b=>{ let mn=[255,255,255], mx=[0,0,0]; for(let k=0;k<b.idx.length;k++){ const i=b.idx[k]*3; for(let c=0;c<3;c++){ const v=samples[i+c]; if(v<mn[c]) mn[c]=v; if(v>mx[c]) mx[c]=v; } } b.mn=mn; b.mx=mx; b.rg=[mx[0]-mn[0],mx[1]-mn[1],mx[2]-mn[2]]; b.big=Math.max(b.rg[0],b.rg[1],b.rg[2]); return b; };
+  boxes[0] = range(boxes[0]);
+  while(boxes.length < 256){
+    let bi = -1, bs = 0;
+    boxes.forEach((b,i)=>{ const sc = b.big * Math.sqrt(b.idx.length); if(b.idx.length>1 && b.big>0 && sc>bs){ bs=sc; bi=i; } });
+    if(bi<0) break;
+    const b = boxes[bi], ch = b.rg[0]>=b.rg[1] && b.rg[0]>=b.rg[2] ? 0 : (b.rg[1]>=b.rg[2] ? 1 : 2);
+    const arr = Array.from(b.idx).sort((x,y)=>samples[x*3+ch]-samples[y*3+ch]), mid = arr.length>>1;
+    boxes.splice(bi,1, range({ idx: Uint32Array.from(arr.slice(0,mid)) }), range({ idx: Uint32Array.from(arr.slice(mid)) }));
+  }
+  const pal = new Uint8Array(256*3);
+  boxes.forEach((b,i)=>{ let r=0,g=0,bl=0; for(let k=0;k<b.idx.length;k++){ const j=b.idx[k]*3; r+=samples[j]; g+=samples[j+1]; bl+=samples[j+2]; } const m=b.idx.length||1; pal[i*3]=Math.round(r/m); pal[i*3+1]=Math.round(g/m); pal[i*3+2]=Math.round(bl/m); });
+  return pal;
+}
+function gifIndexer(pal){
+  const cache = new Int16Array(32768).fill(-1);
+  return (rgba, out)=>{
+    for(let i=0, p=0; i<out.length; i++, p+=4){
+      const key = ((rgba[p]>>3)<<10) | ((rgba[p+1]>>3)<<5) | (rgba[p+2]>>3);
+      let c = cache[key];
+      if(c<0){
+        const r = (rgba[p]&0xF8)|4, g = (rgba[p+1]&0xF8)|4, b = (rgba[p+2]&0xF8)|4; let best=0, bd=1e9;
+        for(let j=0;j<256;j++){ const dr=pal[j*3]-r, dg=pal[j*3+1]-g, db=pal[j*3+2]-b, d=dr*dr+dg*dg+db*db; if(d<bd){ bd=d; best=j; } }
+        c = cache[key] = best;
+      }
+      out[i] = c;
+    }
+  };
+}
+function gifLzw(indices){
+  const minSize = 8, clear = 256, eoi = 257; let next = 258, size = 9, dict = new Map();
+  const out = []; let cur = 0, bits = 0;
+  const emit = code=>{ cur |= code << bits; bits += size; while(bits >= 8){ out.push(cur & 255); cur >>>= 8; bits -= 8; } };
+  emit(clear);
+  let prefix = indices[0];
+  for(let i=1;i<indices.length;i++){
+    const k = indices[i], key = (prefix << 8) | k, hit = dict.get(key);
+    if(hit === undefined){
+      emit(prefix);
+      if(next === 4096){ emit(clear); next = 258; size = 9; dict = new Map(); }
+      else { if(next >= (1 << size)) size++; dict.set(key, next++); }
+      prefix = k;
+    } else prefix = hit;
+  }
+  emit(prefix); emit(eoi);
+  if(bits > 0) out.push(cur & 255);
+  return out;
+}
+class GifWriter{
+  constructor(w, h, pal){
+    this.b = [];
+    const P = (...a)=>a.forEach(x=>this.b.push(x));
+    const s = t=>{ for(const ch of t) this.b.push(ch.charCodeAt(0)); };
+    s('GIF89a'); P(w&255, w>>8, h&255, h>>8, 0xF7, 0, 0);
+    for(let i=0;i<768;i++) this.b.push(pal[i]);
+    P(0x21,0xFF,0x0B); s('NETSCAPE2.0'); P(3,1,0,0,0);   // loop forever
+    this.w = w; this.h = h;
+  }
+  frame(indices, delayCs){
+    const P = (...a)=>a.forEach(x=>this.b.push(x));
+    P(0x21,0xF9,4,0, delayCs&255, delayCs>>8, 0, 0);
+    P(0x2C, 0,0,0,0, this.w&255, this.w>>8, this.h&255, this.h>>8, 0);
+    P(8);
+    const data = gifLzw(indices);
+    for(let i=0;i<data.length;i+=255){ const n = Math.min(255, data.length-i); this.b.push(n); for(let j=0;j<n;j++) this.b.push(data[i+j]); }
+    this.b.push(0);
+  }
+  finish(){ this.b.push(0x3B); return new Blob([Uint8Array.from(this.b)], {type:'image/gif'}); }
+}
+async function makeGreetingGif(filled, styleIx, footer, effect, onProgress){
+  const FW = 540, FH = 675, F = 20;
+  const big = document.createElement('canvas'); drawGreetingCanvas(big, filled, styleIx, footer);
+  const base = document.createElement('canvas'); base.width = FW; base.height = FH;
+  base.getContext('2d').drawImage(big, 0, 0, FW, FH);
+  const cv = document.createElement('canvas'); cv.width = FW; cv.height = FH;
+  const ctx = cv.getContext('2d', { willReadFrequently:true });
+  const colors = GREET_PARTICLES[styleIx] || GREET_PARTICLES[0];
+  const render = f=>{ ctx.globalAlpha = 1; ctx.drawImage(base, 0, 0); greetDrawEffect(ctx, effect, f, F, FW, FH, colors); return ctx.getImageData(0,0,FW,FH).data; };
+  // one palette for the whole GIF, learned from a few frames
+  const samples = []; 
+  [0, 5, 10, 15].forEach(f=>{ const d = render(f); for(let p=0; p<d.length; p+=4*9){ samples.push(d[p], d[p+1], d[p+2]); } });
+  const pal = gifPalette(Uint8Array.from(samples)), indexer = gifIndexer(pal);
+  const gw = new GifWriter(FW, FH, pal), idx = new Uint8Array(FW*FH);
+  for(let f=0; f<F; f++){
+    indexer(render(f), idx); gw.frame(idx, 8);
+    if(onProgress) onProgress(f+1, F);
+    await new Promise(r=>setTimeout(r, 0));
+  }
+  return gw.finish();
+}
+
 function openGreeting(id){
   const g = greetAll().find(x=>x.id===id); if(!g) return;
   const prefs = greetPrefs();
-  let to = '', from = greetDefaultFrom(g), styleIx = Math.min(prefs.style||0, GREET_STYLES.length-1), footer = prefs.footer !== false;
+  let to = '', from = greetDefaultFrom(g), styleIx = Math.min(prefs.style||0, GREET_STYLES.length-1), footer = prefs.footer !== false, effect = greetDefaultEffect(g);
   const hasTo = greetHasTo(g);
   const filled = ()=>greetFill(g.body, to, from);
   const shareText = ()=>filled() + (footer ? '\n\nSent with ZeeShop' : '');
@@ -7290,9 +7435,14 @@ function openGreeting(id){
       <button class="btn btn-primary" id="gr-share" style="flex:1;">Share</button>
       <button class="btn btn-outline" id="gr-fav" style="width:56px;flex:none;" aria-label="Save message">${isFav()?'♥':'♡'}</button>
     </div>
-    <div style="display:flex;gap:8px;">
+    <div style="display:flex;gap:8px;margin-bottom:8px;">
       <button class="btn btn-outline" id="gr-copy" style="flex:1;">Copy</button>
       <button class="btn btn-outline" id="gr-pic" style="flex:1;">Share as picture</button>
+    </div>
+    <div class="gr-anim">
+      <div class="gr-anim-t">Animated GIF</div>
+      <div class="gr-fx" id="gr-fx">${GREET_EFFECTS.map(e=>`<button type="button" class="gr-chip ${e.id===effect?'on':''}" data-gr-fx="${e.id}">${e.label}</button>`).join('')}</div>
+      <button class="btn btn-outline" id="gr-gif" style="width:100%;">Share as animated GIF</button>
     </div>`);
   const prev = document.getElementById('gr-preview');
   const paint = ()=>{ prev.textContent = shareText(); };
@@ -7317,6 +7467,28 @@ function openGreeting(id){
     const text = shareText();
     if(navigator.share){ try{ await navigator.share({ text }); } catch(_e){ /* cancelled */ } }
     else window.open('https://wa.me/?text='+encodeURIComponent(text), '_blank', 'noopener');
+  });
+  document.querySelectorAll('[data-gr-fx]').forEach(b=>b.addEventListener('click', ()=>{
+    effect = b.dataset.grFx;
+    document.querySelectorAll('[data-gr-fx]').forEach(x=>x.classList.toggle('on', x===b));
+  }));
+  const gifBtn = document.getElementById('gr-gif');
+  gifBtn.addEventListener('click', async ()=>{
+    if(gifBtn.disabled) return;
+    gifBtn.disabled = true; const label = gifBtn.textContent;
+    try{
+      const blob = await makeGreetingGif(filled(), styleIx, footer, effect, (n,t)=>{ gifBtn.textContent = `Making your GIF… ${n}/${t}`; });
+      const file = new File([blob], 'greeting.gif', { type:'image/gif' });
+      if(navigator.canShare && navigator.canShare({ files:[file] })){
+        try{ await navigator.share({ files:[file] }); } catch(_e){ /* cancelled */ }
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = 'greeting.gif'; a.click();
+        setTimeout(()=>URL.revokeObjectURL(url), 2000);
+        toast('Sharing is not supported here, so the GIF was downloaded.');
+      }
+    }catch(e){ toast('Could not make the GIF on this phone. Try “Share as picture” instead.'); }
+    gifBtn.textContent = label; gifBtn.disabled = false;
   });
   document.getElementById('gr-pic').addEventListener('click', async ()=>{
     const canvas = document.createElement('canvas');
@@ -7349,6 +7521,9 @@ function openGreeting(id){
     .gr-fav{color:#E0162B;font-size:16px;}
     .gr-prev{margin-top:4px;font-size:13px;line-height:1.45;color:var(--text-dim);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
     .gr-preview{white-space:pre-wrap;word-break:break-word;background:var(--paper-dim);border-radius:14px;padding:14px;font-size:15px;line-height:1.55;margin:4px 0 12px;max-height:34vh;overflow:auto;}
+    .gr-anim{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);}
+    .gr-anim-t{font-weight:800;font-size:14px;margin-bottom:8px;color:var(--ink-text,#12213B);}
+    .gr-fx{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;}
     .gr-check{display:flex;gap:8px;align-items:center;font-size:13.5px;margin-bottom:12px;}
     .gr-styles{display:flex;gap:10px;align-items:center;margin-bottom:14px;}
     .gr-sw{width:30px;height:30px;border-radius:50%;border:2px solid transparent;cursor:pointer;padding:0;}
@@ -12925,9 +13100,9 @@ const FAQ_GROUPS = [
     { q:"Can I install ZeeShop on my phone like a normal app?", a:"Yes. On Android (Chrome), open the browser menu and tap Install app or Add to Home Screen. On iPhone (Safari), tap Share, then Add to Home Screen, and open ZeeShop from that icon. Installed this way it opens full-screen and works offline — and on iPhone it's also required for push notifications." },
     { q:"I forgot my password — what do I do?", a:"Tap Forgot Password on the login screen and enter your username or email. We'll send a 6-digit code to the email on your account — enter it to set a new password. Because your email is locked for security (see Account Security below), the code can only ever go to the address you signed up with. If your account has no email on file, you'll need to create a new account." },
     { q:"How do multiple staff use the same device?", a:"Each staff member gets their own PIN. After the business owner logs in once, everyone unlocks their own profile with their PIN from the user-select screen — no need to log in with a password every time." },
-    { q:"How do I add a new staff member?", a:"Go to More → Staff → Generate Join Code. Share the code with them; they open ZeeShop on their device, tap Join Business, and enter it. The code expires after a set number of minutes." },
-    { q:"A staff member already has an account — how do they sign in on a second phone?", a:"On the new phone, tap Join Business and enter the business's Connect Code (from the Owner's Staff screen) — the app recognizes it's a reconnect and asks for their phone number and PIN instead of name details. This signs them into their existing account — it does not create a new one, so their sales history and activity stay attached to them." },
-    { q:"What is the Connect Code?", a:"A permanent code (unlike the Join Code, it doesn't expire) that lets an existing staff member sign into a second device. Find or reset it under More → Staff → Staff Connect Code — only the Owner can see or regenerate it. Resetting it doesn't sign anyone out; it just retires the old code." },
+    { q:"How do I add a new staff member?", a:"Go to More → Staff, open New staff member, and tap Generate Join Code. A 6-digit code appears. Give it to the person (call, WhatsApp or in person). On their own phone they open ZeeShop, tap Join Shop on the sign-in page, type the code, then enter their name and a PIN. The code works for one person only, expires after 10 minutes, and disappears when you leave the Staff page — so generate a fresh one for each person." },
+    { q:"A staff member already has an account — how do they sign in on a second phone?", a:"Go to More → Staff, open Staff on a second phone, and tap Generate Connect Code. An 8-digit code appears. Give it to that staff member. On the new phone they open ZeeShop, tap Join Shop, type the 8-digit code, then enter their phone number and PIN. This signs them into their existing account — it does not create a new one, so their sales history and activity stay attached to them." },
+    { q:"What is the Connect Code?", a:"A one-time 8-digit code that lets an existing staff member sign in on a second phone. It works once, for one person, and expires after 10 minutes. It disappears when you leave the Staff page, so generate a new one each time you need it, and never share it publicly. Only the Owner can generate it." },
     { q:"What's the difference between Master, Staff, Viewer, and Super Admin?", a:"Master is the owner with full access. Staff have specific permissions you assign (sell, add goods, record cash, etc). Viewer can only look, not act. Super Admin is a staff member you've trusted to manage specific shops on your behalf." },
     { q:"Can I use ZeeShop in another language?", a:"Yes — tap the language switcher at the bottom of the Login or Create Account screen. It supports English, Spanish, French, Arabic, Portuguese, Chinese, and Hindi, and remembers your choice on that device from then on." },
     { q:"How do I tell another shop owner about ZeeShop?", a:"Go to More → Share This App. It opens your phone's share sheet so you can send it straight to WhatsApp, SMS, email, or anywhere else." },
@@ -12975,13 +13150,14 @@ const FAQ_GROUPS = [
     { q:"How do I record business expenses like rent or transport?", a:"Go to More → Expenses and log the amount, category, and description. These are subtracted from your gross profit in Profit Reports to show real net profit." },
   ]},
   { category: "Staff & Payroll", items: [
-    { q:"Can staff see everything I see?", a:"No. Staff permissions are set individually under More → Staff — you control what each person can do, like recording sales, adding goods, or handling cash. Changes take effect on their device as soon as it's next online." },
-    { q:"How does a staff member reset their password?", a:"Staff don't have a password to reset — only a PIN. If they still know their current PIN, they can change it themselves under More → Privacy & Security → Change My PIN. If they've genuinely forgotten it, there's no self-service recovery — the Owner needs to go to More → Staff → tap their name → Reset PIN, then tell them the new one." },
+    { q:"Can staff see everything I see?", a:"No. Staff permissions are set individually under More → Staff → Team — open a person and tap Permissions to control what they can do, like recording sales, adding goods or handling cash. Changes take effect on their device as soon as it's next online." },
+    { q:"How does a staff member reset their password?", a:"Staff don't have a password to reset — only a PIN. If they still know their current PIN, they can change it themselves under More → Privacy & Security → Change My PIN. If they've genuinely forgotten it, there's no self-service recovery — the Owner needs to go to More → Staff → Team, open their name and tap Reset PIN, then tell them the new one." },
     { q:"How do I change my own PIN?", a:"Go to More → Privacy & Security → Change My PIN. You'll need to know your current PIN to get in first — this is for when you just want a different one, not for when you're locked out." },
-    { q:"Can staff request their name be changed?", a:"Yes — under My Profile, staff can submit a name change request, which shows up for the Owner to approve or deny under Staff. Nothing changes until the Owner approves it." },
-    { q:"How do I record salary payments or employment letters?", a:"Go to More → Staff, tap a staff member, and you'll find options to log salary payments and generate employment/offer letters tied to their record." },
+    { q:"Can staff request their name be changed?", a:"Yes — under My Profile, staff can submit a name change request. It appears for the Owner (and Super Admins) in the bell under Needs attention, and on that person's row in More → Staff → Team. Nothing changes until it is approved." },
+    { q:"How do I record salary payments or employment letters?", a:"Go to More → Staff → Team, open a person and tap Employment Record to log salary payments and generate employment or offer letters tied to their record. To send an offer letter to a candidate who isn't on your team yet, tap Send Offer Letter to a Candidate on the Staff page." },
     { q:"Can I update a staff member's salary or terms later?", a:"Yes — open their Employment Record and edit it. The previous terms are automatically saved to that record's history, along with who changed it and an optional reason, so nothing about past terms is lost." },
-    { q:"What is \"Record-Only\" staff?", a:"People you want to keep employment records for (like salary history) without giving them a login or access to the app itself." },
+    { q:"What are \"People Without App Access\"?", a:"People you keep employment records for (like salary history) without giving them a login or access to the app — for example paid staff or apprentices who won't use the app. Add them under More → Staff → People Without App Access → Add a Person. They appear in your Team list with a grey \"No app access\" label, next to staff who use the app (marked \"App user\")." },
+    { q:"How is the Staff page organised?", a:"Everything is a row you tap to open, and only one row is open at a time. Add someone: New staff member (Join Code) and Staff on a second phone (Connect Code). People Without App Access: add people who won't use the app. Send Offer Letter to a Candidate. Team: tap it to show everyone — staff who use the app (marked App user) and people without app access (marked No app access). Tap a name to see their details and buttons." },
   ]},
   { category: "Reports & Receipts", items: [
     { q:"How do I see my profit, not just my revenue?", a:"Go to More → Profit Reports. It shows revenue, cost of goods sold, and expenses together so you see real profit, not just what came in." },
@@ -13005,13 +13181,13 @@ const FAQ_GROUPS = [
     { q:"Is there a built-in calculator?", a:"Yes — go to More → Calculator for quick math without leaving the app." },
   ]},
   { category: "Notifications & Data", items: [
-    { q:"What do the alerts on the bell icon mean?", a:"The bell shows counts for stock expiring soon, low/out-of-stock items, and credit sales that are overdue or due soon — tap it to jump straight to the relevant screen. These come from In-app Alerts & Warnings; if you turn that switch off in More → Messages from ZeeShop → Notification settings, the bell count and the alert cards on Home are hidden." },
-    { q:"Can I turn notifications on or off?", a:"Yes. Go to More → Messages from ZeeShop → Notification settings. There are two separate switches: Push Notifications (banners on your phone, even when ZeeShop is closed) and In-app Alerts & Warnings (low stock, expiring goods, overdue credit). Both are on by default for everyone who signs in, and they stay on until you switch them off yourself — your choice is saved to your account, so it's remembered after you sign out or change phones." },
+    { q:"What does the bell icon do?", a:"Tap the bell to open Notifications. Needs attention lists everything you can act on — name change requests waiting for approval, customers overdue or due soon on credit (Owner only), items expiring within 14 days, items running low, and items out of stock. Tap a line to go straight to the right screen. Stock always shows a summary of your goods, and Messages opens Messages from ZeeShop. The red number on the bell is the total of the Needs attention lines. The ⚙ button opens your notification settings. If you turn off In-app Alerts & Warnings, the stock and credit lines and the Home alert cards are hidden; name change requests still show." },
+    { q:"Can I turn notifications on or off?", a:"Yes. Tap the bell and then the ⚙ button, or go to More → Messages from ZeeShop → Notifications. There are two separate switches: Push Notifications (banners on your phone, even when ZeeShop is closed) and In-app Alerts & Warnings (low stock, expiring goods, overdue credit). Both are on by default for everyone who signs in, and they stay on until you switch them off yourself — your choice is saved to your account, so it's remembered after you sign out or change phones." },
     { q:"What are \"Messages from ZeeShop\"?", a:"Announcements and updates sent to you by the ZeeShop team. Open them from More → Messages from ZeeShop. They're saved there even if push notifications are off or you missed the banner, so you can always read them later." },
     { q:"What does the red dot on More mean?", a:"You have an unread message from ZeeShop. The dot shows on the More icon at the bottom and next to Messages from ZeeShop inside More. It disappears as soon as you open your messages — on all your devices, not just the one you're holding." },
     { q:"What's the difference between the two notification switches?", a:"Push Notifications controls banners sent to your phone's lock screen and status bar by ZeeShop. In-app Alerts & Warnings controls the low-stock, expiring-goods, and overdue-credit warnings inside the app. The Owner's choice for In-app Alerts applies to the whole business; a staff member's choice only changes what they see themselves." },
     { q:"Do my staff get notifications too?", a:"Yes — everyone who signs in, Owner, staff, or viewer, gets messages and (once allowed on their phone) push notifications. Each person controls their own Push switch. If several people share one phone, notifications go to whoever last opened ZeeShop on it." },
-    { q:"Why am I not getting push notifications?", a:"Check these in order: (1) More → Messages from ZeeShop → Notification settings — is Push Notifications on? (2) Did you tap Allow when your phone or browser asked? If it says Blocked, allow notifications for ZeeShop in your phone or browser settings, then tap Check again. (3) On iPhone, ZeeShop must be added to your Home Screen first. (4) Make sure your phone isn't in a battery-saver mode that blocks notifications. You'll always still see the message under More → Messages from ZeeShop." },
+    { q:"Why am I not getting push notifications?", a:"Check these in order: (1) Tap the bell → ⚙ — is Push Notifications on? (2) Did you tap Allow when your phone or browser asked? If it says Blocked, allow notifications for ZeeShop in your phone or browser settings, then tap Check again. (3) On iPhone, ZeeShop must be added to your Home Screen first. (4) Make sure your phone isn't in a battery-saver mode that blocks notifications. You'll always still see the message under More → Messages from ZeeShop." },
     { q:"Is my data backed up anywhere?", a:"Yes. Whenever your device is online, everything syncs to the cloud automatically in the background — you don't need to do anything for this to happen. It also works fully offline; anything you do while offline is saved on your device and syncs the moment you're back online." },
     { q:"How do I export my data?", a:"Go to More → Privacy & Security → Export Data to download your business data as a spreadsheet." },
     { q:"How do I delete my business account?", a:"Go to More → Privacy & Security → Delete Business. This locks everyone (including you) out of the account immediately, and your data is permanently deleted within 30 days, per GDPR. This can't be undone once the 30 days pass — contact support right away if you tap it by mistake." },
@@ -13025,19 +13201,32 @@ const FAQ_GROUPS = [
     { q:"What is the Bill Payments PIN?", a:"A 4-digit PIN, set by the Owner under More → Privacy & Security, that's asked for before every airtime, data, electricity, or other bill payment — so nobody using an unlocked phone can spend your Bill Wallet. If you forget it, tap Reset Payment PIN; we email a 6-digit code to the email on your account (valid for 5 minutes) and you choose a new PIN." },
     { q:"Can I change my phone number or username?", a:"The Owner can change their phone number and username under More → My Profile — you'll need to enter your current password to confirm. Staff can change their phone number with their current PIN; a staff username can't be changed, and a staff name change needs the Owner's approval. Your email can't be changed in the app (see above)." },
   ]},
+  { category: "Messages & Greetings", items: [
+    { q:"What is Messages & Greetings?", a:"A collection of ready-made messages you can send to people you care about — love notes, goodwill and get-well messages, birthday wishes, motivational quotes, business thank-yous and payment reminders for customers, and season greetings (New Year, Valentine's, Easter, Ramadan, Eid, Mother's Day, Father's Day, Independence Day and Christmas). Open it from More → Messages & Greetings." },
+    { q:"How do I send a message to someone?", a:"Open More → Messages & Greetings, pick a category, and tap a message. Type the person's name under Send to (optional) and check the From name, then tap Share to send it through WhatsApp, SMS, Facebook or any app on your phone. Tap Copy to copy the text instead." },
+    { q:"Can I send a message as a picture or an animated GIF?", a:"Yes. Open a message and choose one of the four colours. Tap Share as picture for a still card, or pick Confetti, Hearts or Sparkles under Animated GIF and tap Share as animated GIF. ZeeShop makes the GIF on your phone in a few seconds — it needs no internet — and opens your share sheet so you can post it to WhatsApp or send it to a friend. If your phone can't share pictures directly, the file is downloaded instead. If a GIF can't be made on an older phone, use Share as picture." },
+    { q:"What does \"Sent with ZeeShop\" mean, and can I remove it?", a:"It is a small line added at the end of your message or picture. Untick Add “Sent with ZeeShop” at the end on any message to remove it — ZeeShop remembers your choice." },
+    { q:"How do I save messages I like?", a:"Tap the ♡ on an open message. Saved messages appear under the ♡ Saved tab at the top of Messages & Greetings, and the heart turns solid." },
+    { q:"What is the Featured now section?", a:"When a holiday or season is near — for example Christmas from late November — a button for it appears at the top. Tap it to see only that season's messages. You can also open the Seasons tab to see them all." },
+    { q:"Does it send the message for me?", a:"No. ZeeShop never sends anything on its own. It opens your phone's share sheet and you choose who receives it, so nobody gets a message by mistake." },
+  ]},
   { category: "Getting the App", items: [
     { q:"Is there an Android app?", a:"Yes. ZeeShop is on Google Play — search for ZeeShop or open https://play.google.com/store/apps/details?id=com.ememart.zeeshop on your phone. You can also keep using it in your browser; your business, staff and data are the same either way." },
     { q:"How can I tell another shop owner about ZeeShop?", a:"Go to More → Share This App. It sends your friend the Google Play link with a short message. If you enjoy ZeeShop, More → Rate ZeeShop lets you leave a review on Google Play." },
+    { q:"Why does ZeeShop open Chrome, or show a web address at the top?", a:"The Android app opens your ZeeShop website through Chrome. The first time, Chrome may show its welcome screen — tap Use without an account (or Continue) and open ZeeShop again; you only do this once. If you still see an address bar with X, share and three dots at the top, uninstall ZeeShop and install it again from Google Play, and make sure Chrome is up to date." },
+    { q:"Why does ZeeShop ask to use the camera, and why does it show a web address?", a:"ZeeShop uses the camera only to scan barcodes. Your phone shows its own permission message, which always includes the website address (zeeshop.ememart.com) — this is a security feature and can't be changed by the app. Tap Allow while visiting the site and it won't ask again. You can always type the barcode by hand instead." },
   ]},
   { category: "Bill Payments", items: [
     { q:"What can I pay for with Bill Payments?", a:"Airtime, Data Bundles, Cable TV, Electricity, Betting wallet funding, Result Checker PINs, and Internet (Smile and Spectranet). Find them under More → Bill Payments, or tap the Airtime, Data, or Electricity tiles on Home." },
+    { q:"Are my phone numbers saved for next time?", a:"Yes. Every phone number, meter or smartcard number you use for airtime, data, electricity or TV is saved automatically and kept on your account, so it is still there after you log out, change phone or sign in somewhere else. Next time, pick it from your saved list instead of typing it again. You can remove any saved number from the list." },
     { q:"How do I fund my Bill Wallet?", a:"Tap Fund Wallet on Home or Add Money inside Bill Payments. There are two ways, both through Squad: a free Dedicated Account (transfer from any bank app to your own account number) and Pay Now, which needs no verification at all — you can use it straight away with a card or bank transfer. Funding is instant either way, and every funding shows in your Transaction History." },
     { q:"How do I hide my Bill Wallet balance?", a:"Tap the eye icon on the Bill Wallet card (on Bill Payments or on Home). The balance shows as •••••• until you tap it again. It's separate from the other cards on Home." },
     { q:"Where can I see my past bill payments?", a:"Open More → Bill Payments → Transaction History (or tap History on the Wallet card). It lists every purchase and every wallet funding, newest first, each with its status (Successful, Pending or Failed)." },
     { q:"How do I filter my Transaction History?", a:"Use the All Categories and All Status boxes at the top to narrow the list — for example Airtime only, or Failed only — and tap the date (e.g. Oct 2026) just below them to choose Today, Yesterday, Last 7 days, This month, Last month, or your own From – To dates. The In and Out totals update to match what you've filtered: In is money that came into your wallet, Out is money spent on successful purchases." },
     { q:"How do I see the full details or share a receipt?", a:"Tap any transaction in the history to open its details — amount, status, reference, and your electricity token or PINs when there are any. Tap Share Receipt and your phone's share sheet opens straight away with the receipt image attached, so you can send it on WhatsApp, email or any other app." },
     { q:"What does a Pending transaction mean?", a:"The provider hasn't confirmed it yet. Open it and tap Check status — the status updates to Successful or Failed. If it stays pending for long, contact support." },
-    { q:"Who is allowed to make bill payments?", a:"The Owner always can. Staff need the Bill Payments permission, which the Owner turns on for them under More → Staff. Viewers can't make bill payments." },
+    { q:"The wallet will not load, or ZeeShop asks for my password — why?", a:"Your wallet and bill payments need a live, signed-in connection to ZeeShop's servers. Sometimes a phone is unlocked with its PIN or password but the online sign-in has expired. When that happens ZeeShop asks for your password once to reconnect you — enter it and the wallet loads. Staff who don't have a password should ask the Owner, or sign in again. If you keep seeing it, check that your phone has internet (the dot at the top should be green)." },
+    { q:"Who is allowed to make bill payments?", a:"The Owner always can. Staff need the Bill Payments permission, which the Owner turns on for them under More → Staff → Team → open their name → Permissions. Viewers can't make bill payments." },
   ]},
   { category: "Plans & Billing", items: [
     { q:"What's the difference between the Free, Pro, and Boss plans?", a:"Free covers up to 2 shops, 100 goods, 50 customers, and 2 staff. Pro raises that to 3 shops, 1,000 goods, unlimited customers, and 5 staff. Boss removes every limit. Cloud sync, offline support, and everything else in this FAQ work the same on every plan — the plans only affect these limits." },

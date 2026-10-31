@@ -5716,7 +5716,7 @@ function layoutAndDrawReceipt(s, shop, cust, seller, ctx, logoImg){
   s.items.forEach((it,idx)=>{
     const g = state.goods.find(x=>x.id===it.goodId);
     const itemLabel = it.variantLabel ? `${g.name} (${it.variantLabel})` : g.name;
-    T(`${itemLabel} × ${it.qty}`, PAD, 'left', '400 12.5px Arial,Helvetica,sans-serif', '#242B38');
+    T(`${itemLabel} × ${it.qty}${it.returnedQty?` (${it.returnedQty} returned)`:''}`, PAD, 'left', '400 12.5px Arial,Helvetica,sans-serif', '#242B38');
     T(fmtMoneyCanvas(it.priceUsed*it.qty), W-PAD, 'right');
     y += LINE_H;
     if(itemNoteLines[idx].length){
@@ -9733,21 +9733,8 @@ function openSaleDetail(saleId){
   openSheet(`
     <div class="sheet-head"><h3>Sale #${s.id.slice(-6).toUpperCase()}</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     ${isVoided?`<div class="locked-msg" style="background:var(--paper-dim);color:var(--text-dim);margin-bottom:12px;">This sale was voided${s.voidReason?': '+escapeHtml(s.voidReason):''}.</div>`:''}
-    <div class="card">
-      <div class="t2">${fmtDateAt(s.date, s.createdAt)} · Sold by ${seller.firstName} ${seller.lastName}</div>
-      <div class="t1" style="margin:4px 0 10px;">${buyerName}</div>
-      ${s.items.map(it=>{
-        const g = state.goods.find(x=>x.id===it.goodId);
-        const returned = it.returnedQty||0;
-        const itemLabel = g ? (it.variantLabel ? `${g.name} (${it.variantLabel})` : g.name) : '(deleted item)';
-        return `<div class="list-row"><div class="thumb">${g?g.emoji:'🛍️'}</div>
-          <div class="info"><div class="t1">${itemLabel} × ${it.qty}${returned?` <span class="pill pill-amber">${returned} returned</span>`:''}</div></div>
-          <div class="right"><b>${fmtMoney(it.priceUsed*it.qty)}</b></div>
-        </div>`;
-      }).join('')}
-      <div class="divider"></div>
-      <div style="display:flex;justify-content:space-between;font-weight:800;"><span>Total</span><span>${fmtMoney(s.subtotal)}</span></div>
-      ${s.status!=='paid' && !isVoided?`<div style="display:flex;justify-content:space-between;font-size:13px;color:var(--red);"><span>Balance</span><span>${fmtMoney(s.balance)}</span></div>`:''}
+    <div style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;justify-content:center;margin-bottom:14px;">
+      <canvas id="sale-receipt-canvas" style="max-width:100%;height:auto;display:block;"></canvas>
     </div>
     <button class="btn btn-primary" id="share-sale-btn" style="margin-bottom:10px;">${ICON_EXPORT} Share Receipt</button>
     ${(!isVoided && (isMaster() || (isStaff() && canDo('canVoidReturn') && s.soldByUserId===state.sessionUserId))) ? `
@@ -9758,6 +9745,8 @@ function openSaleDetail(saleId){
       <p class="subtle">You can only void or return sales you personally made.</p>
     ` : ''}
   `);
+  // The picture shown here is the very same receipt that Share sends.
+  drawReceiptToCanvas(document.getElementById('sale-receipt-canvas'), s, state.shops.find(x=>x.id===s.shopId), cust, seller).catch(err=>console.warn('Receipt draw failed:', err));
   const shareSaleBtn = document.getElementById('share-sale-btn');
   if(shareSaleBtn) shareSaleBtn.addEventListener('click', async ()=>{
     shareSaleBtn.disabled = true;
@@ -12828,18 +12817,36 @@ function openBillTxDetail(kind, id){
            kv('Credited to wallet', fmtMoney(src.amount)) + kv('Method', m.how) + kv('Note', src.narration) +
            kv('Reference', m.ref.replace(/^(flw|squadva|squad|manual):/, ''), true) + kv('Time', src.created_at ? fmtDateTimeFull(src.created_at) : '');
   }
+  // Token / reference copy buttons sit under the receipt (the receipt itself is the exact image that gets shared).
+  let copyRow = '';
+  if(m.kind==='tx'){
+    const sc2 = bphSecrets(src), R2 = bphReceiptData(src);
+    const refRow = R2.rows.find(r=>r[0]==='Reference');
+    const btns = [];
+    if(m.tone==='ok' && sc2.token) btns.push(`<button class="btn btn-outline btn-sm" data-bph-copy="${escAttr(sc2.token)}" style="flex:1;">⧉ Copy token</button>`);
+    if(m.tone==='ok' && sc2.pins.length) btns.push(`<button class="btn btn-outline btn-sm" data-bph-copy="${escAttr(sc2.pins.map(pn=>typeof pn==='object'?JSON.stringify(pn):String(pn)).join(', '))}" style="flex:1;">⧉ Copy PIN</button>`);
+    if(refRow) btns.push(`<button class="btn btn-outline btn-sm" data-bph-copy="${escAttr(String(refRow[1]))}" style="flex:1;">⧉ Copy reference</button>`);
+    if(btns.length) copyRow = `<div style="display:flex;gap:8px;margin-bottom:12px;">${btns.join('')}</div>`;
+  }
   openSheet(`
     <div class="sheet-head"><h3>Transaction Details</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
+    ${m.kind==='tx' ? `
+      <div style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;justify-content:center;margin-bottom:14px;">
+        <canvas id="bph-receipt-canvas" style="max-width:100%;height:auto;display:block;"></canvas>
+      </div>
+      ${copyRow}
+    ` : `
     <div class="bph-hero">
       <div class="bph-ic ${m.tone==='ok'?'':m.tone}">${m.tone==='ok' ? BPH_CHECK : bphIcon(m)}</div>
-      <div class="bph-ht">${escapeHtml(m.kind==='tx' ? m.service : m.title)}</div>
+      <div class="bph-ht">${escapeHtml(m.title)}</div>
       <div class="bph-ha">${escapeHtml(bphAmount(m))}</div>
       <div class="bph-hs ${m.tone==='ok'?'':m.tone}">${escapeHtml(m.label)}</div>
     </div>
-    ${secret}
-    <div class="bph-card">${rows}</div>
+    <div class="bph-card">${rows}</div>`}
     ${actions ? `<div style="display:flex;gap:10px;margin-bottom:6px;">${actions}</div>` : ''}
   `);
+  const bphCanvas = document.getElementById('bph-receipt-canvas');
+  if(bphCanvas) drawBillReceiptToCanvas(bphCanvas, src).catch(err=>console.warn('Receipt draw failed:', err));
   document.querySelectorAll('[data-bph-copy]').forEach(b=>b.addEventListener('click', e=>{
     e.stopPropagation();
     try{ if(navigator.clipboard) navigator.clipboard.writeText(b.dataset.bphCopy); }catch(_e){}

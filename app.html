@@ -354,6 +354,15 @@ body.market-mode .contact-btns button,body.market-mode .qty-stepper button,
 body.market-mode .util-tile{
   background:#0a0a0a;border-color:#2a2a2a;
 }
+body.market-mode .btn-primary{color:#12213B;}
+body.market-mode details.acc,body.market-mode .gr-card{background:#0a0a0a;border-color:#2a2a2a;}
+body.market-mode details.acc[open]>summary{border-color:#2a2a2a;}
+body.market-mode .acc-tag{background:#1a1a1a;color:#c9c9c9;}
+body.market-mode .acc-tag.app{background:#123420;color:#5be09b;}
+body.market-mode .gr-preview{background:#141414;color:#eee;}
+body.market-mode .gr-chip{border-color:#3a3a3a;color:#eee;}
+body.market-mode .gr-chip.on{background:#F2A93B;border-color:#F2A93B;color:#12213B;}
+body.market-mode .gr-sw.on{box-shadow:0 0 0 2px #0a0a0a inset;}
 body.market-mode .stat-box.accent{background:var(--ink);border-color:var(--ink);}
 body.market-mode .util-icon-circle{background:#1a1a1a;}
 body.market-mode .topbar,body.market-mode .bottomnav{background:#000;border-color:#2a2a2a;}
@@ -399,11 +408,11 @@ input:checked + .slider-tog::before{transform:translateX(19px);}
   text-align:center;padding:20px;border-radius:12px;margin:14px 0;
 }
 /* collapsible rows (Staff page) */
-details.acc{background:var(--card,#fff);border:1px solid var(--line);border-radius:14px;margin-bottom:10px;overflow:hidden;}
+details.acc{background:#fff;border:1px solid var(--line);border-radius:14px;margin-bottom:10px;overflow:hidden;}
 details.acc>summary{list-style:none;display:flex;align-items:center;gap:10px;padding:12px 14px;cursor:pointer;-webkit-tap-highlight-color:transparent;}
 details.acc>summary::-webkit-details-marker{display:none;}
 details.acc>summary .acc-main{flex:1;min-width:0;}
-details.acc>summary .acc-title{font-weight:800;font-size:15px;color:var(--ink);line-height:1.25;}
+details.acc>summary .acc-title{font-weight:800;font-size:15px;color:var(--ink-text);line-height:1.25;}
 details.acc>summary .acc-sub{font-size:12.5px;color:var(--text-dim);margin-top:2px;}
 details.acc>summary .acc-chev{flex-shrink:0;width:20px;height:20px;color:var(--text-dim);transition:transform .2s;}
 details.acc[open]>summary .acc-chev{transform:rotate(180deg);}
@@ -3997,7 +4006,7 @@ function subscriptionReminderBanner(){
     </div>`;
   }
   if(daysLeft <= 5){
-    return `<div class="card" style="border-color:var(--marigold-dark);background:#FFF7E8;margin-bottom:14px;cursor:pointer;" onclick="openPlansSheet()">
+    return `<div class="card" style="border-color:var(--marigold-dark);background:var(--amber-bg);margin-bottom:14px;cursor:pointer;" onclick="openPlansSheet()">
       <b style="color:var(--marigold-dark);">Your ${planName} plan expires in ${daysLeft} day${daysLeft===1?'':'s'}</b>
       <div class="subtle">Renews ${expires.toLocaleDateString()} — tap to renew now.</div>
     </div>`;
@@ -4145,7 +4154,7 @@ function screenDashboard(){
     .promo-dot.on{background:#fff;width:18px;border-radius:4px;}
     .ann-overlay{position:fixed;inset:0;background:rgba(10,18,36,.55);z-index:9998;display:flex;align-items:center;justify-content:center;padding:20px;}
     .ann-box{background:#fff;border-radius:18px;max-width:420px;width:100%;max-height:80vh;overflow:auto;padding:22px;box-shadow:0 12px 40px rgba(0,0,0,.25);}
-    .ann-box h3{margin:0 0 8px;font-size:18px;color:var(--ink);}
+    .ann-box h3{margin:0 0 8px;font-size:18px;color:#12213B;}
     .ann-box .ann-body{font-size:14.5px;line-height:1.5;white-space:pre-wrap;color:var(--text);}
     .ann-box .ann-date{font-size:12px;color:var(--text-dim);margin-bottom:10px;}
     .ann-item{padding:12px 0;border-bottom:1px solid var(--line);}
@@ -7515,7 +7524,7 @@ function openGreeting(id){
     .gr-chip.on{background:var(--ink,#12213B);color:#fff;border-color:var(--ink,#12213B);}
     .gr-feat{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;}
     .gr-feat-b{border:none;background:linear-gradient(135deg,#F7A108,#D97706);color:#12213B;font:inherit;font-weight:800;font-size:14px;padding:10px 16px;border-radius:14px;cursor:pointer;}
-    .gr-card{background:var(--card,#fff);border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-bottom:10px;cursor:pointer;}
+    .gr-card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-bottom:10px;cursor:pointer;}
     .gr-card-top{display:flex;justify-content:space-between;align-items:center;gap:8px;}
     .gr-title{font-weight:800;font-size:15px;color:var(--ink-text,#12213B);}
     .gr-fav{color:#E0162B;font-size:16px;}

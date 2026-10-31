@@ -1733,7 +1733,16 @@ document.addEventListener('toggle', e=>{
   const d = e.target;
   if(!d || !d.matches || !d.matches('details.acc[data-acc]')) return;
   const k = d.getAttribute('data-acc');
-  if(d.open) staffOpen.add(k); else staffOpen.delete(k);
+  if(d.open){
+    staffOpen.add(k);
+    // only one row open at a time: close the others that sit next to it
+    const par = d.parentElement;
+    if(par) Array.from(par.children).forEach(x=>{
+      if(x !== d && x.matches && x.matches('details.acc[open]')){ x.removeAttribute('open'); staffOpen.delete(x.getAttribute('data-acc')); }
+    });
+    // the row above may have shrunk, so bring this one back into view
+    setTimeout(()=>{ try{ d.scrollIntoView({block:'nearest', behavior:'smooth'}); }catch(_e){} }, 60);
+  } else staffOpen.delete(k);
 }, true);
 let freshConnectCode = null;   // a Staff Connect Code is only shown on the visit it was generated in
 function render(){

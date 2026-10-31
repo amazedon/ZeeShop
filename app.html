@@ -6916,7 +6916,7 @@ function screenStaff(){
           <button class="btn btn-outline btn-sm" id="copy-connect-code" style="flex:1;">Copy</button>
           <button class="btn btn-outline btn-sm" id="reset-connect-code" style="flex:1;">New Code</button>
         </div>
-      ` : `<button class="btn btn-outline btn-sm" id="reset-connect-code">Generate Connect Code</button>`}`;
+      ` : `<button class="btn btn-primary" id="reset-connect-code" style="width:100%;">Generate Connect Code</button>`}`;
   const recordOnly = state.recordOnlyStaff.filter(p=>p.businessId===business().id);
   const noAppBody = `
       <p class="t2" style="margin-bottom:12px;">For paid staff or apprentices who won't use the app. They are added to your Team list below, marked “No app access”, so their employment records stay in one place.</p>

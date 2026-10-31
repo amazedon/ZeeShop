@@ -3863,6 +3863,7 @@ function renderRoute(){
     case 'lodging': return screenLodging();
     case 'billpayments': return screenBillPayments();
     case 'faq': return screenFAQ();
+    case 'greetings': return screenGreetings();
     case 'about-us': return screenAboutUs();
     case 'contact-us': return screenContactUs();
     case 'profile': return screenProfile();
@@ -5310,6 +5311,7 @@ function bindRouteEvents(){
   if(route==='lodging') bindLodgingEvents();
   if(route==='billpayments') bindBillPaymentsEvents();
   if(route==='faq') bindFAQEvents();
+  if(route==='greetings') bindGreetingsEvents();
   if(route==='about-us') bindAboutUsEvents();
   if(route==='contact-us') bindContactUsEvents();
   if(route==='reports') bindReportsEvents();
@@ -6633,6 +6635,7 @@ function screenMore(){
     {id:'profile', ic:ICON_USER, label:t('more_profile'), show:true},
     {id:'settings', ic:ICON_SETTINGS, label:t('more_settings'), show:true},
     {id:'privacy', ic:ICON_SHIELD, label:t('more_privacy'), show:true},
+    {id:'greetings', ic:ICON_HEART, label:'Messages & Greetings', show:true},
     {id:'faq', ic:ICON_HELP, label:t('more_faq'), show:true},
     {id:'about-us', ic:ICON_FILE, label:t('more_about'), show:true},
     {id:'contact-us', ic:ICON_PHONE, label:t('more_contact'), show:true},
@@ -7071,6 +7074,289 @@ function screenStaff(){
     ${accRow('team', `<div class="acc-main"><div class="acc-title">Team</div><div class="acc-sub">${staff.length+recordOnly.length} ${(staff.length+recordOnly.length)===1?'person':'people'} · tap to open</div></div>`, teamBody)}
   `;
 }
+/* ============================================================
+   MESSAGES & GREETINGS — ready-made messages (love, goodwill, birthday, quotes, thank-yous, season greetings)
+   that people can personalise and share. A built-in set works offline; rows in the `greeting_messages`
+   table (if it exists) are added on top, so new messages can go out without an app update.
+   ============================================================ */
+const ICON_HEART = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8z"/></svg>`;
+const GREET_BUILTIN = [{"cat":"love","title":"You are my home","body":"Dear {to},\nNo matter how busy the day gets, you are the place my heart returns to. Thank you for loving me the way you do.\n— {from}","id":"b001"},{"cat":"love","title":"Still choosing you","body":"Dear {to},\nIf I had to choose again, I would choose you every time. You make ordinary days feel special.\n— {from}","id":"b002"},{"cat":"love","title":"Good morning, my love","body":"Good morning, {to}.\nI woke up thinking about you and smiling. I hope your day is as beautiful as you are.\n— {from}","id":"b003"},{"cat":"love","title":"Goodnight, my love","body":"Goodnight, {to}.\nRest well. Tomorrow I will love you a little more than I did today.\n— {from}","id":"b004"},{"cat":"love","title":"Thank you for staying","body":"Dear {to},\nThank you for standing by me in the good days and the hard ones. I do not take you for granted.\n— {from}","id":"b005"},{"cat":"love","title":"I miss you","body":"Hello {to},\nThe day feels longer without you. Come back soon, my heart is waiting.\n— {from}","id":"b006"},{"cat":"love","title":"My best friend","body":"Dear {to},\nYou are my love and my best friend. With you, even silence feels like a conversation I enjoy.\n— {from}","id":"b007"},{"cat":"love","title":"Happy anniversary","body":"Happy anniversary, {to}!\nEvery year with you is a gift. Here is to many more years of laughter, peace and love.\n— {from}","id":"b008"},{"cat":"love","title":"I am sorry","body":"Dear {to},\nI am sorry for hurting you. I value you more than my pride, and I want to do better. Please forgive me.\n— {from}","id":"b009"},{"cat":"love","title":"Proud of you","body":"Dear {to},\nI am so proud of the person you are and everything you are becoming. I am lucky to love you.\n— {from}","id":"b010"},{"cat":"love","title":"Love across the distance","body":"Dear {to},\nDistance cannot reduce what we have. Every mile only reminds me how much you matter to me.\n— {from}","id":"b011"},{"cat":"love","title":"Just because","body":"Dear {to},\nNo special reason today. I just wanted you to know that you are loved, valued and thought of.\n— {from}","id":"b012"},{"cat":"goodwill","title":"Thinking of you","body":"Hello {to},\nI was thinking about you today and wanted to say: you matter, and I am wishing you peace and good things.\n— {from}","id":"b013"},{"cat":"goodwill","title":"Get well soon","body":"Dear {to},\nWishing you a quick and complete recovery. Rest well, take your time, and know that many people are praying for you.\n— {from}","id":"b014"},{"cat":"goodwill","title":"Congratulations","body":"Congratulations, {to}!\nYour hard work has paid off and you deserve every bit of this joy. Wishing you even bigger wins ahead.\n— {from}","id":"b015"},{"cat":"goodwill","title":"Safe journey","body":"Dear {to},\nWishing you a safe journey and a smooth arrival. Please call when you get there. God keep you on the way.\n— {from}","id":"b016"},{"cat":"goodwill","title":"With sympathy","body":"Dear {to},\nI am deeply sorry for your loss. May God comfort you and your family, and may the memories you hold bring you peace.\n— {from}","id":"b017"},{"cat":"goodwill","title":"Welcome, little one","body":"Congratulations, {to}!\nWelcome to the little one. May your home be full of joy, health and love. God bless the new family.\n— {from}","id":"b018"},{"cat":"goodwill","title":"Wedding wishes","body":"Dear {to},\nCongratulations on your wedding! May your home be filled with love, patience, laughter and God's blessings.\n— {from}","id":"b019"},{"cat":"goodwill","title":"A new beginning","body":"Dear {to},\nCongratulations on your new beginning! May the door you have entered bring growth, favour and success.\n— {from}","id":"b020"},{"cat":"goodwill","title":"Thank you, friend","body":"Dear {to},\nThank you for being a true friend. Your support has meant more to me than you know.\n— {from}","id":"b021"},{"cat":"goodwill","title":"Good luck","body":"Dear {to},\nWishing you the very best of luck today. You are prepared, you are capable, and you will do well.\n— {from}","id":"b022"},{"cat":"goodwill","title":"Praying for you","body":"Dear {to},\nI am praying for you today: peace in your heart, strength in your work, and favour in everything you do.\n— {from}","id":"b023"},{"cat":"goodwill","title":"Welcome home","body":"Dear {to},\nWelcome home! We missed you. Rest well and let us know when we can come and celebrate your return.\n— {from}","id":"b024"},{"cat":"birthday","title":"Happy birthday","body":"Happy birthday, {to}! 🎉\nMay this new year of your life bring good health, joy and everything your heart desires.\n— {from}","id":"b025"},{"cat":"birthday","title":"Birthday blessings","body":"Dear {to},\nHappy birthday! May God add more good years to your life and fill each one with peace and success.\n— {from}","id":"b026"},{"cat":"birthday","title":"Birthday for a friend","body":"Happy birthday to my amazing friend {to}!\nThank you for the laughter and loyalty. Today is all about you. Enjoy it!\n— {from}","id":"b027"},{"cat":"birthday","title":"Birthday for my love","body":"Happy birthday, my love {to}!\nI am grateful for the day you were born. I love you more with every year.\n— {from}","id":"b028"},{"cat":"birthday","title":"Birthday for Mum","body":"Happy birthday, Mum {to}!\nThank you for everything you have done for me. May you enjoy long life, good health and happiness.\n— {from}","id":"b029"},{"cat":"birthday","title":"Birthday for Dad","body":"Happy birthday, Dad {to}!\nThank you for your strength and sacrifice. I pray for you long life, good health and peace.\n— {from}","id":"b030"},{"cat":"birthday","title":"Birthday for a child","body":"Happy birthday, {to}! 🎈\nYou are growing fast and making us proud. Wishing you a day full of cake, fun and love!\n— {from}","id":"b031"},{"cat":"birthday","title":"Belated birthday","body":"Dear {to},\nSorry I am late, but my wishes are sincere. Happy belated birthday! May your year be full of good news.\n— {from}","id":"b032"},{"cat":"birthday","title":"Birthday for a colleague","body":"Happy birthday, {to}!\nWishing you a great year ahead, filled with success, good health and plenty to celebrate.\n— {from}","id":"b033"},{"cat":"birthday","title":"Birthday for a customer","body":"Dear {to},\nHappy birthday from all of us! Thank you for being a valued customer. Wishing you a wonderful year.\n— {from}","id":"b034"},{"cat":"birthday","title":"Milestone birthday","body":"Happy birthday, {to}!\nAnother milestone, and you wear it so well. May the years ahead be your best yet.\n— {from}","id":"b035"},{"cat":"birthday","title":"Birthday for a sibling","body":"Happy birthday, {to}!\nThank you for being my family and my friend. I am proud to be your sibling. Enjoy your day!\n— {from}","id":"b036"},{"cat":"quotes","title":"Start small","body":"A small step taken today beats a big plan kept for tomorrow.","id":"b037"},{"cat":"quotes","title":"Attitude","body":"Your attitude decides how far your talent can travel.","id":"b038"},{"cat":"quotes","title":"Begin now","body":"Do not wait for perfect conditions. Start where you are, with what you have.","id":"b039"},{"cat":"quotes","title":"Kind words","body":"Kind words cost nothing, yet they can change someone's whole day.","id":"b040"},{"cat":"quotes","title":"Patience","body":"Patience is not waiting. It is staying faithful to the work while the result grows.","id":"b041"},{"cat":"quotes","title":"Character","body":"The best investment you can make is in your own character.","id":"b042"},{"cat":"quotes","title":"Beginners","body":"Every expert was once a beginner who refused to quit.","id":"b043"},{"cat":"quotes","title":"Consistency","body":"Hard work plants the seed. Consistency grows the tree.","id":"b044"},{"cat":"quotes","title":"A good name","body":"A good name is worth more than any amount of money.","id":"b045"},{"cat":"quotes","title":"Peace","body":"Peace of mind is the real profit.","id":"b046"},{"cat":"quotes","title":"Gratitude","body":"Be grateful for what you have while you work for what you want.","id":"b047"},{"cat":"quotes","title":"The right people","body":"The people who lift you are worth more than the people who impress you.","id":"b048"},{"cat":"quotes","title":"Failure","body":"Failure is not the opposite of success. It is part of the road to it.","id":"b049"},{"cat":"quotes","title":"Customers","body":"Treat every customer like a friend and every friend like family.","id":"b050"},{"cat":"quotes","title":"Trust","body":"Trust is built in small moments and kept by honest habits.","id":"b051"},{"cat":"quotes","title":"Time","body":"Time is the only stock you cannot restock. Spend it on what matters.","id":"b052"},{"cat":"motivation","title":"Monday motivation","body":"Happy new week, {to}!\nA new week is a fresh page. Write something you will be proud of. Go and win!\n— {from}","id":"b053"},{"cat":"motivation","title":"You can do it","body":"Dear {to},\nWhatever you are facing today, you have faced hard things before and you are still standing. Keep going. You can do it.\n— {from}","id":"b054"},{"cat":"motivation","title":"Don't give up","body":"Hello {to},\nIf it is taking longer than you planned, it does not mean it is not coming. Stay on it. Your time will come.\n— {from}","id":"b055"},{"cat":"motivation","title":"Small progress","body":"Dear {to},\nProgress is progress, even when it is slow. Be proud of every step you took today.\n— {from}","id":"b056"},{"cat":"motivation","title":"Rise and shine","body":"Good morning, {to}!\nToday is a new chance to do better than yesterday. Get up, pray, work, and expect good things.\n— {from}","id":"b057"},{"cat":"motivation","title":"Believe in yourself","body":"Dear {to},\nBelieve in yourself even when others do not. The work you are doing quietly will speak loudly one day.\n— {from}","id":"b058"},{"cat":"motivation","title":"Finish strong","body":"Hello {to},\nThe week is almost done. Finish strong, rest well, and be proud of what you have achieved.\n— {from}","id":"b059"},{"cat":"motivation","title":"Keep building","body":"Dear {to},\nKeep building your dream, brick by brick. What looks small today becomes strong tomorrow.\n— {from}","id":"b060"},{"cat":"motivation","title":"After a hard day","body":"Dear {to},\nHard day? You made it through, and that counts. Rest tonight, and tomorrow we try again.\n— {from}","id":"b061"},{"cat":"motivation","title":"Business owner's encouragement","body":"Dear {to},\nRunning a business takes courage. Thank you for showing up every day. Your effort is not wasted.\n— {from}","id":"b062"},{"cat":"thanks","title":"Thank you for your purchase","body":"Dear {to},\nThank you for shopping with us. We truly appreciate your trust and look forward to serving you again.\n— {from}","id":"b063"},{"cat":"thanks","title":"Thank you for paying","body":"Dear {to},\nThank you for settling your balance on time. Customers like you make doing business a pleasure.\n— {from}","id":"b064"},{"cat":"thanks","title":"Polite payment reminder","body":"Dear {to},\nA gentle reminder that your balance is due. Please let us know if you need anything. Thank you for your understanding.\n— {from}","id":"b065"},{"cat":"thanks","title":"Welcome, new customer","body":"Welcome, {to}!\nThank you for choosing us. We promise good service and fair prices. Feel free to call us any time.\n— {from}","id":"b066"},{"cat":"thanks","title":"We value your loyalty","body":"Dear {to},\nThank you for being with us. Your loyalty keeps us going and we will keep working to deserve it.\n— {from}","id":"b067"},{"cat":"thanks","title":"Back in stock","body":"Dear {to},\nGood news! The item you asked about is back in stock. Come and get yours before it finishes.\n— {from}","id":"b068"},{"cat":"thanks","title":"We are open","body":"Dear {to},\nWe are open and ready to serve you. Come and see what is new in the shop today!\n— {from}","id":"b069"},{"cat":"thanks","title":"Thank you for the referral","body":"Dear {to},\nThank you for sending your friends our way. We value your recommendation more than any advert.\n— {from}","id":"b070"},{"cat":"thanks","title":"Sorry for the inconvenience","body":"Dear {to},\nWe are sorry for the trouble you experienced. We are working to make it right and thank you for your patience.\n— {from}","id":"b071"},{"cat":"thanks","title":"Holiday closing notice","body":"Dear {to},\nPlease note that our shop will be closed for the holiday and will open again afterwards. Thank you for your understanding.\n— {from}","id":"b072"},{"cat":"season","title":"Happy New Year","body":"Happy New Year, {to}! 🎆\nMay this year bring you good health, open doors, and joy that lasts all twelve months.\n— {from}","season":"newyear","id":"b073"},{"cat":"season","title":"New Year prayer","body":"Dear {to},\nAs the year begins, I pray for favour, peace and progress for you and your family. Happy New Year!\n— {from}","season":"newyear","id":"b074"},{"cat":"season","title":"New Year thanks","body":"Dear {to},\nThank you for being part of my last year. I look forward to even better days together. Happy New Year!\n— {from}","season":"newyear","id":"b075"},{"cat":"season","title":"New Year to customers","body":"Dear {to},\nHappy New Year from all of us! Thank you for your support. We will keep serving you better in the new year.\n— {from}","season":"newyear","id":"b076"},{"cat":"season","title":"New year, new energy","body":"Hello {to},\nNew year, new energy! May all your plans come together and your hard work be rewarded. Cheers to a great year!\n— {from}","season":"newyear","id":"b077"},{"cat":"season","title":"Old year gratitude","body":"Dear {to},\nWe made it! Thank God for the lessons and blessings of this year. Wishing you a bright new one.\n— {from}","season":"newyear","id":"b078"},{"cat":"season","title":"Happy Valentine's Day","body":"Happy Valentine's Day, {to}! ❤️\nThank you for being the reason my heart is happy. I love you.\n— {from}","season":"valentine","id":"b079"},{"cat":"season","title":"Be my Valentine","body":"Dear {to},\nWill you be my Valentine today and always? You make my world brighter.\n— {from}","season":"valentine","id":"b080"},{"cat":"season","title":"Valentine for a friend","body":"Happy Valentine's Day, {to}!\nLove comes in many forms, and I am grateful for the friendship we share.\n— {from}","season":"valentine","id":"b081"},{"cat":"season","title":"Valentine for my wife","body":"Happy Valentine's Day, my wife {to}!\nThank you for your love, your strength and your patience. I love you more every day.\n— {from}","season":"valentine","id":"b082"},{"cat":"season","title":"Valentine for my husband","body":"Happy Valentine's Day, my husband {to}!\nThank you for being my rock and my joy. I love you.\n— {from}","season":"valentine","id":"b083"},{"cat":"season","title":"Happy Easter","body":"Happy Easter, {to}! ✝️\nHe is risen! May the joy of this season fill your home with hope, peace and love.\n— {from}","season":"easter","id":"b084"},{"cat":"season","title":"Easter blessings","body":"Dear {to},\nWishing you and your family a blessed Easter. May new life, new hope and new strength be yours.\n— {from}","season":"easter","id":"b085"},{"cat":"season","title":"Easter to customers","body":"Dear {to},\nHappy Easter from all of us! Thank you for your support. Enjoy the holiday with your loved ones.\n— {from}","season":"easter","id":"b086"},{"cat":"season","title":"Easter prayer","body":"Dear {to},\nThis Easter, I pray that every door that seemed closed opens for you. Have a blessed celebration.\n— {from}","season":"easter","id":"b087"},{"cat":"season","title":"Good Friday reflection","body":"Dear {to},\nOn this Good Friday, may we remember love and sacrifice, and may the Lord grant you peace. God bless you.\n— {from}","season":"easter","id":"b088"},{"cat":"season","title":"Ramadan Mubarak","body":"Ramadan Mubarak, {to}! 🌙\nMay this holy month bring you peace, patience, forgiveness and many answered prayers.\n— {from}","season":"ramadan","id":"b089"},{"cat":"season","title":"Ramadan prayer","body":"Dear {to},\nWishing you a blessed Ramadan. May Allah accept your fasting, your prayers and your good deeds.\n— {from}","season":"ramadan","id":"b090"},{"cat":"season","title":"Ramadan to customers","body":"Dear {to},\nRamadan Mubarak from all of us. Thank you for your support, and we wish you a peaceful month.\n— {from}","season":"ramadan","id":"b091"},{"cat":"season","title":"Ramadan reminder","body":"Dear {to},\nAs the month begins, keep me in your prayers, and know that you are in mine. Ramadan Kareem!\n— {from}","season":"ramadan","id":"b092"},{"cat":"season","title":"Eid Mubarak","body":"Eid Mubarak, {to}! 🌙\nMay Allah accept your prayers and fill your home with happiness, health and blessings.\n— {from}","season":"eid","id":"b093"},{"cat":"season","title":"Happy Sallah","body":"Dear {to},\nHappy Sallah! Wishing you and your family a joyful celebration full of love, good food and laughter.\n— {from}","season":"eid","id":"b094"},{"cat":"season","title":"Eid blessings","body":"Dear {to},\nMay this Eid bring you peace and happiness, and may all your prayers be answered. Eid Mubarak!\n— {from}","season":"eid","id":"b095"},{"cat":"season","title":"Eid to customers","body":"Dear {to},\nEid Mubarak from all of us! Thank you for your support. Wishing you a wonderful celebration.\n— {from}","season":"eid","id":"b096"},{"cat":"season","title":"Eid for a friend","body":"Eid Mubarak, my friend {to}!\nThank you for being a blessing in my life. Enjoy the day with your loved ones.\n— {from}","season":"eid","id":"b097"},{"cat":"season","title":"Eid al-Adha wishes","body":"Dear {to},\nWishing you a blessed Eid al-Adha. May Allah accept your sacrifices and shower you with His mercy.\n— {from}","season":"eid","id":"b098"},{"cat":"season","title":"Happy Mother's Day","body":"Happy Mother's Day, {to}! 💐\nThank you for your love, your sacrifices and your prayers. I am who I am because of you.\n— {from}","season":"mothers","id":"b099"},{"cat":"season","title":"To my wonderful Mum","body":"Dear Mum {to},\nNo gift can say thank you enough for all you do. I love you and I am grateful for you every day.\n— {from}","season":"mothers","id":"b100"},{"cat":"season","title":"To my wife, a mother","body":"Happy Mother's Day, {to}!\nThank you for loving our children the way you do. You are the heart of our home.\n— {from}","season":"mothers","id":"b101"},{"cat":"season","title":"Mother's Day to a friend","body":"Happy Mother's Day, {to}!\nYou are a wonderful mother. Take a break today and let yourself be celebrated.\n— {from}","season":"mothers","id":"b102"},{"cat":"season","title":"Mother's Day to customers","body":"Dear {to},\nHappy Mother's Day from all of us! Thank you for everything you do for your family.\n— {from}","season":"mothers","id":"b103"},{"cat":"season","title":"Happy Father's Day","body":"Happy Father's Day, {to}!\nThank you for your strength, your guidance and your sacrifices. I am proud to call you Dad.\n— {from}","season":"fathers","id":"b104"},{"cat":"season","title":"To my wonderful Dad","body":"Dear Dad {to},\nThank you for always being there. Everything good in me, I learned from you. I love you.\n— {from}","season":"fathers","id":"b105"},{"cat":"season","title":"To my husband, a father","body":"Happy Father's Day, {to}!\nThank you for being a patient, loving father. Our children are blessed to have you.\n— {from}","season":"fathers","id":"b106"},{"cat":"season","title":"Father's Day to a friend","body":"Happy Father's Day, {to}!\nYou are a great dad. Enjoy your day and know that your family is proud of you.\n— {from}","season":"fathers","id":"b107"},{"cat":"season","title":"Father's Day to customers","body":"Dear {to},\nHappy Father's Day from all of us! Wishing you a day of rest and joy.\n— {from}","season":"fathers","id":"b108"},{"cat":"season","title":"Happy Independence Day","body":"Happy Independence Day, {to}! 🇳🇬\nMay we keep working together for a better, more peaceful and more prosperous Nigeria.\n— {from}","season":"independence","id":"b109"},{"cat":"season","title":"Nigeria at independence","body":"Dear {to},\nAs we celebrate our country, I pray for peace, unity and progress for every Nigerian. Happy Independence Day!\n— {from}","season":"independence","id":"b110"},{"cat":"season","title":"Independence Day to customers","body":"Dear {to},\nHappy Independence Day from all of us! Thank you for being part of our story. God bless Nigeria.\n— {from}","season":"independence","id":"b111"},{"cat":"season","title":"Independence Day reflection","body":"Hello {to},\nLet us love our country and play our part, big or small. Happy Independence Day, and God bless Nigeria.\n— {from}","season":"independence","id":"b112"},{"cat":"season","title":"Merry Christmas","body":"Merry Christmas, {to}! 🎄\nMay the joy of this season fill your home and your heart. Wishing you peace, love and plenty to celebrate.\n— {from}","season":"christmas","id":"b113"},{"cat":"season","title":"Christmas blessings","body":"Dear {to},\nMay the birth of Christ bring you hope, health and happiness. Merry Christmas to you and your family!\n— {from}","season":"christmas","id":"b114"},{"cat":"season","title":"Christmas to customers","body":"Dear {to},\nMerry Christmas from all of us! Thank you for your trust and support this year. Enjoy the festive season.\n— {from}","season":"christmas","id":"b115"},{"cat":"season","title":"Christmas for family","body":"Dear {to},\nI am so grateful for our family. Merry Christmas, and may we have many more together.\n— {from}","season":"christmas","id":"b116"},{"cat":"season","title":"Christmas for a friend","body":"Merry Christmas, my friend {to}!\nThank you for your friendship this year. Wishing you a joyful and restful holiday.\n— {from}","season":"christmas","id":"b117"},{"cat":"season","title":"Christmas prayer","body":"Dear {to},\nThis Christmas I pray for your good health, open doors and answered prayers. God bless you.\n— {from}","season":"christmas","id":"b118"},{"cat":"season","title":"Christmas travel wishes","body":"Hello {to},\nWishing you a safe journey home for Christmas. Travel well and enjoy every moment with your loved ones.\n— {from}","season":"christmas","id":"b119"},{"cat":"season","title":"Christmas and new year","body":"Dear {to},\nMerry Christmas and a prosperous New Year! May the days ahead be your best yet.\n— {from}","season":"christmas","id":"b120"}];
+const GREET_CATS = [
+  {id:'all', label:'All'}, {id:'fav', label:'♡ Saved'}, {id:'love', label:'Love'}, {id:'goodwill', label:'Goodwill'},
+  {id:'birthday', label:'Birthday'}, {id:'quotes', label:'Quotes'}, {id:'motivation', label:'Motivation'},
+  {id:'thanks', label:'Business thank-you'}, {id:'season', label:'Seasons'}
+];
+const GREET_SEASONS = {
+  newyear:{label:'New Year', icon:'🎆'}, valentine:{label:"Valentine's Day", icon:'❤️'}, easter:{label:'Easter', icon:'✝️'},
+  ramadan:{label:'Ramadan', icon:'🌙'}, eid:{label:'Eid / Sallah', icon:'🌙'}, mothers:{label:"Mother's Day", icon:'💐'},
+  fathers:{label:"Father's Day", icon:'👔'}, independence:{label:'Independence Day', icon:'🇳🇬'}, christmas:{label:'Christmas', icon:'🎄'}
+};
+// When each season is "featured" at the top. Fixed-date seasons repeat every year; Easter, Ramadan and Eid move, so they are listed per year
+// (approximate — a row in greeting_messages with starts_on / ends_on can feature any season for exact dates).
+const GREET_FIXED = {
+  newyear:[['12-26','12-31'],['01-01','01-06']], valentine:[['02-06','02-14']], mothers:[['05-01','05-14']],
+  fathers:[['06-08','06-21']], independence:[['09-24','10-01']], christmas:[['11-20','12-26']]
+};
+const GREET_MOVABLE = {
+  2027:{ ramadan:[['2027-02-05','2027-03-09']], eid:[['2027-03-08','2027-03-12'],['2027-05-15','2027-05-19']], easter:[['2027-03-22','2027-03-29']] },
+  2028:{ ramadan:[['2028-01-25','2028-02-26']], eid:[['2028-02-25','2028-03-01'],['2028-05-03','2028-05-07']], easter:[['2028-04-10','2028-04-17']] },
+  2029:{ ramadan:[['2029-01-13','2029-02-14']], eid:[['2029-02-13','2029-02-17'],['2029-04-22','2029-04-26']], easter:[['2029-03-26','2029-04-01']] }
+};
+let greetCat = 'all', greetSeason = null, greetServer = (()=>{ try{ return JSON.parse(localStorage.getItem('zeeshop_greet_cache')||'[]'); }catch(_e){ return []; } })();
+let greetLoadedAt = 0;
+function greetPrefs(){ let p = {}; try{ p = JSON.parse(localStorage.getItem('zeeshop_greet_prefs')||'{}'); }catch(_e){} return Object.assign({ footer:true, style:0 }, p); }
+function greetPrefsSet(patch){ try{ localStorage.setItem('zeeshop_greet_prefs', JSON.stringify(Object.assign(greetPrefs(), patch))); }catch(_e){} }
+function greetFavKey(){ return 'zeeshop_greet_fav_'+(state.sessionUserId||'x'); }
+function greetFavs(){ try{ return JSON.parse(localStorage.getItem(greetFavKey())||'[]'); }catch(_e){ return []; } }
+function greetFavToggle(id){
+  let f = greetFavs(); f = f.includes(id) ? f.filter(x=>x!==id) : f.concat(id);
+  try{ localStorage.setItem(greetFavKey(), JSON.stringify(f)); }catch(_e){}
+  return f.includes(id);
+}
+function greetAll(){
+  const seen = new Set(), out = [];
+  greetServer.forEach(r=>{ if(!r || !r.id || r.is_active===false) return; seen.add(String(r.id));
+    out.push({ id:String(r.id), cat:r.category, season:r.season||null, title:r.title||'', body:r.body||'', sort:Number(r.sort)||0, starts:r.starts_on||null, ends:r.ends_on||null }); });
+  GREET_BUILTIN.forEach(g=>{ if(!seen.has(g.id)) out.push(Object.assign({ sort:0 }, g)); });
+  return out;
+}
+async function loadGreetings(){
+  greetLoadedAt = Date.now();
+  try{
+    const r = await fetch(`${SITE_CONTENT_URL}/rest/v1/greeting_messages?is_active=eq.true&select=id,category,title,body,season,starts_on,ends_on,sort,is_active&order=sort.asc&limit=500`, {
+      headers:{ apikey: SITE_CONTENT_ANON_KEY, Authorization:'Bearer '+SITE_CONTENT_ANON_KEY }, cache:'no-store' });
+    if(!r.ok) return;
+    const rows = await r.json();
+    if(!Array.isArray(rows)) return;
+    const changed = JSON.stringify(rows) !== JSON.stringify(greetServer);
+    greetServer = rows;
+    try{ localStorage.setItem('zeeshop_greet_cache', JSON.stringify(rows)); }catch(_e){}
+    if(changed && route==='greetings' && !document.getElementById('active-overlay')) refreshMain();
+  }catch(_e){ /* offline — the built-in messages still work */ }
+}
+function greetActiveSeasons(){
+  const d = new Date(), y = d.getFullYear();
+  const iso = d.toISOString().slice(0,10), md = iso.slice(5);
+  const on = new Set();
+  Object.keys(GREET_FIXED).forEach(k=>GREET_FIXED[k].forEach(([a,b])=>{ if(md>=a && md<=b) on.add(k); }));
+  [y, y+1].forEach(yy=>{ const t = GREET_MOVABLE[yy]; if(t) Object.keys(t).forEach(k=>t[k].forEach(([a,b])=>{ if(iso>=a && iso<=b) on.add(k); })); });
+  greetServer.forEach(r=>{ if(r && r.season && r.starts_on && r.ends_on && iso>=r.starts_on && iso<=r.ends_on) on.add(r.season); });
+  return Array.from(on);
+}
+function greetSeasonInfo(k){ return GREET_SEASONS[k] || { label: String(k||'').replace(/^./,c=>c.toUpperCase()), icon:'✨' }; }
+// Fills in the recipient and sender. With no recipient name the greeting still reads naturally.
+function greetFill(body, to, from){
+  to = String(to||'').trim(); from = String(from||'').trim();
+  let s = String(body||'');
+  if(to) s = s.split('{to}').join(to);
+  else s = s.split('Dear {to}').join('Dear friend').split(', {to}').join('').split(' {to}').join('').split('{to}').join('friend');
+  if(from) s = s.split('{from}').join(from);
+  else s = s.split('\n— {from}').join('').split('{from}').join('');
+  return s;
+}
+function greetDefaultFrom(g){
+  if(g && g.cat==='thanks') return (business() && business().name) || '';
+  const u = currentUser(); return u ? (u.firstName||'') : '';
+}
+// Short preview for the list: skips the "Dear ___," line and the signature.
+function greetPreview(g){
+  let lines = String(g.body||'').split('\n').filter(l=>!/^— \{from\}$/.test(l.trim()));
+  if(lines.length>1 && /\{to\}/.test(lines[0]) && lines[0].length<40 && /[,.]$/.test(lines[0].trim())) lines = lines.slice(1);
+  return greetFill(lines.join(' '), '', '');
+}
+function greetHasTo(g){ return String(g.body||'').includes('{to}'); }
+
+function screenGreetings(){
+  if(Date.now()-greetLoadedAt > 6*3600*1000) loadGreetings();
+  const all = greetAll();
+  const favs = new Set(greetFavs());
+  const seasons = greetActiveSeasons();
+  let list;
+  if(greetCat==='fav') list = all.filter(g=>favs.has(g.id));
+  else if(greetCat==='all') list = all;
+  else if(greetCat==='season') list = all.filter(g=>g.cat==='season' && (!greetSeason || g.season===greetSeason));
+  else list = all.filter(g=>g.cat===greetCat);
+  list = list.slice().sort((a,b)=>(a.sort||0)-(b.sort||0));
+  const card = g=>`
+    <div class="gr-card" data-greet="${escAttr(g.id)}" role="button" tabindex="0">
+      <div class="gr-card-top"><div class="gr-title">${escapeHtml(g.title)}</div>${favs.has(g.id)?'<span class="gr-fav">♥</span>':''}</div>
+      <div class="gr-prev">${escapeHtml(greetPreview(g))}</div>
+    </div>`;
+  let body;
+  if(!list.length){
+    body = `<div class="empty"><div class="ic">${ICON_HEART}</div><b>${greetCat==='fav'?'Nothing saved yet':'No messages here yet'}</b>${greetCat==='fav'?'Tap the ♡ on any message to keep it here.':'Check back soon.'}</div>`;
+  } else if(greetCat==='season' && !greetSeason){
+    const order = Object.keys(GREET_SEASONS).concat(Array.from(new Set(list.map(g=>g.season))).filter(k=>!GREET_SEASONS[k]));
+    body = order.map(k=>{ const items = list.filter(g=>g.season===k); if(!items.length) return '';
+      const si = greetSeasonInfo(k);
+      return `<div class="section-head"><h3>${si.icon} ${escapeHtml(si.label)}</h3></div>${items.map(card).join('')}`; }).join('');
+  } else body = list.map(card).join('');
+  const featured = seasons.length ? `
+    <div class="section-head"><h3>Featured now</h3></div>
+    <div class="gr-feat">${seasons.map(k=>{ const si = greetSeasonInfo(k); return `<button type="button" class="gr-feat-b" data-greet-season="${escAttr(k)}"><span>${si.icon}</span> ${escapeHtml(si.label)}</button>`; }).join('')}</div>` : '';
+  return `
+    ${subHeader('Messages &amp; Greetings')}
+    <p class="subtle" style="margin:-6px 0 12px;">Pick a message, add a name, and share it with the people you care about.</p>
+    ${featured}
+    <div class="gr-chips">${GREET_CATS.map(c=>`<button type="button" class="gr-chip ${(greetCat===c.id && !(c.id==='season' && greetSeason))?'on':''}" data-greet-cat="${c.id}">${c.label}</button>`).join('')}</div>
+    ${greetCat==='season' && greetSeason ? `<p class="subtle" style="margin:0 0 10px;">Showing ${escapeHtml(greetSeasonInfo(greetSeason).label)} · <a href="#" id="greet-all-seasons" style="color:var(--marigold-dark);font-weight:800;">see all seasons</a></p>` : ''}
+    ${body}`;
+}
+function bindGreetingsEvents(){
+  document.querySelectorAll('[data-greet-cat]').forEach(el=>el.addEventListener('click', ()=>{ greetCat = el.dataset.greetCat; greetSeason = null; refreshMain(); }));
+  document.querySelectorAll('[data-greet-season]').forEach(el=>el.addEventListener('click', ()=>{ greetCat = 'season'; greetSeason = el.dataset.greetSeason; refreshMain(); }));
+  const allS = document.getElementById('greet-all-seasons'); if(allS) allS.addEventListener('click', e=>{ e.preventDefault(); greetSeason = null; refreshMain(); });
+  document.querySelectorAll('[data-greet]').forEach(el=>{
+    const open = ()=>openGreeting(el.dataset.greet);
+    el.addEventListener('click', open);
+    el.addEventListener('keydown', e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); open(); } });
+  });
+}
+
+const GREET_STYLES = [
+  { name:'Navy',  bg:['#12213B','#24457A'], text:'#FFFFFF', accent:'#F2A93B' },
+  { name:'Green', bg:['#0F3D3E','#1F7A63'], text:'#FFFFFF', accent:'#F6C768' },
+  { name:'Gold',  bg:['#F2A93B','#E67E22'], text:'#12213B', accent:'#12213B' },
+  { name:'Rose',  bg:['#7A1F4B','#C2417A'], text:'#FFFFFF', accent:'#FFE3B0' }
+];
+function greetWrap(ctx, text, maxW){
+  const lines = [];
+  String(text).split('\n').forEach(par=>{
+    if(!par.trim()){ lines.push(''); return; }
+    let cur = '';
+    par.split(' ').forEach(w=>{
+      const t = cur ? cur+' '+w : w;
+      if(ctx.measureText(t).width > maxW && cur){ lines.push(cur); cur = w; } else cur = t;
+    });
+    lines.push(cur);
+  });
+  return lines;
+}
+function drawGreetingCanvas(canvas, filled, styleIx, withFooter){
+  const W = 1080, H = 1350, st = GREET_STYLES[styleIx] || GREET_STYLES[0];
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  const grd = ctx.createLinearGradient(0,0,W,H); grd.addColorStop(0, st.bg[0]); grd.addColorStop(1, st.bg[1]);
+  ctx.fillStyle = grd; ctx.fillRect(0,0,W,H);
+  // soft decorative circles
+  ctx.globalAlpha = .08; ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(W-80, 120, 260, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(60, H-160, 220, 0, Math.PI*2); ctx.fill();
+  ctx.globalAlpha = 1;
+  const fam = '"Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+  // split off the signature line
+  let msg = filled, sig = '';
+  const ix = filled.lastIndexOf('\n— ');
+  if(ix > -1){ msg = filled.slice(0, ix); sig = filled.slice(ix+1).trim(); }
+  // opening quote mark
+  ctx.fillStyle = st.accent; ctx.font = `bold 220px Georgia, serif`; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  ctx.fillText('“', 90, 300);
+  // fit the message
+  const left = 100, maxW = W - 200, top = 340, bottom = H - (sig ? 330 : 250);
+  let size = 62, lines, lh;
+  for(; size >= 32; size -= 2){
+    ctx.font = `600 ${size}px ${fam}`; lines = greetWrap(ctx, msg, maxW); lh = size*1.42;
+    if(lines.length*lh <= bottom-top) break;
+  }
+  ctx.fillStyle = st.text; ctx.textAlign = 'left';
+  let y = top + size;
+  lines.forEach(l=>{ ctx.fillText(l, left, y); y += lh; });
+  if(sig){
+    ctx.font = `700 ${Math.min(52,size+6)}px ${fam}`; ctx.fillStyle = st.accent;
+    ctx.fillText(sig, left, Math.min(y + 50, H-210));
+  }
+  if(withFooter){
+    ctx.fillStyle = st.text; ctx.globalAlpha = .75; ctx.font = `600 30px ${fam}`; ctx.textAlign = 'center';
+    ctx.fillText('Sent with ZeeShop', W/2, H-70);
+    ctx.globalAlpha = 1;
+  }
+}
+function openGreeting(id){
+  const g = greetAll().find(x=>x.id===id); if(!g) return;
+  const prefs = greetPrefs();
+  let to = '', from = greetDefaultFrom(g), styleIx = Math.min(prefs.style||0, GREET_STYLES.length-1), footer = prefs.footer !== false;
+  const hasTo = greetHasTo(g);
+  const filled = ()=>greetFill(g.body, to, from);
+  const shareText = ()=>filled() + (footer ? '\n\nSent with ZeeShop' : '');
+  const isFav = ()=>greetFavs().includes(id);
+  openSheet(`
+    <div class="sheet-head"><h3>${escapeHtml(g.title)}</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
+    ${hasTo ? `<div class="field"><label>Send to <span class="subtle">(name — optional)</span></label><input id="gr-to" placeholder="e.g. Mama Chidi" maxlength="40"></div>` : ''}
+    ${/\{from\}/.test(g.body) ? `<div class="field"><label>From</label><input id="gr-from" value="${escAttr(from)}" maxlength="40"></div>` : ''}
+    <div id="gr-preview" class="gr-preview"></div>
+    <label class="gr-check"><input type="checkbox" id="gr-footer" ${footer?'checked':''}> Add “Sent with ZeeShop” at the end</label>
+    <div class="gr-styles" id="gr-styles">${GREET_STYLES.map((s,i)=>`<button type="button" class="gr-sw ${i===styleIx?'on':''}" data-gr-style="${i}" aria-label="${s.name} picture style" style="background:linear-gradient(135deg,${s.bg[0]},${s.bg[1]});"></button>`).join('')}</div>
+    <div style="display:flex;gap:8px;margin-bottom:8px;">
+      <button class="btn btn-primary" id="gr-share" style="flex:1;">Share</button>
+      <button class="btn btn-outline" id="gr-fav" style="width:56px;flex:none;" aria-label="Save message">${isFav()?'♥':'♡'}</button>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-outline" id="gr-copy" style="flex:1;">Copy</button>
+      <button class="btn btn-outline" id="gr-pic" style="flex:1;">Share as picture</button>
+    </div>`);
+  const prev = document.getElementById('gr-preview');
+  const paint = ()=>{ prev.textContent = shareText(); };
+  paint();
+  const toEl = document.getElementById('gr-to'), fromEl = document.getElementById('gr-from');
+  if(toEl) toEl.addEventListener('input', ()=>{ to = toEl.value; paint(); });
+  if(fromEl) fromEl.addEventListener('input', ()=>{ from = fromEl.value; paint(); });
+  document.getElementById('gr-footer').addEventListener('change', e=>{ footer = e.target.checked; greetPrefsSet({ footer }); paint(); });
+  document.querySelectorAll('[data-gr-style]').forEach(b=>b.addEventListener('click', ()=>{
+    styleIx = Number(b.dataset.grStyle); greetPrefsSet({ style: styleIx });
+    document.querySelectorAll('[data-gr-style]').forEach(x=>x.classList.toggle('on', x===b));
+  }));
+  document.getElementById('gr-fav').addEventListener('click', e=>{
+    const on = greetFavToggle(id); e.currentTarget.textContent = on ? '♥' : '♡';
+    toast(on ? 'Saved ♥' : 'Removed from saved');
+  });
+  document.getElementById('gr-copy').addEventListener('click', async ()=>{
+    try{ await navigator.clipboard.writeText(shareText()); toast('Message copied ✅'); }
+    catch(_e){ toast('Could not copy — press and hold the message to copy it.'); }
+  });
+  document.getElementById('gr-share').addEventListener('click', async ()=>{
+    const text = shareText();
+    if(navigator.share){ try{ await navigator.share({ text }); } catch(_e){ /* cancelled */ } }
+    else window.open('https://wa.me/?text='+encodeURIComponent(text), '_blank', 'noopener');
+  });
+  document.getElementById('gr-pic').addEventListener('click', async ()=>{
+    const canvas = document.createElement('canvas');
+    drawGreetingCanvas(canvas, filled(), styleIx, footer);
+    const blob = await new Promise(res=>canvas.toBlob(res, 'image/png'));
+    if(!blob){ toast('Could not make the picture.'); return; }
+    const file = new File([blob], 'greeting.png', { type:'image/png' });
+    if(navigator.canShare && navigator.canShare({ files:[file] })){
+      try{ await navigator.share({ files:[file] }); } catch(_e){ /* cancelled */ }
+    } else {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'greeting.png'; a.click();
+      setTimeout(()=>URL.revokeObjectURL(url), 2000);
+      toast('Sharing pictures is not supported here, so it was downloaded.');
+    }
+  });
+}
+(function(){
+  const st = document.createElement('style');
+  st.textContent = `
+    .gr-chips{display:flex;gap:8px;overflow-x:auto;padding:2px 0 12px;margin:0 -4px;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
+    .gr-chips::-webkit-scrollbar{display:none;}
+    .gr-chip{flex:none;border:1.5px solid var(--line);background:transparent;color:var(--ink-text,#12213B);font:inherit;font-size:13.5px;font-weight:700;padding:8px 14px;border-radius:999px;cursor:pointer;white-space:nowrap;}
+    .gr-chip.on{background:var(--ink,#12213B);color:#fff;border-color:var(--ink,#12213B);}
+    .gr-feat{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;}
+    .gr-feat-b{border:none;background:linear-gradient(135deg,#F7A108,#D97706);color:#12213B;font:inherit;font-weight:800;font-size:14px;padding:10px 16px;border-radius:14px;cursor:pointer;}
+    .gr-card{background:var(--card,#fff);border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-bottom:10px;cursor:pointer;}
+    .gr-card-top{display:flex;justify-content:space-between;align-items:center;gap:8px;}
+    .gr-title{font-weight:800;font-size:15px;color:var(--ink-text,#12213B);}
+    .gr-fav{color:#E0162B;font-size:16px;}
+    .gr-prev{margin-top:4px;font-size:13px;line-height:1.45;color:var(--text-dim);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+    .gr-preview{white-space:pre-wrap;word-break:break-word;background:var(--paper-dim);border-radius:14px;padding:14px;font-size:15px;line-height:1.55;margin:4px 0 12px;max-height:34vh;overflow:auto;}
+    .gr-check{display:flex;gap:8px;align-items:center;font-size:13.5px;margin-bottom:12px;}
+    .gr-styles{display:flex;gap:10px;align-items:center;margin-bottom:14px;}
+    .gr-sw{width:30px;height:30px;border-radius:50%;border:2px solid transparent;cursor:pointer;padding:0;}
+    .gr-sw.on{border-color:var(--marigold-dark,#D97706);box-shadow:0 0 0 2px var(--paper,#fff) inset;}
+  `;
+  document.head.appendChild(st);
+})();
+
 /* ============================================================
    EMPLOYMENT RECORDS — resumption date, salary, and (for
    apprentices/"nwa boi") a settlement/freedom date. Owner-only

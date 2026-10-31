@@ -9872,9 +9872,28 @@ async function billPromptPin(){
   return pin;
 }
 
+// The wallet, bills and funding talk to the server as the signed-in Supabase user. A phone can be unlocked with the
+// local password/PIN while that online sign-in is missing (expired, cleared, or done in a different browser), and
+// then the wallet will not load until the person signs in again. Instead of sending them to Chrome, ask for the
+// password once, here, and sign in again.
+let reconnectPromise = null;
+async function reconnectOnline(){
+  const u = currentUser();
+  if(!u || !u.email || !navigator.onLine || !window.sb) return null;
+  const pass = await appPrompt('Please enter your password to reconnect your account online.', '', { password:true, okText:'Reconnect', cancelText:'Not now' });
+  if(!pass) return null;
+  try{
+    const { data, error } = await window.sb.auth.signInWithPassword({ email: u.email, password: pass });
+    if(error || !data || !data.session){ toast('Wrong password — could not reconnect.'); return null; }
+    toast('Reconnected ✅');
+    return data.session.access_token;
+  }catch(e){ return null; }
+}
 async function bigisubAuthToken(){
   const { data } = await window.sb.auth.getSession();
-  return data && data.session ? data.session.access_token : null;
+  if(data && data.session) return data.session.access_token;
+  if(!reconnectPromise) reconnectPromise = reconnectOnline().finally(()=>{ reconnectPromise = null; });
+  return await reconnectPromise;
 }
 
 async function callBigisub(action, params){

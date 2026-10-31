@@ -9738,8 +9738,10 @@ function openSaleDetail(saleId){
     </div>
     <button class="btn btn-primary" id="share-sale-btn" style="margin-bottom:10px;">${ICON_EXPORT} Share Receipt</button>
     ${(!isVoided && (isMaster() || (isStaff() && canDo('canVoidReturn') && s.soldByUserId===state.sessionUserId))) ? `
-      <button class="btn btn-outline" id="open-return-sale" style="margin-bottom:10px;">↩️ Process a Return</button>
-      <button class="btn btn-danger" id="void-sale-btn">${ICON_BAN} Void This Sale</button>
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-outline" id="open-return-sale" style="flex:1;min-width:0;white-space:nowrap;padding-left:8px;padding-right:8px;">↩️ Process Return</button>
+        <button class="btn btn-danger" id="void-sale-btn" style="flex:1;min-width:0;white-space:nowrap;padding-left:8px;padding-right:8px;">${ICON_BAN} Void Sale</button>
+      </div>
     ` : ''}
     ${(!isVoided && isStaff() && canDo('canVoidReturn') && s.soldByUserId!==state.sessionUserId) ? `
       <p class="subtle">You can only void or return sales you personally made.</p>

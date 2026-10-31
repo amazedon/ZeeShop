@@ -1724,7 +1724,7 @@ window.addEventListener('online', ()=>syncSettingsWithServer(true));
 window.addEventListener('load', ()=>{ setTimeout(()=>syncSettingsWithServer(true), 2500); });
 setInterval(()=>{ if(Object.keys(spLoad()).length) syncSettingsWithServer(true); }, 15000);
 
-let staffOpen = new Set(['team']);   // which collapsible rows on the Staff page are open
+let staffOpen = new Set();   // which collapsible rows on the Staff page are open
 const ICON_ACC_CHEV = '<svg class="acc-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
 function accRow(key, headHtml, bodyHtml, extraClass){
   return `<details class="acc ${extraClass||''}" data-acc="${key}" ${staffOpen.has(key)?'open':''}><summary>${headHtml}${ICON_ACC_CHEV}</summary><div class="acc-body">${bodyHtml}</div></details>`;
@@ -1737,7 +1737,7 @@ document.addEventListener('toggle', e=>{
 }, true);
 let freshConnectCode = null;   // a Staff Connect Code is only shown on the visit it was generated in
 function render(){
-  if(route !== 'staff'){ staffOpen = new Set(['team']); freshConnectCode = null; if(state.joinCode) state.joinCode = null; }   // codes vanish when you leave the Staff page
+  if(route !== 'staff'){ staffOpen = new Set(); freshConnectCode = null; if(state.joinCode) state.joinCode = null; }   // codes vanish when you leave the Staff page
   if(!state.sessionUserId && route === 'note-view') route = 'notes';   // never leave a note open on the lock screen
   if(route !== 'note-view') noteMenuOpen = false;
   if(route !== 'goods'){ goodsFilter = 'all'; goodsTab = 'active'; }    // filters apply only while you are on Goods
@@ -6978,7 +6978,7 @@ function screenStaff(){
     ${accRow('noapp', `<div class="acc-main"><div class="acc-title">People Without App Access</div><div class="acc-sub">Paid staff or apprentices who won't use the app</div></div>`, noAppBody)}
     <button class="btn btn-outline" id="offer-letter-btn" style="width:100%;margin:2px 0 6px;">${ICON_MAIL} Send Offer Letter to a Candidate</button>
     ${pendingCount>0?`<div class="card" style="border-color:var(--marigold-dark);"><b>${ICON_EDIT_NOTE} ${pendingCount} name change request${pendingCount>1?'s':''}</b> waiting below.</div>`:''}
-    ${accRow('team', `<div class="acc-main"><div class="acc-title">Team</div><div class="acc-sub">${staff.length+recordOnly.length} ${(staff.length+recordOnly.length)===1?'person':'people'} · tap to show or hide</div></div>`, teamBody)}
+    ${accRow('team', `<div class="acc-main"><div class="acc-title">Team</div><div class="acc-sub">${staff.length+recordOnly.length} ${(staff.length+recordOnly.length)===1?'person':'people'} · tap to open</div></div>`, teamBody)}
   `;
 }
 /* ============================================================

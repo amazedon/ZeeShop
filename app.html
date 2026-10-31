@@ -6912,7 +6912,8 @@ function screenStaff(){
     <div class="section-head"><h3>Add someone</h3></div>
     ${accRow('join', `<div class="acc-main"><div class="acc-title">New staff member</div><div class="acc-sub">Never used ZeeShop on your business</div></div>`, joinBody)}
     ${accRow('connect', `<div class="acc-main"><div class="acc-title">Staff on a second phone</div><div class="acc-sub">Already on your team, new or extra phone</div></div>`, connectBody)}
-    <button class="btn btn-outline" id="offer-letter-btn" style="width:100%;margin:4px 0 14px;">${ICON_MAIL} Send Offer Letter to a Candidate</button>
+    <button class="btn btn-outline" id="add-recordonly-btn" style="width:100%;margin:4px 0 10px;">＋ Add a Person (No App Access)</button>
+    <button class="btn btn-outline" id="offer-letter-btn" style="width:100%;margin:0 0 14px;">${ICON_MAIL} Send Offer Letter to a Candidate</button>
     ${pendingCount>0?`<div class="card" style="border-color:var(--marigold-dark);"><b>${ICON_EDIT_NOTE} ${pendingCount} name change request${pendingCount>1?'s':''}</b> waiting below.</div>`:''}
     <div class="section-head"><h3>Team</h3></div>
     ${staff.length===0?`<p class="subtle">No staff yet. Open “New staff member” above to invite one.</p>`:staff.map(u=>{
@@ -6958,7 +6959,6 @@ function screenStaff(){
 
     <div class="section-head"><h3>People Without App Access</h3></div>
     <p class="subtle" style="margin:-6px 0 10px;">Paid staff or apprentices who won't use the app.</p>
-    <button class="btn btn-outline" id="add-recordonly-btn" style="width:100%;margin-bottom:12px;">＋ Add a Person (No App Access)</button>
     ${recordOnly.length===0 ? `<p class="subtle">Nobody added here yet.</p>` :
     recordOnly.map(p=>{
       const head = `

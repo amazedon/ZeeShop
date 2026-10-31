@@ -1356,6 +1356,18 @@ function fmtClock(iso){
 }
 // "30 Oct 2026 · 3:45 PM" — the date, plus the time when one was recorded.
 function fmtDateAt(dateStr, iso){ const t = fmtClock(iso); return fmtDate(dateStr) + (t ? ' · '+t : ''); }
+// Save a receipt canvas to the phone as a PNG picture.
+function saveCanvasPng(canvas, name, auditText){
+  if(!canvas || !canvas.width){ toast('The receipt is still loading — try again in a moment.'); return; }
+  canvas.toBlob(blob=>{
+    if(!blob){ toast('Could not save the receipt.'); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 2000);
+    toast('Receipt saved ✅');
+    if(auditText) try{ logAudit('receipt_saved', auditText); }catch(_e){}
+  }, 'image/png');
+}
 function fmtMoney(n){
   const c = (state.business && state.business.currency) ? (CCY[state.business.currency]||state.business.currency+" ") : "";
   return c + Number(n||0).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:2});
@@ -5572,7 +5584,7 @@ function openReceiptSheet(saleId){
     </div>
     <div style="display:flex;gap:10px;margin-bottom:6px;">
       <button class="btn btn-primary" id="share-receipt-img" style="flex:1;">${ICON_EXPORT} Share Receipt</button>
-      <button class="btn btn-outline" id="download-receipt-img" style="flex:1;">⬇️ Download</button>
+      <button class="btn btn-outline" id="download-receipt-img" style="flex:1;">💾 Save</button>
     </div>
     <button class="btn btn-outline" id="print-receipt-btn" style="width:100%;margin-bottom:6px;">${ICON_PRINTER} Print on Bluetooth Printer</button>
     <p class="subtle" style="margin-bottom:14px;">Share opens your phone's share sheet with the actual receipt image attached — pick WhatsApp, Email, or any app there. Printing needs a Bluetooth thermal printer and works on Android only (not iPhone).</p>
@@ -5599,7 +5611,7 @@ function openReceiptSheet(saleId){
         try{ await navigator.share({files:[file], title:'Receipt from '+shop.name}); markSent('image_share'); }
         catch(e){ /* user cancelled the share sheet — not an error */ }
       } else {
-        toast("This browser can't share images directly — tap Download, then attach the file manually.");
+        toast("This browser can't share images directly — tap Save, then attach the file manually.");
       }
     }, 'image/png');
   });
@@ -7812,7 +7824,7 @@ function openEmploymentLetterModal(userId){
     </div>
     <div style="display:flex;gap:10px;margin-bottom:6px;">
       <button class="btn btn-primary" id="share-letter-img" style="flex:1;">${ICON_EXPORT} Share</button>
-      <button class="btn btn-outline" id="download-letter-img" style="flex:1;">⬇️ Download</button>
+      <button class="btn btn-outline" id="download-letter-img" style="flex:1;">💾 Save</button>
     </div>
     <p class="subtle" style="margin-bottom:14px;">Share opens your phone's share sheet with the document image — pick WhatsApp, Email, or any app there.</p>
   `);
@@ -7837,7 +7849,7 @@ function openEmploymentLetterModal(userId){
         try{ await navigator.share({files:[file], title: business().name}); markSent('image share'); }
         catch(e){ /* user cancelled — not an error */ }
       } else {
-        toast("This browser can't share images directly — tap Download, then attach the file manually.");
+        toast("This browser can't share images directly — tap Save, then attach the file manually.");
       }
     }, 'image/png');
   });
@@ -8063,7 +8075,7 @@ function openOfferLetterPreview(offer){
     </div>
     <div style="display:flex;gap:10px;margin-bottom:6px;">
       <button class="btn btn-primary" id="share-offer-img" style="flex:1;">${ICON_EXPORT} Share</button>
-      <button class="btn btn-outline" id="download-offer-img" style="flex:1;">⬇️ Download</button>
+      <button class="btn btn-outline" id="download-offer-img" style="flex:1;">💾 Save</button>
     </div>
     <p class="subtle" style="margin-bottom:14px;">Share opens your phone's share sheet with the letter image — pick WhatsApp, Email, or any app there.</p>
     <div class="divider"></div>
@@ -8081,7 +8093,7 @@ function openOfferLetterPreview(offer){
         try{ await navigator.share({files:[file], title: business().name}); markSent('image share'); }
         catch(e){ /* user cancelled — not an error */ }
       } else {
-        toast("This browser can't share images directly — tap Download, then attach the file manually.");
+        toast("This browser can't share images directly — tap Save, then attach the file manually.");
       }
     }, 'image/png');
   });
@@ -9501,13 +9513,13 @@ function openHistoryShareModal(){
   const dateLabel = historyDateFilter ? fmtDate(historyDateFilter) : 'All Time';
   openSheet(`
     <div class="sheet-head"><h3>Share History</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
-    <p class="subtle" style="margin-bottom:14px;">Shows the ${filterLabel} filter, ${dateLabel} — same as what's currently on screen. <b>Share</b> sends each item below as its own separate image (up to 10 at a time). <b>Download</b> saves one combined summary picture instead.</p>
+    <p class="subtle" style="margin-bottom:14px;">Shows the ${filterLabel} filter, ${dateLabel} — same as what's currently on screen. <b>Share</b> sends each item below as its own separate image (up to 10 at a time). <b>Save</b> keeps one combined summary picture instead.</p>
     <div style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;justify-content:center;margin-bottom:14px;">
       <canvas id="history-canvas" style="max-width:100%;height:auto;display:block;"></canvas>
     </div>
     <div style="display:flex;gap:10px;">
       <button class="btn btn-primary" id="share-history-img" style="flex:1;">${ICON_EXPORT} Share</button>
-      <button class="btn btn-outline" id="download-history-img" style="flex:1;">⬇️ Download</button>
+      <button class="btn btn-outline" id="download-history-img" style="flex:1;">💾 Save</button>
     </div>
   `);
   const canvas = document.getElementById('history-canvas');
@@ -9529,7 +9541,7 @@ function openHistoryShareModal(){
         try{ await navigator.share({files, title: business().name+' — History'}); logAudit('history_shared', `Shared ${files.length} item(s) individually (${filterLabel}, ${dateLabel})`); }
         catch(e){ /* user cancelled — not an error */ }
       } else {
-        toast("This browser can't share multiple images at once — try Download for a single summary instead.");
+        toast("This browser can't share multiple images at once — try Save for a single summary instead.");
       }
     } finally {
       shareBtn.disabled = false; shareBtn.textContent = '${ICON_EXPORT} Share';
@@ -9692,7 +9704,7 @@ function openShareHistoryItemModal(idx){
     </div>
     <div style="display:flex;gap:10px;">
       <button class="btn btn-primary" id="share-hist-item-img" style="flex:1;">${ICON_EXPORT} Share</button>
-      <button class="btn btn-outline" id="download-hist-item-img" style="flex:1;">⬇️ Download</button>
+      <button class="btn btn-outline" id="download-hist-item-img" style="flex:1;">💾 Save</button>
     </div>
     ${e.supId?`<button class="btn btn-outline" id="hist-open-supplier" style="width:100%;margin-top:10px;">Open supplier</button>`:''}
   `);
@@ -9708,7 +9720,7 @@ function openShareHistoryItemModal(idx){
         try{ await navigator.share({files:[file], title: business().name}); logAudit('history_item_shared', `Shared ${e.type} entry: ${e.title}`); }
         catch(err){ /* user cancelled — not an error */ }
       } else {
-        toast("This browser can't share images directly — tap Download, then attach the file manually.");
+        toast("This browser can't share images directly — tap Save, then attach the file manually.");
       }
     }, 'image/png');
   });
@@ -9736,7 +9748,10 @@ function openSaleDetail(saleId){
     <div style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;justify-content:center;margin-bottom:14px;">
       <canvas id="sale-receipt-canvas" style="max-width:100%;height:auto;display:block;"></canvas>
     </div>
-    <button class="btn btn-primary" id="share-sale-btn" style="margin-bottom:10px;">${ICON_EXPORT} Share Receipt</button>
+    <div style="display:flex;gap:10px;margin-bottom:10px;">
+      <button class="btn btn-primary" id="share-sale-btn" style="flex:2;min-width:0;white-space:nowrap;">${ICON_EXPORT} Share Receipt</button>
+      <button class="btn btn-outline" id="save-sale-btn" style="flex:1;min-width:0;white-space:nowrap;">💾 Save</button>
+    </div>
     ${(!isVoided && (isMaster() || (isStaff() && canDo('canVoidReturn') && s.soldByUserId===state.sessionUserId))) ? `
       <div style="display:flex;gap:10px;">
         <button class="btn btn-outline" id="open-return-sale" style="flex:1;min-width:0;white-space:nowrap;padding-left:8px;padding-right:8px;">↩️ Process Return</button>
@@ -9749,6 +9764,8 @@ function openSaleDetail(saleId){
   `);
   // The picture shown here is the very same receipt that Share sends.
   drawReceiptToCanvas(document.getElementById('sale-receipt-canvas'), s, state.shops.find(x=>x.id===s.shopId), cust, seller).catch(err=>console.warn('Receipt draw failed:', err));
+  const saveSaleBtn = document.getElementById('save-sale-btn');
+  if(saveSaleBtn) saveSaleBtn.addEventListener('click', ()=>saveCanvasPng(document.getElementById('sale-receipt-canvas'), `sale-${s.id.slice(-6)}.png`, `Saved sale receipt: ${buyerName}`));
   const shareSaleBtn = document.getElementById('share-sale-btn');
   if(shareSaleBtn) shareSaleBtn.addEventListener('click', async ()=>{
     shareSaleBtn.disabled = true;
@@ -10044,7 +10061,7 @@ function openLodgingReceiptSheet(bookingId){
     </div>
     <div style="display:flex;gap:10px;margin-bottom:6px;">
       <button class="btn btn-primary" id="share-lodging-receipt" style="flex:1;">${ICON_EXPORT} Share Receipt</button>
-      <button class="btn btn-outline" id="download-lodging-receipt" style="flex:1;">⬇️ Download</button>
+      <button class="btn btn-outline" id="download-lodging-receipt" style="flex:1;">💾 Save</button>
     </div>
     <p class="subtle" style="margin-bottom:14px;">Share opens your phone's share sheet with the receipt image attached — pick WhatsApp, Email, or any app there. ID, next-of-kin and plate number are kept internal and are not shown on this receipt.</p>
   `);
@@ -10058,7 +10075,7 @@ function openLodgingReceiptSheet(bookingId){
         try{ await navigator.share({files:[file], title:'Lodging Receipt from '+shop.name}); logAudit('lodging_receipt_shared', `Shared receipt for ${b.guestName}`); }
         catch(e){ /* user cancelled the share sheet — not an error */ }
       } else {
-        toast("This browser can't share images directly — tap Download, then attach the file manually.");
+        toast("This browser can't share images directly — tap Save, then attach the file manually.");
       }
     }, 'image/png');
   });
@@ -11669,7 +11686,7 @@ function screenBillSuccess(){
       <div class="bps-rcard"><canvas id="bps-canvas" style="max-width:100%;height:auto;display:block;"></canvas></div>
       ${wait ? `<div class="bps-resp"><small>PROCESSING</small>Your request is being processed. Open History in a moment for the final result.</div>` : ''}
     </div>
-    <div class="bps-actions"><button class="main" id="bp-succ-done">Done</button><button id="bp-succ-share">Share</button></div>
+    <div class="bps-actions"><button class="main" id="bp-succ-done">Done</button><button id="bp-succ-save">Save</button><button id="bp-succ-share">Share</button></div>
   </div></div>`;
 }
 function bindBillSuccessEvents(){
@@ -11694,6 +11711,8 @@ function bindBillSuccessEvents(){
   })();
   const done = document.getElementById('bp-succ-done');
   if(done) done.addEventListener('click', ()=>{ billScreen = 'hub'; billResetForm(); refreshMain(); });
+  const svb = document.getElementById('bp-succ-save');
+  if(svb) svb.addEventListener('click', ()=>saveCanvasPng(document.getElementById('bps-canvas'), 'bill-receipt.png', 'Saved bill receipt'));
   const sh = document.getElementById('bp-succ-share');
   if(sh) sh.addEventListener('click', async ()=>{
     sh.disabled = true;
@@ -12716,7 +12735,7 @@ function openBillTxReceiptModal(txId){
     </div>
     <div style="display:flex;gap:10px;margin-bottom:6px;">
       <button class="btn btn-primary" id="share-bill-receipt-img" style="flex:1;white-space:nowrap;display:flex;align-items:center;justify-content:center;gap:8px;">${ICON_EXPORT}<span>Share</span></button>
-      <button class="btn btn-outline" id="download-bill-receipt-img" style="flex:1;white-space:nowrap;display:flex;align-items:center;justify-content:center;gap:8px;"><span>Download</span></button>
+      <button class="btn btn-outline" id="download-bill-receipt-img" style="flex:1;white-space:nowrap;display:flex;align-items:center;justify-content:center;gap:8px;"><span>Save</span></button>
     </div>
     <p class="subtle">Share opens your phone's share sheet with the actual receipt image attached — pick WhatsApp, Email, or any app there.</p>
   `);
@@ -12730,7 +12749,7 @@ function openBillTxReceiptModal(txId){
         try{ await navigator.share({files:[file], title:(business()?.name||'ZeeShop')+' — Receipt'}); logAudit('bill_tx_shared', `Shared receipt for ${tx.service_label||tx.service||'bill'} transaction (${tx.status})`); }
         catch(e){ /* user cancelled the share sheet — not an error */ }
       } else {
-        toast("This browser can't share images directly — tap Download, then attach the file manually.");
+        toast("This browser can't share images directly — tap Save, then attach the file manually.");
       }
     }, 'image/png');
   });
@@ -12809,7 +12828,7 @@ function openBillTxDetail(kind, id){
     }
     rows = bphReceiptData(src).rows.map(r=>kv(r[0], r[1], r[2])).join('');
     actions = (src.status==='pending' ? `<button class="btn btn-outline" id="bph-check" style="flex:1;">Check status</button>` : '') +
-              `<button class="btn btn-primary" id="bph-share" style="flex:1;">${ICON_EXPORT} Share Receipt</button>`;
+              `<button class="btn btn-primary" id="bph-share" style="flex:2;min-width:0;white-space:nowrap;">${ICON_EXPORT} Share Receipt</button><button class="btn btn-outline" id="bph-save" style="flex:1;min-width:0;white-space:nowrap;">💾 Save</button>`;
   } else {
     const fee = Number(src.fee||0), gross = Number(src.gross_amount||0);
     const isTransfer = m.how === 'Bank transfer' || m.how === 'Dedicated account';
@@ -12854,6 +12873,8 @@ function openBillTxDetail(kind, id){
     try{ if(navigator.clipboard) navigator.clipboard.writeText(b.dataset.bphCopy); }catch(_e){}
     toast('Copied');
   }));
+  const bphSave = document.getElementById('bph-save');
+  if(bphSave) bphSave.addEventListener('click', ()=>saveCanvasPng(document.getElementById('bph-receipt-canvas'), `bill-receipt-${String(id).slice(-6)}.png`, `Saved bill receipt (${src.service_label||src.service||'bill'})`));
   const share = document.getElementById('bph-share');
   if(share) share.addEventListener('click', async ()=>{
     const tx = billHistory.find(x=>x.id===id) || src;

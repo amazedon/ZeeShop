@@ -1348,6 +1348,14 @@ function uid(p){
 function todayISO(){return new Date().toISOString().slice(0,10);}
 function daysBetween(d1,d2){return Math.round((new Date(d2)-new Date(d1))/86400000);}
 function fmtDate(d){return new Date(d+"T00:00:00").toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});}
+// Time of day (e.g. "3:45 PM") from a full timestamp. Returns '' when only a date was recorded, so nothing is ever invented.
+function fmtClock(iso){
+  if(!iso || String(iso).length < 16) return '';
+  const d = new Date(iso); if(isNaN(d)) return '';
+  return d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true});
+}
+// "30 Oct 2026 · 3:45 PM" — the date, plus the time when one was recorded.
+function fmtDateAt(dateStr, iso){ const t = fmtClock(iso); return fmtDate(dateStr) + (t ? ' · '+t : ''); }
 function fmtMoney(n){
   const c = (state.business && state.business.currency) ? (CCY[state.business.currency]||state.business.currency+" ") : "";
   return c + Number(n||0).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:2});
@@ -6483,7 +6491,7 @@ function openCustomerDetail(cid){
     ${sales.length===0?`<p class="subtle">No purchases yet.</p>`:sales.map(s=>`
       <div class="list-row">
         <div class="thumb">${ICON_RECEIPT}</div>
-        <div class="info"><div class="t1">${fmtMoney(s.subtotal)}</div><div class="t2">${fmtDate(s.date)} · ${s.status}</div></div>
+        <div class="info"><div class="t1">${fmtMoney(s.subtotal)}</div><div class="t2">${fmtDateAt(s.date, s.createdAt)} · ${s.status}</div></div>
         ${s.balance>0?`<span class="pill pill-red">${fmtMoney(s.balance)} due</span>`:`<span class="pill pill-green">Paid</span>`}
       </div>`).join('')}
   `);
@@ -6512,7 +6520,7 @@ function screenCredit(){
       const d = s.dueDate? daysBetween(todayISO(), s.dueDate) : null;
       return `<div class="card">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-          <div><b>${cust?cust.fullName:'Unknown'}</b><div class="t2 subtle">${fmtDate(s.date)}</div></div>
+          <div><b>${cust?cust.fullName:'Unknown'}</b><div class="t2 subtle">${fmtDateAt(s.date, s.createdAt)}</div></div>
           <div style="text-align:right;"><b style="color:var(--red);">${fmtMoney(s.balance)}</b>
             <div class="t2 ${d<0?'':''}" style="color:${d<0?'var(--red)':'var(--text-dim)'};">${d<0?Math.abs(d)+'d overdue':'due in '+d+'d'}</div>
           </div>
@@ -7652,13 +7660,13 @@ function renderEmploymentRecordView(userId){
     <button class="btn btn-primary" id="record-payment-btn" style="width:100%;margin-bottom:12px;">＋ Record a Payment</button>
     ${payments.length===0?`<p class="subtle">No payments recorded yet.</p>`:payments.map(p=>`
       <div class="list-row"><div class="thumb">${ICON_WALLET}</div>
-        <div class="info"><div class="t1">${fmtMoney(p.amount)}</div><div class="t2">${fmtDate(p.date)}${p.note?' · '+escapeHtml(p.note):''}</div></div>
+        <div class="info"><div class="t1">${fmtMoney(p.amount)}</div><div class="t2">${fmtDateAt(p.date, p.createdAt)}${p.note?' · '+escapeHtml(p.note):''}</div></div>
       </div>`).join('')}
     <p class="subtle" style="margin-top:6px;">Payments are permanent once recorded and are automatically added to Expenses — they can't be edited or deleted, only added to.</p>
 
     <div class="section-head"><h3>Record History <span class="subtle" style="font-weight:400;">(nothing here can ever be deleted)</span></h3></div>
     <div class="card" style="background:var(--paper-dim);">
-      <div class="t1" style="font-size:13px;margin-bottom:4px;">${ICON_PIN} Original — set ${rec.original && rec.original.createdAt ? fmtDate(rec.original.createdAt.slice(0,10)) : 'an earlier date'} by ${creator?creator.firstName+' '+creator.lastName:'Unknown'}</div>
+      <div class="t1" style="font-size:13px;margin-bottom:4px;">${ICON_PIN} Original — set ${rec.original && rec.original.createdAt ? fmtDateAt(rec.original.createdAt.slice(0,10), rec.original.createdAt) : 'an earlier date'} by ${creator?creator.firstName+' '+creator.lastName:'Unknown'}</div>
       <div class="t2">Type: ${(EMPLOYMENT_TYPES.find(t=>t.id===rec.original.employmentType)||{}).label} · Resumed: ${fmtDate(rec.original.resumptionDate)}</div>
       <div class="t2">Salary: ${rec.original.salaryFrequency!=='none'?fmtMoney(rec.original.salaryAmount)+' / '+rec.original.salaryFrequency:'None'}</div>
       ${rec.original.settlementDate?`<div class="t2">Settlement date: ${fmtDate(rec.original.settlementDate)}</div>`:''}
@@ -7666,7 +7674,7 @@ function renderEmploymentRecordView(userId){
     ${rec.history.length===0?'':rec.history.map(h=>{
       const editor = state.users.find(x=>x.id===h.changedBy);
       return `<div class="card">
-        <div class="t1" style="font-size:13px;margin-bottom:4px;">${ICON_PENCIL} Edited ${fmtDate(h.changedAt.slice(0,10))} by ${editor?editor.firstName+' '+editor.lastName:'Unknown'}</div>
+        <div class="t1" style="font-size:13px;margin-bottom:4px;">${ICON_PENCIL} Edited ${fmtDateAt(h.changedAt.slice(0,10), h.changedAt)} by ${editor?editor.firstName+' '+editor.lastName:'Unknown'}</div>
         <div class="t2" style="color:var(--text-dim);">Previous values — Type: ${(EMPLOYMENT_TYPES.find(t=>t.id===h.previousValues.employmentType)||{}).label} · Resumed: ${fmtDate(h.previousValues.resumptionDate)}</div>
         <div class="t2" style="color:var(--text-dim);">Salary was: ${h.previousValues.salaryFrequency!=='none'?fmtMoney(h.previousValues.salaryAmount)+' / '+h.previousValues.salaryFrequency:'None'}</div>
         ${h.previousValues.settlementDate?`<div class="t2" style="color:var(--text-dim);">Settlement date was: ${fmtDate(h.previousValues.settlementDate)}</div>`:''}
@@ -8374,10 +8382,10 @@ function renderMyEmploymentRecordCard(userId){
       ${rec.settlementTerms ? `<div class="t2" style="margin-bottom:6px;">Settlement terms: ${escapeHtml(rec.settlementTerms)}</div>` : ''}
       <div class="divider"></div>
       <div class="t2" style="font-weight:700;margin-bottom:4px;">Payments Received</div>
-      ${payments.length===0?`<p class="subtle">None recorded yet.</p>`:payments.map(p=>`<div class="t2">${fmtDate(p.date)} — ${fmtMoney(p.amount)}${p.note?' · '+escapeHtml(p.note):''}</div>`).join('')}
+      ${payments.length===0?`<p class="subtle">None recorded yet.</p>`:payments.map(p=>`<div class="t2">${fmtDateAt(p.date, p.createdAt)} — ${fmtMoney(p.amount)}${p.note?' · '+escapeHtml(p.note):''}</div>`).join('')}
       <div class="divider"></div>
       <div class="t2" style="font-weight:700;margin-bottom:4px;">Original Record</div>
-      <div class="t2">Set ${rec.original && rec.original.createdAt ? fmtDate(rec.original.createdAt.slice(0,10)) : 'an earlier date'} by ${creator?creator.firstName+' '+creator.lastName:'Unknown'} — nothing here can ever be deleted, only added to.</div>
+      <div class="t2">Set ${rec.original && rec.original.createdAt ? fmtDateAt(rec.original.createdAt.slice(0,10), rec.original.createdAt) : 'an earlier date'} by ${creator?creator.firstName+' '+creator.lastName:'Unknown'} — nothing here can ever be deleted, only added to.</div>
       ${rec.history.length>0?`<div class="t2" style="margin-top:4px;">${rec.history.length} edit(s) made since — every change is preserved and visible to you.</div>`:''}
     </div>`;
 }
@@ -9380,7 +9388,7 @@ function screenHistory(){
     const isVoided = s.status==='voided';
     const type = isVoided ? 'voided' : (s.status==='paid' ? 'sale' : 'credit');
     events.push({
-      type, sourceId: s.id, date: s.date, sortAt: s.createdAt,
+      type, sourceId: s.id, date: s.date, sortAt: s.createdAt, at: s.createdAt,
       title: buyerName, subtitle: `#${s.id.slice(-6).toUpperCase()} · Sale`,
       amount: s.subtotal, pill: isVoided?`<span class="pill pill-gray">VOIDED</span>`:s.status==='paid'?`<span class="pill pill-green">Paid</span>`:`<span class="pill pill-red">${s.status}</span>`,
       onClick: ()=>openSaleDetail(s.id), dim: isVoided
@@ -9390,10 +9398,10 @@ function screenHistory(){
   state.supplierPurchases.filter(p=>p.shopId===shopId).forEach(p=>{
     const sup = state.suppliers.find(x=>x.id===p.supplierId);
     events.push({
-      type:'supplier', sourceId: p.id, date: p.date, sortAt: p.createdAt,
+      type:'supplier', sourceId: p.id, date: p.date, sortAt: p.createdAt, at: p.createdAt,
       title: sup ? sup.name : 'Unknown supplier', subtitle: `${p.itemName} × ${p.qty} · Restock`,
       amount: p.totalAmount, pill: p.balance>0?`<span class="pill pill-red">Owe ${fmtMoney(p.balance)}</span>`:`<span class="pill pill-green">Paid</span>`,
-      onClick: sup ? (()=>openSupplierDetail(sup.id)) : null
+      onClick: null, supId: sup ? sup.id : null
     });
   });
 
@@ -9408,7 +9416,7 @@ function screenHistory(){
   state.stockAdjustments.filter(a=>a.shopId===shopId).forEach(a=>{
     const adjuster = state.users.find(u=>u.id===a.adjustedByUserId);
     events.push({
-      type:'adjustment', sourceId: a.id, date: a.adjustedAt.slice(0,10), sortAt: a.adjustedAt,
+      type:'adjustment', sourceId: a.id, date: a.adjustedAt.slice(0,10), sortAt: a.adjustedAt, at: a.adjustedAt,
       title: a.goodName, subtitle: `${a.oldQty} → ${a.newQty} · Correction${adjuster?' by '+adjuster.firstName:''}${a.reason?' — '+a.reason:''}`,
       amount: null, pill: a.difference<0?`<span class="pill pill-red">${a.difference}</span>`:`<span class="pill pill-green">+${a.difference}</span>`,
       onClick: null
@@ -9444,21 +9452,18 @@ function screenHistory(){
     ${filtered.length>0?`<button class="btn btn-outline btn-sm" id="share-history-btn" style="margin-bottom:12px;">${ICON_EXPORT} Share This List (${filtered.length})</button>`:''}
     ${filtered.length===0? `<div class="empty"><div class="ic">${ICON_RECEIPT}</div><b>Nothing here</b>Try a different filter or date.</div>` :
     filtered.map((e,i)=>`
-      <div class="card" ${e.onClick?`data-hist-idx="${i}" style="cursor:pointer;${e.dim?'opacity:0.55;':''}"`:`style="${e.dim?'opacity:0.55;':''}"`}>
+      <div class="card" data-hist-idx="${i}" style="cursor:pointer;${e.dim?'opacity:0.55;':''}">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
           <div style="display:flex;gap:10px;align-items:flex-start;">
             <div style="font-size:17px;">${typeIcon[e.type]}</div>
             <div>
               <div class="t1">${escapeHtml(e.title)}</div>
-              <div class="t2">${e.subtitle} · ${fmtDate(e.date)}</div>
+              <div class="t2">${e.subtitle} · ${fmtDateAt(e.date, e.at)}</div>
             </div>
           </div>
           <div style="text-align:right;flex-shrink:0;">
             ${e.amount!=null?`<b>${fmtMoney(e.amount)}</b><br>`:''}${e.pill}
           </div>
-        </div>
-        <div style="display:flex;justify-content:flex-end;margin-top:8px;">
-          <button data-share-hist-idx="${i}" style="background:none;border:none;color:var(--marigold-dark);font-size:12px;font-weight:700;padding:2px 0;">${ICON_EXPORT} Share</button>
         </div>
       </div>`).join('')}
   `;
@@ -9473,16 +9478,10 @@ function bindHistoryEvents(){
   if(shareBtn) shareBtn.addEventListener('click', openHistoryShareModal);
   document.querySelectorAll('[data-hist-idx]').forEach(el=>{
     el.addEventListener('click', (e)=>{
-      if(e.target.closest('[data-share-hist-idx]')) return; // don't open detail when Share was tapped
       const idx = Number(el.dataset.histIdx);
-      const handler = __lastHistoryEvents[idx] && __lastHistoryEvents[idx].onClick;
-      if(handler) handler();
-    });
-  });
-  document.querySelectorAll('[data-share-hist-idx]').forEach(el=>{
-    el.addEventListener('click', (e)=>{
-      e.stopPropagation();
-      openShareHistoryItemModal(Number(el.dataset.shareHistIdx));
+      const ev = __lastHistoryEvents[idx]; if(!ev) return;
+      // Sales open their detail sheet (Share is at its bottom); every other entry opens its own sheet with Share.
+      if(ev.onClick) ev.onClick(); else openShareHistoryItemModal(idx);
     });
   });
 }
@@ -9573,7 +9572,7 @@ function layoutAndDrawHistory(filterLabel, dateLabel, ctx){
     T(nameWrapped[0]||'', PAD+38, 'left', '400 12px Arial,Helvetica,sans-serif', e.dim?'#B0B0B0':'#242B38');
     if(e.amount!=null) T(fmtMoneyCanvas(e.amount), W-PAD, 'right', '700 12px Arial,Helvetica,sans-serif', e.dim?'#B0B0B0':'#242B38');
     y += 15;
-    T(canvasSafeText(e.subtitle)+' · '+fmtDate(e.date), PAD+38, 'left', '400 10px Arial,Helvetica,sans-serif', '#9AA0AB');
+    T(canvasSafeText(e.subtitle)+' · '+fmtDateAt(e.date, e.at), PAD+38, 'left', '400 10px Arial,Helvetica,sans-serif', '#9AA0AB');
     y += 18;
   });
   if(truncated){
@@ -9633,7 +9632,7 @@ function layoutAndDrawSingleCard(event, ctx){
   wrapPlainText(canvasSafeText(event.subtitle), 44).forEach(line=>{
     T(line, PAD, 'left', '400 11.5px Arial,Helvetica,sans-serif', '#6B7280'); y += 15;
   });
-  T(fmtDate(event.date), PAD, 'left', '400 11.5px Arial,Helvetica,sans-serif', '#6B7280'); y += 20;
+  T(fmtDateAt(event.date, event.at), PAD, 'left', '400 11.5px Arial,Helvetica,sans-serif', '#6B7280'); y += 20;
   L(PAD, y, W-PAD, y); y += 24;
   if(event.amount!=null){
     T('AMOUNT', PAD, 'left', '700 10px Arial,Helvetica,sans-serif', '#9AA0AB');
@@ -9687,7 +9686,7 @@ function openShareHistoryItemModal(idx){
   const e = __lastHistoryEvents[idx];
   if(!e){ toast('Could not find that entry.'); return; }
   openSheet(`
-    <div class="sheet-head"><h3>Share</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
+    <div class="sheet-head"><h3>${escapeHtml(e.title||"Details")}</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     <div style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;justify-content:center;margin-bottom:14px;">
       <canvas id="hist-item-canvas" style="max-width:100%;height:auto;display:block;"></canvas>
     </div>
@@ -9695,7 +9694,10 @@ function openShareHistoryItemModal(idx){
       <button class="btn btn-primary" id="share-hist-item-img" style="flex:1;">${ICON_EXPORT} Share</button>
       <button class="btn btn-outline" id="download-hist-item-img" style="flex:1;">⬇️ Download</button>
     </div>
+    ${e.supId?`<button class="btn btn-outline" id="hist-open-supplier" style="width:100%;margin-top:10px;">Open supplier</button>`:''}
   `);
+  const openSup = document.getElementById('hist-open-supplier');
+  if(openSup) openSup.addEventListener('click', ()=>openSupplierDetail(e.supId));
   const canvas = document.getElementById('hist-item-canvas');
   drawHistoryItemToCanvas(canvas, e).catch(err=>console.warn('Receipt draw failed:', err));
   document.getElementById('share-hist-item-img').addEventListener('click', ()=>{
@@ -9732,7 +9734,7 @@ function openSaleDetail(saleId){
     <div class="sheet-head"><h3>Sale #${s.id.slice(-6).toUpperCase()}</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     ${isVoided?`<div class="locked-msg" style="background:var(--paper-dim);color:var(--text-dim);margin-bottom:12px;">This sale was voided${s.voidReason?': '+escapeHtml(s.voidReason):''}.</div>`:''}
     <div class="card">
-      <div class="t2">${fmtDate(s.date)} · Sold by ${seller.firstName} ${seller.lastName}</div>
+      <div class="t2">${fmtDateAt(s.date, s.createdAt)} · Sold by ${seller.firstName} ${seller.lastName}</div>
       <div class="t1" style="margin:4px 0 10px;">${buyerName}</div>
       ${s.items.map(it=>{
         const g = state.goods.find(x=>x.id===it.goodId);
@@ -9747,6 +9749,7 @@ function openSaleDetail(saleId){
       <div style="display:flex;justify-content:space-between;font-weight:800;"><span>Total</span><span>${fmtMoney(s.subtotal)}</span></div>
       ${s.status!=='paid' && !isVoided?`<div style="display:flex;justify-content:space-between;font-size:13px;color:var(--red);"><span>Balance</span><span>${fmtMoney(s.balance)}</span></div>`:''}
     </div>
+    <button class="btn btn-primary" id="share-sale-btn" style="margin-bottom:10px;">${ICON_EXPORT} Share Receipt</button>
     ${(!isVoided && (isMaster() || (isStaff() && canDo('canVoidReturn') && s.soldByUserId===state.sessionUserId))) ? `
       <button class="btn btn-outline" id="open-return-sale" style="margin-bottom:10px;">↩️ Process a Return</button>
       <button class="btn btn-danger" id="void-sale-btn">${ICON_BAN} Void This Sale</button>
@@ -9755,6 +9758,25 @@ function openSaleDetail(saleId){
       <p class="subtle">You can only void or return sales you personally made.</p>
     ` : ''}
   `);
+  const shareSaleBtn = document.getElementById('share-sale-btn');
+  if(shareSaleBtn) shareSaleBtn.addEventListener('click', async ()=>{
+    shareSaleBtn.disabled = true;
+    try{
+      const ev = { type: s.status==='voided'?'voided':(s.status==='paid'?'sale':'credit'), sourceId: s.id, title: buyerName };
+      const canvas = document.createElement('canvas');
+      await drawHistoryItemToCanvas(canvas, ev);
+      const blob = await new Promise(r=>canvas.toBlob(r,'image/png'));
+      if(!blob){ toast('Could not generate the receipt.'); return; }
+      const file = new File([blob], `sale-${s.id.slice(-6)}.png`, {type:'image/png'});
+      if(navigator.canShare && navigator.canShare({files:[file]})){
+        try{ await navigator.share({files:[file], title: business().name}); logAudit('history_item_shared', `Shared sale entry: ${buyerName}`); }
+        catch(err){ /* cancelled */ }
+      } else {
+        const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url; a.download=file.name; a.click(); URL.revokeObjectURL(url);
+        toast('This browser cannot share images directly, so the receipt was downloaded instead.');
+      }
+    } finally { shareSaleBtn.disabled = false; }
+  });
   const returnBtn = document.getElementById('open-return-sale');
   if(returnBtn) returnBtn.addEventListener('click', ()=>openReturnModal(saleId));
   const voidBtn = document.getElementById('void-sale-btn');
@@ -10157,12 +10179,11 @@ function openRoomDetail(roomId){
     ${isMaster()?`<button class="btn btn-danger btn-sm" data-delete-room="${r.id}" style="width:100%;margin-bottom:14px;">Delete Room</button>`:''}
     <div class="section-head"><h3>Past Stays</h3></div>
     ${history.length===0?`<p class="subtle">No past stays yet.</p>`:history.map(h=>`
-      <div class="card">
+      <div class="card" data-receipt="${h.id}" style="cursor:pointer;">
         <div style="display:flex;justify-content:space-between;">
           <div><b>${escapeHtml(h.guestName)}</b><div class="t2">${fmtDate(h.checkIn)} → ${fmtDate(h.checkOut)}</div></div>
           <div style="text-align:right;"><b>${fmtMoney(h.totalAmount)}</b></div>
         </div>
-        <button class="btn btn-sm btn-outline" data-receipt="${h.id}" style="margin-top:8px;">${ICON_RECEIPT} Share Receipt</button>
       </div>`).join('')}
   `);
   const ci = document.getElementById('checkin-btn');
@@ -13600,7 +13621,7 @@ function openSupplierDetail(supplierId){
     ${purchases.length===0?`<p class="subtle">No purchases logged yet.</p>`:purchases.map(p=>`
       <div class="card">
         <div style="display:flex;justify-content:space-between;">
-          <div><b>${escapeHtml(p.itemName)}</b><div class="t2">${p.qty} × ${fmtMoney(p.costPrice)} · ${fmtDate(p.date)}</div></div>
+          <div><b>${escapeHtml(p.itemName)}</b><div class="t2">${p.qty} × ${fmtMoney(p.costPrice)} · ${fmtDateAt(p.date, p.createdAt)}</div></div>
           <div style="text-align:right;"><b>${fmtMoney(p.totalAmount)}</b></div>
         </div>
         ${p.balance>0?`<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">

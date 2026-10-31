@@ -6912,8 +6912,27 @@ function screenStaff(){
     <div class="section-head"><h3>Add someone</h3></div>
     ${accRow('join', `<div class="acc-main"><div class="acc-title">New staff member</div><div class="acc-sub">Never used ZeeShop on your business</div></div>`, joinBody)}
     ${accRow('connect', `<div class="acc-main"><div class="acc-title">Staff on a second phone</div><div class="acc-sub">Already on your team, new or extra phone</div></div>`, connectBody)}
-    <button class="btn btn-outline" id="add-recordonly-btn" style="width:100%;margin:4px 0 10px;">＋ Add a Person (No App Access)</button>
-    <button class="btn btn-outline" id="offer-letter-btn" style="width:100%;margin:0 0 14px;">${ICON_MAIL} Send Offer Letter to a Candidate</button>
+    <div class="section-head"><h3>People Without App Access</h3></div>
+    <p class="subtle" style="margin:-6px 0 10px;">Paid staff or apprentices who won't use the app.</p>
+    <button class="btn btn-outline" id="add-recordonly-btn" style="width:100%;margin-bottom:12px;">＋ Add a Person (No App Access)</button>
+    ${recordOnly.length===0 ? `<p class="subtle">Nobody added here yet.</p>` :
+    recordOnly.map(p=>{
+      const head = `
+        <div class="avatar" style="width:40px;height:40px;font-size:14px;flex-shrink:0;background:${p.isActive===false?'var(--line)':'var(--text-dim)'};">${initials(p.firstName,p.lastName)}</div>
+        <div class="acc-main">
+          <div class="acc-title">${escapeHtml(p.firstName+' '+p.lastName)}</div>
+          <div class="acc-sub">No app account${p.isActive===false?' · left':''}</div>
+        </div>`;
+      const body = `
+        ${p.phone?`<div class="t2" style="margin-bottom:10px;">${escapeHtml(p.phone)}</div>`:''}
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="btn btn-sm btn-outline" data-employment-record="${p.id}">${ICON_CLIPBOARD} Employment Record</button>
+          <button class="btn btn-sm ${p.isActive===false?'btn-outline':'btn-danger'}" data-toggle-recordonly-active="${p.id}">${p.isActive===false?'Mark as Active':'Mark as Left'}</button>
+          ${!employmentRecordFor(p.id) ? `<button class="btn btn-sm btn-outline" data-delete-recordonly="${p.id}" style="color:var(--red);">Delete</button>` : ''}
+        </div>`;
+      return accRow('r-'+p.id, head, body);
+    }).join('')}
+    <button class="btn btn-outline" id="offer-letter-btn" style="width:100%;margin:4px 0 14px;">${ICON_MAIL} Send Offer Letter to a Candidate</button>
     ${pendingCount>0?`<div class="card" style="border-color:var(--marigold-dark);"><b>${ICON_EDIT_NOTE} ${pendingCount} name change request${pendingCount>1?'s':''}</b> waiting below.</div>`:''}
     <div class="section-head"><h3>Team</h3></div>
     ${staff.length===0?`<p class="subtle">No staff yet. Open “New staff member” above to invite one.</p>`:staff.map(u=>{
@@ -6957,25 +6976,6 @@ function screenStaff(){
       return accRow('u-'+u.id, head, body, hasReq?'acc-alert':'');
     }).join('')}
 
-    <div class="section-head"><h3>People Without App Access</h3></div>
-    <p class="subtle" style="margin:-6px 0 10px;">Paid staff or apprentices who won't use the app.</p>
-    ${recordOnly.length===0 ? `<p class="subtle">Nobody added here yet.</p>` :
-    recordOnly.map(p=>{
-      const head = `
-        <div class="avatar" style="width:40px;height:40px;font-size:14px;flex-shrink:0;background:${p.isActive===false?'var(--line)':'var(--text-dim)'};">${initials(p.firstName,p.lastName)}</div>
-        <div class="acc-main">
-          <div class="acc-title">${escapeHtml(p.firstName+' '+p.lastName)}</div>
-          <div class="acc-sub">No app account${p.isActive===false?' · left':''}</div>
-        </div>`;
-      const body = `
-        ${p.phone?`<div class="t2" style="margin-bottom:10px;">${escapeHtml(p.phone)}</div>`:''}
-        <div style="display:flex;gap:6px;flex-wrap:wrap;">
-          <button class="btn btn-sm btn-outline" data-employment-record="${p.id}">${ICON_CLIPBOARD} Employment Record</button>
-          <button class="btn btn-sm ${p.isActive===false?'btn-outline':'btn-danger'}" data-toggle-recordonly-active="${p.id}">${p.isActive===false?'Mark as Active':'Mark as Left'}</button>
-          ${!employmentRecordFor(p.id) ? `<button class="btn btn-sm btn-outline" data-delete-recordonly="${p.id}" style="color:var(--red);">Delete</button>` : ''}
-        </div>`;
-      return accRow('r-'+p.id, head, body);
-    }).join('')}
   `;
 }
 /* ============================================================

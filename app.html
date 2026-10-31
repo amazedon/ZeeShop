@@ -6376,11 +6376,11 @@ function screenCustomers(){
       const bal = customerBalance(c.id);
       return `<div class="card" data-cust-detail="${c.id}" style="display:flex;align-items:center;gap:12px;">
         <div class="avatar" style="background:var(--paper-dim);color:var(--ink-text);">${initials(c.fullName.split(' ')[0], c.fullName.split(' ')[1]||'')}</div>
-        <div class="info" style="flex:1;">
+        <div class="info" style="flex:1;min-width:0;">
           <div class="t1">${c.fullName}</div>
           <div class="t2">${c.groupId?groupName(c.groupId):'Retail'} · ${c.phoneE164||'no phone'}</div>
+          <div style="margin-top:6px;">${bal>0?`<span class="pill pill-red">Owes ${fmtMoney(bal)}</span>`:`<span class="pill pill-green">Clear</span>`}</div>
         </div>
-        <div class="right">${bal>0?`<span class="pill pill-red">Owes ${fmtMoney(bal)}</span>`:`<span class="pill pill-green">Clear</span>`}</div>
       </div>`;
     }).join('')}
   `;
@@ -9453,9 +9453,9 @@ function screenHistory(){
     ${subHeader("History")}
     <div class="field">
       <label>Search by Date</label>
-      <div style="display:flex;gap:8px;">
-        <input type="date" id="history-date-search" value="${historyDateFilter}" style="flex:1;">
-        ${historyDateFilter?`<button class="btn btn-outline btn-sm" id="clear-history-date">Clear</button>`:''}
+      <div style="position:relative;">
+        <input type="date" id="history-date-search" value="${historyDateFilter}" style="width:100%;${historyDateFilter?'padding-right:84px;':''}">
+        ${historyDateFilter?`<button id="clear-history-date" aria-label="Clear date" style="position:absolute;right:46px;top:50%;transform:translateY(-50%);width:28px;height:28px;border-radius:50%;border:none;background:var(--paper-dim);color:var(--text-dim);font-size:14px;font-weight:800;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;">✕</button>`:''}
       </div>
     </div>
     <div style="display:flex;gap:8px;margin-bottom:12px;overflow-x:auto;">

@@ -5116,7 +5116,7 @@ function bindRouteEvents(){
   if(route==='dashboard'){ bindDashboardEvents(); }
   if(route==='sale'){
     const search = document.getElementById('sale-search');
-    if(search) search.addEventListener('input', e=>{ saleSearch=e.target.value; refreshMain(); });
+    if(search) search.addEventListener('input', e=>{ saleSearch=e.target.value; refreshMainKeepFocus('sale-search'); });
     // A physical/Bluetooth barcode scanner gun behaves like a keyboard — it
     // types the code into whichever field is focused, then sends an Enter
     // keystroke. Catching that Enter here gives hardware-scanner users the
@@ -5237,6 +5237,20 @@ function bindRouteEvents(){
 function refreshMain(){
   document.getElementById('main-content').innerHTML = renderRoute();
   bindRouteEvents();
+}
+// Re-draws the page while someone is typing in a search box, then puts the cursor
+// straight back so the keyboard stays open and typing is not interrupted.
+function refreshMainKeepFocus(inputId){
+  const old = document.getElementById(inputId);
+  const pos = old ? old.selectionStart : null;
+  refreshMain();
+  const el = document.getElementById(inputId);
+  if(!el) return;
+  try{
+    el.focus({preventScroll:true});
+    const p = (pos==null) ? el.value.length : pos;
+    el.setSelectionRange(p, p);
+  }catch(e){}
 }
 function defaultDueDate(){ const d=new Date(); d.setDate(d.getDate()+7); return d.toISOString().slice(0,10); }
 function openWalkInModal(){
@@ -6253,7 +6267,7 @@ function customerBalance(cid){
 }
 function bindCustomersEvents(){
   const s = document.getElementById('cust-search');
-  if(s) s.addEventListener('input', e=>{ customerSearch=e.target.value; refreshMain(); });
+  if(s) s.addEventListener('input', e=>{ customerSearch=e.target.value; refreshMainKeepFocus('cust-search'); });
   document.querySelectorAll('[data-cust-detail]').forEach(el=> el.addEventListener('click', ()=>openCustomerDetail(el.dataset.custDetail)));
 }
 function customerFormFields(c){

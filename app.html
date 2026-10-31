@@ -6907,16 +6907,9 @@ function screenStaff(){
         </div>
       ` : `<button class="btn btn-outline btn-sm" id="reset-connect-code">Generate Connect Code</button>`}`;
   const recordOnly = state.recordOnlyStaff.filter(p=>p.businessId===business().id);
-  return `
-    ${subHeader("Staff")}
-    <div class="section-head"><h3>Add someone</h3></div>
-    ${accRow('join', `<div class="acc-main"><div class="acc-title">New staff member</div><div class="acc-sub">Never used ZeeShop on your business</div></div>`, joinBody)}
-    ${accRow('connect', `<div class="acc-main"><div class="acc-title">Staff on a second phone</div><div class="acc-sub">Already on your team, new or extra phone</div></div>`, connectBody)}
-    <div class="divider" style="margin:22px 0 6px;"></div>
-    <div class="section-head"><h3>People Without App Access</h3></div>
-    <p class="subtle" style="margin:-6px 0 10px;">Paid staff or apprentices who won't use the app.</p>
-    <button class="btn btn-outline" id="add-recordonly-btn" style="width:100%;margin-bottom:12px;">＋ Add a Person (No App Access)</button>
-    ${recordOnly.length===0 ? `<p class="subtle">Nobody added here yet.</p>` :
+  const noAppBody = `
+      <button class="btn btn-outline" id="add-recordonly-btn" style="width:100%;margin-bottom:12px;">＋ Add a Person (No App Access)</button>
+      ${recordOnly.length===0 ? `<p class="subtle">Nobody added here yet.</p>` :
     recordOnly.map(p=>{
       const head = `
         <div class="avatar" style="width:40px;height:40px;font-size:14px;flex-shrink:0;background:${p.isActive===false?'var(--line)':'var(--text-dim)'};">${initials(p.firstName,p.lastName)}</div>
@@ -6932,8 +6925,14 @@ function screenStaff(){
           ${!employmentRecordFor(p.id) ? `<button class="btn btn-sm btn-outline" data-delete-recordonly="${p.id}" style="color:var(--red);">Delete</button>` : ''}
         </div>`;
       return accRow('r-'+p.id, head, body);
-    }).join('')}
-    <button class="btn btn-outline" id="offer-letter-btn" style="width:100%;margin:14px 0 6px;">${ICON_MAIL} Send Offer Letter to a Candidate</button>
+    }).join('')}`;
+  return `
+    ${subHeader("Staff")}
+    <div class="section-head"><h3>Add someone</h3></div>
+    ${accRow('join', `<div class="acc-main"><div class="acc-title">New staff member</div><div class="acc-sub">Never used ZeeShop on your business</div></div>`, joinBody)}
+    ${accRow('connect', `<div class="acc-main"><div class="acc-title">Staff on a second phone</div><div class="acc-sub">Already on your team, new or extra phone</div></div>`, connectBody)}
+    ${accRow('noapp', `<div class="acc-main"><div class="acc-title">People Without App Access</div><div class="acc-sub">Paid staff or apprentices who won't use the app${recordOnly.length?' · '+recordOnly.length:''}</div></div>`, noAppBody)}
+    <button class="btn btn-outline" id="offer-letter-btn" style="width:100%;margin:2px 0 6px;">${ICON_MAIL} Send Offer Letter to a Candidate</button>
     ${pendingCount>0?`<div class="card" style="border-color:var(--marigold-dark);"><b>${ICON_EDIT_NOTE} ${pendingCount} name change request${pendingCount>1?'s':''}</b> waiting below.</div>`:''}
     <div class="divider" style="margin:22px 0 6px;"></div>
     <div class="section-head"><h3>Team</h3></div>

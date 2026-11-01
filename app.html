@@ -1785,6 +1785,7 @@ document.addEventListener('toggle', e=>{
 let freshConnectCode = null;   // a Staff Connect Code is only shown on the visit it was generated in
 function render(){
   try{ zxKick(); }catch(_e){}
+  try{ zvCheckPending(); }catch(_e){}
   if(route !== 'staff'){ staffOpen = new Set(); freshConnectCode = null; if(state.joinCode) state.joinCode = null; }   // codes vanish when you leave the Staff page
   if(!state.sessionUserId && route === 'note-view') route = 'notes';   // never leave a note open on the lock screen
   if(route !== 'note-view') noteMenuOpen = false;
@@ -3907,6 +3908,7 @@ function renderRoute(){
     case 'reorder': return screenReorder();
     case 'stockcount': return screenStockCount();
     case 'quotes': return screenQuotes();
+    case 'verify': return screenVerify();
     case 'about-us': return screenAboutUs();
     case 'contact-us': return screenContactUs();
     case 'profile': return screenProfile();
@@ -5377,6 +5379,7 @@ function bindRouteEvents(){
   if(route==='reorder') bindReorderEvents();
   if(route==='stockcount') bindStockCountEvents();
   if(route==='quotes') bindQuotesEvents();
+  if(route==='verify') bindVerifyEvents();
   if(route==='staff') bindStaffEvents();
   if(route==='audit') bindAuditEvents();
   if(route==='notes') bindNotesEvents();
@@ -5831,6 +5834,7 @@ function layoutAndDrawReceipt(s, shop, cust, seller, ctx, logoImg){
       T(line, W/2, 'center', 'italic 400 9.5px Arial,Helvetica,sans-serif', '#9AA0AB'); y += 12;
     });
   }
+  y += 4; y += zvDrawReceiptBox(ctx, zvLink('S', s.id), 'Receipt #'+s.id.slice(-6).toUpperCase(), W, PAD, y);
   y += 12; // bottom padding
   return y; // total height needed
 }
@@ -7574,6 +7578,7 @@ function screenMore(){
     {id:'reorder', ic:ICON_BOX, label:'Reorder List', show:!isViewer()},
     {id:'stockcount', ic:ICON_BOX, label:'Stock Count', show:!isViewer() && (isOwnerLike() || canDo('canAddGoods'))},
     {id:'quotes', ic:ICON_FILE, label:'Quotations', show:!isViewer()},
+    {id:'verify', ic:ICON_CHECK_CIRCLE, label:'Verify Receipt', show:isOwnerLike()},
     {id:'notes', ic:ICON_NOTEBOOK, label:t('more_notes'), show:true},
     {id:'calculator', ic:ICON_CALCULATOR, label:t('more_calculator'), show:true},
     {id:'profile', ic:ICON_USER, label:t('more_profile'), show:true},
@@ -13663,6 +13668,9 @@ function layoutAndDrawBillReceipt(tx, shop, biz, ctx, logoImg){
   });
   y = cardTop + cardH + 26;
 
+  // ---- verify box ----
+  y += zvDrawReceiptBox(ctx, zvLink('B', tx.id), 'Ref '+String(tx.id||'').replace(/^success-/,'').slice(-14), W, PAD, y) + 16;
+
   // ---- footer ----
   T('Thank you for your patronage', W/2, 'center', '400 12px '+FONT, GREY); y += 17;
   T('Powered by ZeeShop', W/2, 'center', '700 10px '+FONT, '#9AA0AB'); y += 14;
@@ -14197,6 +14205,7 @@ const FAQ_GROUPS = [
     { q:"How is the Staff page organised?", a:"Everything is a row you tap to open, and only one row is open at a time. Add someone: New staff member (Join Code) and Staff on a second phone (Connect Code). People Without App Access: add people who won't use the app. Send Offer Letter to a Candidate. Team: tap it to show everyone — staff who use the app (marked App user) and people without app access (marked No app access). Tap a name to see their details and buttons." },
   ]},
   { category: "Reports & Receipts", items: [
+    { q:"How do I check that a receipt is really from my shop?", a:"Every receipt has a green SCAN TO VERIFY box with a QR code. As the Owner (or a Super Admin) go to More → Verify Receipt, tap Scan receipt QR and point the camera at it — or type the Receipt number or Txn ID. You will see Genuine, Voided, Amount does not match, or Not in your records. Type the amount shown on the receipt to catch altered amounts. If anyone else scans the QR with their phone camera, they only land on the ZeeShop home page and see nothing about the sale. Old receipts made before this update have no QR, but you can still verify them by typing their number." },
     { q:"How do I see my profit, not just my revenue?", a:"Go to More → Profit Reports. It shows revenue, cost of goods sold, and expenses together so you see real profit, not just what came in." },
     { q:"How do I share a receipt with a customer or guest?", a:"Open the sale (from History or the customer's record) or the booking and you'll see the receipt itself — exactly the picture that gets sent. Tap Share Receipt and your phone's share sheet opens with it attached — pick WhatsApp, email, or any app. Tap Save to keep a copy on your phone as a PNG." },
     { q:"How do I print a receipt?", a:"Open the receipt and tap Print on Bluetooth Printer to send it straight to a connected thermal receipt printer — no extra app needed. This needs a Bluetooth (not classic-Bluetooth) thermal printer, and only works on Android with Chrome, since iPhone's Safari doesn't support printer connections at all. On iPhone, or without a compatible printer, Download or Share the receipt instead (it saves as an image) and print it from your gallery, files app, or whatever app you shared it to." },
@@ -14738,6 +14747,216 @@ function openLogRestockModal(supplierId){
 
 
 /* ============================================================
+   RECEIPT VERIFICATION — QR on every receipt + "Verify Receipt" (owner only)
+   The QR holds a plain link to the website, so anyone who scans it just lands on the
+   ZeeShop home page. Only the owner, signed in, sees the verification result.
+   ============================================================ */
+var ZV_SITE = 'https://zeeshop.ememart.com/';
+var zvState = { q:'', amt:'', res:null };
+var zvPending = null;
+
+/* --- tiny QR encoder (byte mode, error-correction level M, versions 1-10) --- */
+var zsQrMatrix = (function(){
+  const ECC = [0,10,16,26,18,24,16,18,22,22,26], BLK = [0,1,1,2,2,4,4,4,5,5,5];
+  const exp = new Array(512), log = new Array(256);
+  (function(){ let x = 1; for(let i=0;i<255;i++){ exp[i]=x; log[x]=i; x<<=1; if(x&256) x^=0x11d; } for(let i=255;i<512;i++) exp[i]=exp[i-255]; })();
+  const mul = (a,b)=> (a&&b) ? exp[log[a]+log[b]] : 0;
+  function rsGen(n){ let p=[1]; for(let i=0;i<n;i++){ const q=new Array(p.length+1).fill(0); for(let j=0;j<p.length;j++){ q[j]^=p[j]; q[j+1]^=mul(p[j],exp[i]); } p=q; } return p; }
+  function rsRem(data, n){ const g=rsGen(n), r=new Array(n).fill(0); for(const b of data){ const f=b^r.shift(); r.push(0); for(let i=0;i<n;i++) r[i]^=mul(g[i+1],f); } return r; }
+  const rawModules = v => { let r=(16*v+128)*v+64; if(v>=2){ const a=Math.floor(v/7)+2; r-=(25*a-10)*a-55; if(v>=7) r-=36; } return r; };
+  const dataCw = v => Math.floor(rawModules(v)/8) - ECC[v]*BLK[v];
+  return function(text){
+    const bytes = Array.from(unescape(encodeURIComponent(String(text))), c=>c.charCodeAt(0));
+    let ver = 1; while(ver<=10 && dataCw(ver) < bytes.length + 2 + (ver>9?1:0)) ver++;
+    if(ver>10) return null;
+    const cap = dataCw(ver), bits = [];
+    const put = (val,len)=>{ for(let i=len-1;i>=0;i--) bits.push((val>>>i)&1); };
+    put(4,4); put(bytes.length, ver>9?16:8); bytes.forEach(b=>put(b,8));
+    put(0, Math.min(4, cap*8-bits.length)); while(bits.length%8) bits.push(0);
+    const cw = []; for(let i=0;i<bits.length;i+=8) cw.push(parseInt(bits.slice(i,i+8).join(''),2));
+    for(let pad=0xEC; cw.length<cap; pad^=0xEC^0x11) cw.push(pad);
+    const nb = BLK[ver], ec = ECC[ver], raw = Math.floor(rawModules(ver)/8), nShort = nb - raw%nb, shortLen = Math.floor(raw/nb);
+    const dBlocks = [], eBlocks = []; let k = 0;
+    for(let i=0;i<nb;i++){ const len = shortLen - ec + (i<nShort?0:1); const d = cw.slice(k,k+len); k+=len; dBlocks.push(d); eBlocks.push(rsRem(d,ec)); }
+    const all = [];
+    for(let i=0;i<=shortLen-ec;i++) dBlocks.forEach(d=>{ if(i<d.length) all.push(d[i]); });
+    for(let i=0;i<ec;i++) eBlocks.forEach(e=>all.push(e[i]));
+    const n = ver*4+17, M = Array.from({length:n},()=>new Array(n).fill(false)), F = Array.from({length:n},()=>new Array(n).fill(false));
+    const set = (x,y,d)=>{ if(x>=0&&x<n&&y>=0&&y<n){ M[y][x]=d; F[y][x]=true; } };
+    for(let i=0;i<n;i++){ set(6,i,i%2===0); set(i,6,i%2===0); }
+    [[3,3],[n-4,3],[3,n-4]].forEach(([cx,cy])=>{ for(let dy=-4;dy<=4;dy++) for(let dx=-4;dx<=4;dx++){ const d=Math.max(Math.abs(dx),Math.abs(dy)); set(cx+dx,cy+dy,d!==2&&d!==4); } });
+    if(ver>=2){ const pos = ver===1?[]:alignPos(ver,n);
+      for(const ax of pos) for(const ay of pos){ if((ax===6&&ay===6)||(ax===6&&ay===n-7)||(ax===n-7&&ay===6)) continue; for(let dy=-2;dy<=2;dy++) for(let dx=-2;dx<=2;dx++) set(ax+dx,ay+dy,Math.max(Math.abs(dx),Math.abs(dy))!==1); } }
+    function alignPos(v,nn){ const num=Math.floor(v/7)+2, step=(v===32)?26:Math.ceil((v*4+4)/(num*2-2))*2; const r=[6]; for(let p=nn-7;r.length<num;p-=step) r.splice(1,0,p); return r; }
+    // reserve format + dark module
+    for(let i=0;i<9;i++){ set(8,i,false); set(i,8,false); } for(let i=0;i<8;i++){ set(n-1-i,8,false); set(8,n-1-i,false); } set(8,n-8,true);
+    if(ver>=7){ for(let i=0;i<6;i++) for(let j=0;j<3;j++){ set(n-11+j,i,false); set(i,n-11+j,false); } }
+    const bitsAll = []; all.forEach(b=>put2(b)); function put2(b){ for(let i=7;i>=0;i--) bitsAll.push((b>>>i)&1); }
+    const path = []; for(let right=n-1;right>=1;right-=2){ if(right===6) right=5; for(let v=0;v<n;v++) for(let j=0;j<2;j++){ const x=right-j, up=((right+1)&2)===0, y=up?n-1-v:v; if(!F[y][x]) path.push([x,y]); } }
+    const masks = [(x,y)=>(x+y)%2===0,(x,y)=>y%2===0,(x,y)=>x%3===0,(x,y)=>(x+y)%3===0,(x,y)=>(Math.floor(x/3)+Math.floor(y/2))%2===0,(x,y)=>x*y%2+x*y%3===0,(x,y)=>(x*y%2+x*y%3)%2===0,(x,y)=>((x+y)%2+x*y%3)%2===0];
+    const fmtBits = (m)=>{ let d=(0<<3|m), r=d; for(let i=0;i<10;i++) r=(r<<1)^((r>>>9)*0x537); return ((d<<10|r)^0x5412); };
+    function build(m){
+      const g = M.map(r=>r.slice());
+      path.forEach(([x,y],i)=>{ let d = i<bitsAll.length ? bitsAll[i]===1 : false; if(masks[m](x,y)) d=!d; g[y][x]=d; });
+      const fb = fmtBits(m), gb = i=>((fb>>>i)&1)===1;
+      for(let i=0;i<=5;i++) g[i][8]=gb(i); g[7][8]=gb(6); g[8][8]=gb(7); g[8][7]=gb(8); for(let i=9;i<15;i++) g[8][14-i]=gb(i);
+      for(let i=0;i<8;i++) g[8][n-1-i]=gb(i); for(let i=8;i<15;i++) g[n-15+i][8]=gb(i); g[n-8][8]=true;
+      return g;
+    }
+    function penalty(g){ let p=0; for(let a=0;a<2;a++) for(let i=0;i<n;i++){ let run=1; for(let j=1;j<n;j++){ const c=a?g[j][i]:g[i][j], pr=a?g[j-1][i]:g[i][j-1]; if(c===pr){ run++; if(run===5) p+=3; else if(run>5) p++; } else run=1; } } return p; }
+    let best=null, bp=1e9; for(let m=0;m<8;m++){ const g=build(m); const p=penalty(g); if(p<bp){ bp=p; best=g; } }
+    // version info (v>=7)
+    if(ver>=7){ let r=ver; for(let i=0;i<12;i++) r=(r<<1)^((r>>>11)*0x1f25); const vb=ver<<12|r; for(let i=0;i<18;i++){ const d=((vb>>>i)&1)===1, a=n-11+i%3, b=Math.floor(i/3); best[a][b]=d; best[b][a]=d; } }
+    return best;
+  };
+})();
+function zsDrawQr(ctx, text, x, y, size, color){
+  const m = zsQrMatrix(text); if(!m) return false;
+  const q = 4, cells = m.length + 2*q, cs = size/cells;
+  ctx.save(); ctx.fillStyle = '#FFFFFF'; ctx.fillRect(x, y, size, size); ctx.fillStyle = color || '#12213B';
+  for(let r=0;r<m.length;r++) for(let c=0;c<m.length;c++) if(m[r][c]) ctx.fillRect(x+(c+q)*cs, y+(r+q)*cs, Math.ceil(cs), Math.ceil(cs));
+  ctx.restore(); return true;
+}
+function zvLink(kind, id){ return ZV_SITE + '?v=' + kind + '.' + encodeURIComponent(String(id)); }
+// pulls a receipt reference out of whatever was scanned or typed (a link, a Txn ID, or a receipt number)
+function zvParse(raw){
+  let s = String(raw||'').trim(); if(!s) return {q:''};
+  const bare = s.match(/^([SB])\.([^\s]+)$/);
+  if(bare) return {kind:bare[1], q:decodeURIComponent(bare[2])};
+  const m = s.match(/[?&]v=([^&#\s]+)/i);
+  if(m){ const v = decodeURIComponent(m[1]); const mm = v.match(/^([SB])\.(.+)$/); return mm ? {kind:mm[1], q:mm[2]} : {q:v}; }
+  return {q:s};
+}
+// draws the green "scan to verify" box onto a receipt canvas (ctx may be null on the measuring pass); returns the height used
+function zvDrawReceiptBox(ctx, link, label, W, PAD, y){
+  const boxH = 192, qr = 134;
+  if(ctx){
+    ctx.save(); ctx.fillStyle = '#F4FBF6'; ctx.strokeStyle = '#2E7D32'; ctx.lineWidth = 1.2;
+    const x = PAD, w = W-2*PAD, r = 10; ctx.beginPath(); ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r); ctx.lineTo(x+w,y+boxH-r); ctx.quadraticCurveTo(x+w,y+boxH,x+w-r,y+boxH); ctx.lineTo(x+r,y+boxH); ctx.quadraticCurveTo(x,y+boxH,x,y+boxH-r); ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore();
+    ctx.textAlign = 'center'; ctx.fillStyle = '#2E7D32'; ctx.font = '800 11px Arial,Helvetica,sans-serif'; ctx.fillText('SCAN TO VERIFY', W/2, y+19);
+    const ok = zsDrawQr(ctx, link, (W-qr)/2, y+28, qr, '#12213B');
+    ctx.fillStyle = '#242B38'; ctx.font = '700 10.5px Arial,Helvetica,sans-serif'; ctx.fillText(label, W/2, y+28+qr+14);
+  }
+  return boxH;
+}
+
+/* --- finding the real record --- */
+function zvFind(q, kindHint){
+  const raw = String(q||'').trim(); if(!raw) return [];
+  const up = raw.toUpperCase();
+  const out = [];
+  if(kindHint !== 'B'){
+    state.sales.forEach(s=>{ if(s.id===raw || s.id.toLowerCase()===raw.toLowerCase() || (up.length>=6 && up.length<=8 && s.id.slice(-6).toUpperCase()===up.slice(-6) && up.replace(/^#/,'').length===6) ) out.push({kind:'S', rec:s}); });
+  }
+  return out;
+}
+async function zvFindBill(q){
+  const raw = String(q||'').trim().toLowerCase().replace(/^#/,''); if(!raw) return [];
+  if(!billHistory.length){ try{ const r = await callBigisub('list_transactions', {}); billHistory = r.transactions || []; billTopups = r.topups || billTopups; billHistoryLoaded = true; }catch(e){ return null; } }
+  const hit = billHistory.filter(t=>{ const ids=[t.id, t.reference, t.client_ref, t.client_reference, t.tx_ref].filter(Boolean).map(x=>String(x).toLowerCase().replace(/^success-/,'')); return ids.includes(raw.replace(/^success-/,'')) || (raw.length===6 && String(t.id||'').slice(-6).toLowerCase()===raw); });
+  return hit.map(t=>({kind:'B', rec:t}));
+}
+function zvSaleCard(s, amtTyped){
+  const shopOk = true;
+  const cust = s.customerId ? state.customers.find(c=>c.id===s.customerId) : null;
+  const seller = state.users.find(u=>u.id===s.soldByUserId) || null;
+  const total = Number(s.subtotal||0);
+  let tone='ok', head='Genuine receipt', sub='This sale is in your records.';
+  const flags = [];
+  if(s.status==='voided'){ tone='warn'; head='Voided sale'; sub='This sale was cancelled — the receipt should not be accepted.'; }
+  else if((s.items||[]).some(it=>it.returnedQty>0)){ flags.push('Some items on this sale were returned.'); }
+  if(amtTyped!=='' && amtTyped!=null && !isNaN(Number(amtTyped)) && Math.round(Number(amtTyped)*100)!==Math.round(total*100)){
+    tone='bad'; head='Amount does not match'; sub='The receipt shows '+fmtMoney(Number(amtTyped))+' but your records say '+fmtMoney(total)+'. It may have been altered.';
+  }
+  const prev = zxGet('verified', s.id);
+  const when = fmtDateAt(s.date, s.createdAt);
+  const items = (s.items||[]).map(it=>{ const g=state.goods.find(x=>x.id===it.goodId); return `<div class="t2">• ${escapeHtml(g?g.name:'Item')}${it.variantLabel?' ('+escapeHtml(it.variantLabel)+')':''} × ${it.qty} — ${fmtMoney(it.priceUsed*it.qty)}</div>`; }).join('');
+  const body = `
+    <div class="t2">Receipt #${escapeHtml(s.id.slice(-6).toUpperCase())} · ${escapeHtml(when)}</div>
+    <div style="font-weight:800;font-size:20px;margin:6px 0;">${fmtMoney(total)}</div>
+    <div class="t2">Buyer: <b>${escapeHtml(cust?cust.fullName:(s.walkInName||'Walk-in customer'))}</b></div>
+    ${seller?`<div class="t2">Sold by: <b>${escapeHtml(((seller.firstName||'')+' '+(seller.lastName||'')).trim())}</b></div>`:''}
+    <div class="t2">Status: <b>${escapeHtml(s.status==='paid'?'Paid':s.status==='voided'?'Voided':'Credit — balance '+fmtMoney(s.balance))}</b></div>
+    <div style="margin-top:8px;">${items}</div>
+    ${flags.map(f=>`<div class="t2" style="color:var(--amber,#b26a00);margin-top:6px;">⚠ ${f}</div>`).join('')}
+    ${(prev && tone==='ok')?`<div class="t2" style="margin-top:8px;color:#b26a00;">⚠ Already checked ${prev.n||1} time(s) before — last on ${escapeHtml(fmtDateAt((prev.last||'').slice(0,10), prev.last))}. Make sure this is not the same receipt shown again.</div>`:''}
+    <button class="btn btn-outline btn-sm" data-zv-open-sale="${s.id}" style="margin-top:10px;">Open full receipt</button>`;
+  if(tone!=='bad') { try{ zxSet('verified', s.id, { n:(prev&&prev.n||0)+1, first:(prev&&prev.first)||new Date().toISOString(), last:new Date().toISOString(), by: state.sessionUserId }); }catch(_e){} }
+  return zvBox(tone, head, sub, body);
+}
+function zvBillCard(t, amtTyped){
+  const d = t.data || t.details || {};
+  const amt = Number(t.amount != null ? t.amount : (d.amount||0));
+  const when = t.created_at || t.createdAt || t.date || '';
+  const ref = String(t.reference || t.id || '').replace(/^success-/,'');
+  let tone='ok', head='Genuine bill payment', sub='This payment is in your bill history.';
+  const st = String(t.status||'').toLowerCase();
+  if(st && !/^(success|successful|completed|ok|paid|delivered)$/.test(st)){ tone='warn'; head='Payment not successful'; sub='Status on record: '+escapeHtml(st)+'. The receipt should not be accepted as paid.'; }
+  if(amtTyped!=='' && amtTyped!=null && !isNaN(Number(amtTyped)) && Math.round(Number(amtTyped)*100)!==Math.round(amt*100)){ tone='bad'; head='Amount does not match'; sub='The receipt shows '+fmtMoney(Number(amtTyped))+' but your records say '+fmtMoney(amt)+'.'; }
+  const body = `<div class="t2">Reference: <b>${escapeHtml(ref)}</b></div><div style="font-weight:800;font-size:20px;margin:6px 0;">${fmtMoney(amt)}</div>
+    <div class="t2">${escapeHtml([t.service||t.category||t.type||'Bill payment', t.provider||t.network||''].filter(Boolean).join(' · '))}</div>
+    ${when?`<div class="t2">${escapeHtml(String(when).slice(0,16).replace('T',' '))}</div>`:''}`;
+  return zvBox(tone, head, sub, body);
+}
+function zvBox(tone, head, sub, body){
+  const col = tone==='ok' ? ['#2E7D32','#F1F8F2'] : tone==='warn' ? ['#b26a00','#FFF6E5'] : ['#C0392B','#FDF0EE'];
+  const ic = tone==='ok' ? '✔' : tone==='warn' ? '⚠' : '✖';
+  return `<div class="card" style="border:2px solid ${col[0]};background:${col[1]};margin-top:14px;">
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:8px;"><div style="font-size:26px;color:${col[0]};">${ic}</div><div><div style="font-weight:800;color:${col[0]};font-size:16px;">${head}</div><div class="t2">${sub}</div></div></div>${body}</div>`;
+}
+async function zvRun(rawInput, amtTyped){
+  const p = zvParse(rawInput); zvState.q = p.q; zvState.amt = amtTyped||'';
+  if(!p.q){ zvState.res = null; return; }
+  let list = zvFind(p.q, p.kind), billSkipped = false;
+  if(!list.length && p.kind!=='S'){ const b = await zvFindBill(p.q); billSkipped = (b===null); list = b || []; }
+  if(!list.length) zvState.res = zvBox('bad','Not in your records','No receipt with that number or Txn ID exists in this business. This receipt may be fake — or it belongs to another shop.' + (billSkipped ? ' (Bill payments could not be checked — no internet.)' : ''),'');
+  else if(list.length>1) zvState.res = zvBox('warn','More than one match','Type the full Txn ID printed on the receipt to pick the right one.', list.map(x=>`<div class="t2">• #${escapeHtml(String(x.rec.id).slice(-6).toUpperCase())} — ${fmtMoney(x.rec.subtotal||x.rec.amount||0)}</div>`).join(''));
+  else zvState.res = list[0].kind==='S' ? zvSaleCard(list[0].rec, amtTyped) : zvBillCard(list[0].rec, amtTyped);
+}
+function screenVerify(){
+  return `
+    ${subHeader('Verify Receipt')}
+    <p class="subtle" style="margin-bottom:12px;">Check that a receipt a customer brings really came from your shop. Scan its QR code, or type the Receipt number or Txn ID printed on it.</p>
+    <button class="btn btn-primary" id="zv-scan" style="margin-bottom:12px;">${ICON_SEARCH} Scan receipt QR</button>
+    <div class="field"><label>Receipt number or Txn ID</label><input id="zv-q" placeholder="e.g. 3F9A21 or the full Txn ID" value="${escapeHtml(zvState.q||'')}" autocapitalize="characters" autocomplete="off"></div>
+    <div class="field"><label>Amount shown on the receipt (optional)</label><input id="zv-amt" inputmode="decimal" placeholder="Type it to catch altered amounts" value="${escapeHtml(zvState.amt||'')}"></div>
+    <button class="btn btn-outline" id="zv-go">Verify</button>
+    <div id="zv-res">${zvState.res||''}</div>`;
+}
+function bindVerifyEvents(){
+  const go = async (raw)=>{
+    const q = document.getElementById('zv-q'), a = document.getElementById('zv-amt'), out = document.getElementById('zv-res');
+    const val = raw!=null ? raw : (q?q.value:'');
+    if(!String(val).trim()){ toast('Type or scan a receipt first.'); return; }
+    if(out) out.innerHTML = '<p class="subtle" style="margin-top:14px;">Checking…</p>';
+    await zvRun(val, a?a.value.trim():'');
+    refreshMain();
+  };
+  const g = document.getElementById('zv-go'); if(g) g.addEventListener('click', ()=>go());
+  const q = document.getElementById('zv-q'); if(q) q.addEventListener('keydown', e=>{ if(e.key==='Enter') go(); });
+  const sc = document.getElementById('zv-scan'); if(sc) sc.addEventListener('click', ()=>openBarcodeScanner(code=>{ zvState.amt=''; go(code); }));
+  document.querySelectorAll('[data-zv-open-sale]').forEach(b=>b.addEventListener('click', ()=>openSaleDetail(b.dataset.zvOpenSale)));
+}
+// a link scanned with the phone camera lands here: remember it, and open the check once the owner is signed in
+function zvCaptureLink(){
+  try{
+    const m = location.search.match(/[?&]v=([^&#]+)/);
+    if(m){ sessionStorage.setItem('zs_verify_pending', decodeURIComponent(m[1])); const sp = new URLSearchParams(location.search); sp.delete('v'); history.replaceState(null,'',location.pathname + (sp.toString()?'?'+sp.toString():'') + location.hash); }
+  }catch(_e){}
+}
+function zvCheckPending(){
+  if(!state.sessionUserId) return;
+  let v = null; try{ v = sessionStorage.getItem('zs_verify_pending'); }catch(_e){}
+  if(!v) return;
+  try{ sessionStorage.removeItem('zs_verify_pending'); }catch(_e){}
+  if(!isOwnerLike()) return;               // staff and customers never see the result
+  zvState.res = null; zvState.amt = '';
+  route = 'verify';
+  setTimeout(async ()=>{ await zvRun(v, ''); if(route==='verify') render(); }, 0);
+}
+zvCaptureLink();
+
+/* ============================================================
    BARCODE / QR SCANNER — camera-based, via html5-qrcode (CDN).
    100% client-side: no server calls, no API key, nothing billed.
    ============================================================ */
@@ -14775,7 +14994,7 @@ function openBarcodeScanner(onResult){
   _scannerInstance = new Html5Qrcode('scanner-viewport');
   _scannerInstance.start(
     { facingMode: 'environment' },
-    { fps: 10, qrbox: { width: 250, height: 150 } },
+    { fps: 10, qrbox: { width: 260, height: 220 } },
     (decodedText)=>{ finish(decodedText); },
     ()=>{ /* per-frame scan miss — expected constantly while aiming, ignore */ }
   ).catch(()=>{

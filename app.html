@@ -1453,6 +1453,8 @@ function business(){ return state.business; }
 function currentUser(){ return state.users.find(u=>u.id===state.sessionUserId); }
 function currentShop(){ return state.shops.find(s=>s.id===state.currentShopId); }
 function isMaster(){ const u=currentUser(); return u && u.role==='master'; }
+// Owner OR a staff member the Owner promoted to Super Admin: sees and does everything in the business.
+function isOwnerLike(){ const u=currentUser(); return !!u && (u.role==='master' || (u.role==='staff' && !!u.isSuperAdmin)); }
 function isStaff(){ const u=currentUser(); return u && u.role==='staff'; }
 function isViewer(){ const u=currentUser(); return u && u.role==='viewer'; }
 // Super Admin: a staff member the Owner has promoted to manage other staff's roles/
@@ -1478,6 +1480,7 @@ function canDo(perm){
   if(!u) return false;
   if(u.role==='master') return true;
   if(u.role==='viewer') return false;
+  if(u.role==='staff' && u.isSuperAdmin) return true;
   if(perm==='canAddGoods' || perm==='canVoidReturn' || perm==='canBillPayments') return !!u[perm];
   return u[perm] !== false;
 }
@@ -1781,6 +1784,7 @@ document.addEventListener('toggle', e=>{
 }, true);
 let freshConnectCode = null;   // a Staff Connect Code is only shown on the visit it was generated in
 function render(){
+  try{ zxKick(); }catch(_e){}
   if(route !== 'staff'){ staffOpen = new Set(); freshConnectCode = null; if(state.joinCode) state.joinCode = null; }   // codes vanish when you leave the Staff page
   if(!state.sessionUserId && route === 'note-view') route = 'notes';   // never leave a note open on the lock screen
   if(route !== 'note-view') noteMenuOpen = false;
@@ -3504,7 +3508,7 @@ const ITEM_SALES_PAGE = 50;
 const SALES_RANGES = [['today','Today'], ['7d','7 Days'], ['30d','30 Days'], ['all','All']];
 let itemSalesCache = {};      // gid -> { at, net }
 let itemSalesView = null;     // the open history sheet's state
-function canSeeSold(){ return isMaster() || canDo('canSell'); }
+function canSeeSold(){ return isOwnerLike() || canDo('canSell'); }
 function fmtQty(n){ const x = Number(n) || 0; return (Math.round(x * 100) / 100).toLocaleString(); }
 function sameName(a, b){ return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase(); }
 function salesSince(range){
@@ -3535,7 +3539,7 @@ function itemLocations(g){
 function saleTimeOf(sale){ return Date.parse(sale.createdAt || '') || Date.parse((sale.date || '') + 'T00:00:00') || 0; }
 // Lines of past sales from what is stored on THIS device.
 function localItemSalesLines(goodIds, sinceISO){
-  const ids = new Set(goodIds), owner = isMaster(), me = state.sessionUserId;
+  const ids = new Set(goodIds), owner = isOwnerLike(), me = state.sessionUserId;
   const since = sinceISO ? Date.parse(sinceISO) : null; const out = [];
   for(const sale of state.sales){
     if(!owner && sale.soldByUserId !== me) continue;
@@ -3590,7 +3594,7 @@ function refreshSoldBox(gid){
 }
 function openItemSalesHistory(gid){
   const g = state.goods.find(x => x.id === gid); if(!g || !canSeeSold()) return;
-  const locs = isMaster() ? itemLocations(g) : [];
+  const locs = isOwnerLike() ? itemLocations(g) : [];
   itemSalesView = { gid, loc: 'this', range: 'all', lines: [], done: false, loading: false, source: '', error: '', summary: null, localAll: [], req: 0 };
   const thisShop = state.shops.find(s => s.id === g.shopId);
   openSheet(`
@@ -3690,7 +3694,7 @@ function paintItemSales(){
     : (v.loading ? 'Loading…' : '—');
   const note = document.getElementById('is-note');
   note.innerHTML = [
-    !isMaster() ? `<div class="subtle" style="font-size:12px;margin-bottom:8px;">Showing the sales you made.</div>` : '',
+    !isOwnerLike() ? `<div class="subtle" style="font-size:12px;margin-bottom:8px;">Showing the sales you made.</div>` : '',
     v.source === 'local' ? `<div class="zs-note zs-note-amber" style="margin-bottom:8px;font-size:12.5px;">You're offline or the server didn't answer, so this shows only the sales stored on this device — it may be incomplete.</div>` : '',
   ].join('');
   const list = document.getElementById('is-list');
@@ -3721,7 +3725,7 @@ function hideControlsHtml(g){
 }
 function reactivateGood(gid){
   const g = state.goods.find(x=>x.id===gid);
-  if(!g || !isMaster()) return;
+  if(!g || !isOwnerLike()) return;
   g.isActive = true; g.deactivatedAt = null; g.deactivationReason = '';
   enqueueSync('goods','update', { id: g.id, is_active: true, deactivated_at: null, deactivated_by: null, deactivation_reason: null });
   logAudit('item_reactivated', `${g.name} is active again`);
@@ -3731,7 +3735,7 @@ function openAddStockModal(gid){
   const g = state.goods.find(x=>x.id===gid);
   if(!g) return;
   if(!canDo('canAddGoods')){ toast("You don't have permission to add stock."); return; }
-  if(!isGoodActive(g) && !isMaster()){ toast(`${g.name} is hidden. Ask the owner to reactivate it before adding stock.`); return; }
+  if(!isGoodActive(g) && !isOwnerLike()){ toast(`${g.name} is hidden. Ask the owner to reactivate it before adding stock.`); return; }
   const newest = [...g.batches].sort(batchFIFO).pop();
   const lastCost = (newest && newest.costPrice) || g.costPrice || '';
   openSheet(`
@@ -3767,7 +3771,7 @@ function openAddStockModal(gid){
     }
     logAudit('stock_added', `Added ${qty} × ${g.name}${cost!==null?' at '+fmtMoney(cost):''}${expiry?' (expires '+expiry+')':''}`);
     closeSheet();
-    if(!isGoodActive(g) && isMaster() && await appConfirm(`${g.name} is hidden. Reactivate it now so it can be sold?`)){ reactivateGood(g.id); }
+    if(!isGoodActive(g) && isOwnerLike() && await appConfirm(`${g.name} is hidden. Reactivate it now so it can be sold?`)){ reactivateGood(g.id); }
     toast('Stock added ✅');
     render(); openGoodDetail(g.id);
   });
@@ -3776,7 +3780,7 @@ const HIDE_REASONS = ['Discontinued', 'Damaged', 'Recalled', 'Expired', 'Lost / 
 function openHideGoodModal(gid){
   const g = state.goods.find(x=>x.id===gid);
   if(!g) return;
-  if(!isMaster()){ toast('Only the owner can hide an item.'); return; }
+  if(!isOwnerLike()){ toast('Only the owner can hide an item.'); return; }
   const stock = totalStock(g);
   openSheet(`
     <div class="sheet-head"><h3>Hide ${escapeHtml(g.name)}?</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
@@ -3857,7 +3861,7 @@ function renderShell(){
         ${visibleShops.length? visibleShops.map(s=>`<option value="${s.id}" ${s.id===state.currentShopId?'selected':''}>${s.isWarehouse?'${ICON_BOX} ':''}${s.name}</option>`).join('')
           : `<option value="">No shops assigned yet</option>`}
       </select>
-      ${isMaster() ? `<button class="icon-btn" id="add-shop-btn" title="Add shop">＋</button>`:''}
+      ${isOwnerLike() ? `<button class="icon-btn" id="add-shop-btn" title="Add shop">＋</button>`:''}
       <span id="sync-dot" class="sync-dot" title="Sync status"></span>
       <button class="icon-btn badge-dot" data-count="${bellCount()}" id="alerts-btn" aria-label="Notifications">${ICON_BELL}</button>
     </div>
@@ -3868,7 +3872,7 @@ function renderShell(){
           <div class="ic">${n.ic}${n.id==='more'?`<i class="nz-dot nz-dot-nav ${annUnreadCount()?'on':''}" data-notif-dot></i>`:''}</div><div>${n.label}</div>
         </button>`).join('')}
     </div>
-    ${route==='goods' && (isMaster()|| (isStaff() && u.canAddGoods)) ? `<button class="fab" id="fab-add-good">＋</button>` : ''}
+    ${route==='goods' && (isOwnerLike()|| (isStaff() && u.canAddGoods)) ? `<button class="fab" id="fab-add-good">＋</button>` : ''}
     ${route==='customers' ? `<button class="fab" id="fab-add-customer">＋</button>` : ''}
   `;
 }
@@ -3901,6 +3905,8 @@ function renderRoute(){
     case 'greetings': return screenGreetings();
     case 'staffact': return screenStaffActivity();
     case 'reorder': return screenReorder();
+    case 'stockcount': return screenStockCount();
+    case 'quotes': return screenQuotes();
     case 'about-us': return screenAboutUs();
     case 'contact-us': return screenContactUs();
     case 'profile': return screenProfile();
@@ -4133,7 +4139,7 @@ function screenDashboard(){
 
     ${(alerts.expiring>0 || alerts.dueSoon>0 || alerts.overdue>0 || alerts.lowStock>0 || outStock.length>0) ? `
       <div class="section-head"><h3>${t('dash_needs_attention')}</h3></div>
-      ${alerts.overdue>0 && isMaster()?`<div class="card" style="display:flex;align-items:center;gap:10px;" data-goto="credit">
+      ${alerts.overdue>0 && isOwnerLike()?`<div class="card" style="display:flex;align-items:center;gap:10px;" data-goto="credit">
         <div style="font-size:20px;">${ICON_ALERT_DOT}</div><div style="flex:1;"><b>${alerts.overdue} customer(s)</b> overdue on credit — worth a reminder</div>
       </div>`:''}
       ${alerts.expiring>0?`<div class="card" style="display:flex;align-items:center;gap:10px;" data-goto="goods">
@@ -4145,7 +4151,7 @@ function screenDashboard(){
       ${outStock.length>0?`<div class="card" style="display:flex;align-items:center;gap:10px;cursor:pointer;" data-goods-filter="out">
         <div style="font-size:20px;">${ICON_INBOX_EMPTY}</div><div style="flex:1;"><b>${outStock.length} item(s)</b> out of stock — tap to restock or hide</div>
       </div>`:''}
-      ${alerts.dueSoon>0 && isMaster()?`<div class="card" style="display:flex;align-items:center;gap:10px;" data-goto="credit">
+      ${alerts.dueSoon>0 && isOwnerLike()?`<div class="card" style="display:flex;align-items:center;gap:10px;" data-goto="credit">
         <div style="font-size:20px;">${ICON_CARD}</div><div style="flex:1;"><b>${alerts.dueSoon} customer(s)</b> owe you, due within 2 days</div>
       </div>`:''}
     ` : `<div class="empty"><div class="ic">${ICON_CHECK_CIRCLE}</div><b>${t('dash_all_clear')}</b>${t('dash_no_alerts')}</div>`}
@@ -4155,7 +4161,7 @@ function screenDashboard(){
 
     ${utilityTilesBlock()}
 
-    ${isMaster() ? staffActivityFeed() : ''}
+    ${isOwnerLike() ? staffActivityFeed() : ''}
   `;
 }
 
@@ -4473,8 +4479,8 @@ function bellItems(){
   const outStock = inAppAlertsOn() ? goods.filter(g=>totalStock(g)<=0).length : 0;
   const nameReqs = canManageStaff() ? state.users.filter(u=>u.businessId===business().id && u.nameChangeRequest && canManageThisUser(u)).length : 0;
   if(nameReqs>0) items.push({ n:nameReqs, icon:ICON_EDIT_NOTE, text:`<b>${nameReqs} name change request${nameReqs>1?'s':''}</b> waiting for your approval`, route:'staff' });
-  if(isMaster() && a.overdue>0) items.push({ n:a.overdue, icon:ICON_ALERT_DOT, text:`<b>${a.overdue} customer${a.overdue>1?'s':''}</b> overdue on credit`, route:'credit' });
-  if(isMaster() && a.dueSoon>0) items.push({ n:a.dueSoon, icon:ICON_CARD, text:`<b>${a.dueSoon} customer${a.dueSoon>1?'s':''}</b> owe you, due within 2 days`, route:'credit' });
+  if(isOwnerLike() && a.overdue>0) items.push({ n:a.overdue, icon:ICON_ALERT_DOT, text:`<b>${a.overdue} customer${a.overdue>1?'s':''}</b> overdue on credit`, route:'credit' });
+  if(isOwnerLike() && a.dueSoon>0) items.push({ n:a.dueSoon, icon:ICON_CARD, text:`<b>${a.dueSoon} customer${a.dueSoon>1?'s':''}</b> owe you, due within 2 days`, route:'credit' });
   if(a.expiring>0) items.push({ n:a.expiring, icon:'⏰', text:`<b>${a.expiring} item${a.expiring>1?'s':''}</b> expiring within 14 days`, route:'goods' });
   if(a.lowStock>0) items.push({ n:a.lowStock, icon:ICON_TREND_DOWN, text:`<b>${a.lowStock} item${a.lowStock>1?'s':''}</b> running low`, route:'goods', filter:'low' });
   if(outStock>0) items.push({ n:outStock, icon:ICON_INBOX_EMPTY, text:`<b>${outStock} item${outStock>1?'s':''}</b> out of stock`, route:'goods', filter:'out' });
@@ -4502,14 +4508,18 @@ function openBell(){
       <div class="nz-main"><div class="nz-t1" style="font-weight:600;white-space:normal;">${i.text}</div></div>
       <div class="nz-chev">›</div>
     </div>`).join('') : `<div class="nz-empty"><div class="e">✅</div><b>All clear</b><div style="font-size:13px;margin-top:4px;">Nothing needs your attention right now.</div></div>`;
-  const remList = reminderCandidates(), occList = occasionCandidates(), staffLine = staffNoticeLine();
+  const remList = reminderCandidates(), occList = occasionCandidates(), staffLine = staffNoticeLine(), handList = readyToHandOver().slice(0,6), supList = suppliersOwed();
   const row = (attr, icon, t1, t2)=>`<div class="nz-row" ${attr} role="button" tabindex="0"><div class="nz-tile">${icon}</div><div class="nz-main"><div class="nz-t1" style="font-weight:600;white-space:normal;">${t1}</div>${t2?`<div class="nz-t2">${t2}</div>`:''}</div><div class="nz-chev">›</div></div>`;
   const extra =
     (remList.length ? `<div class="section-head" style="margin:14px 0 8px;"><h3 style="font-size:15px;">Send payment reminders</h3></div>` +
       remList.slice(0,8).map(m=>row(`data-bell-rem="${m.cust.id}"`, '💬', `<b>${escapeHtml(m.cust.fullName)}</b> · ${fmtMoney(m.total)}`, m.overdue ? 'Overdue — tap to send a reminder' : 'Due soon — tap to send a reminder')).join('') : '') +
     (occList.length ? `<div class="section-head" style="margin:14px 0 8px;"><h3 style="font-size:15px;">Birthdays &amp; anniversaries</h3></div>` +
       occList.map((o,i)=>row(`data-bell-occ="${i}"`, o.kind==='birthday'?'🎂':'🎉', `<b>${escapeHtml(o.cust.fullName)}</b> · ${o.kind==='birthday'?'birthday':o.years+'-year customer'}`, (o.days===0?'Today':o.days>0?'In '+o.days+' day'+(o.days>1?'s':''):'Was '+(-o.days)+' day'+(o.days<-1?'s':'')+' ago')+' — tap to send a wish')).join('') : '') +
-    (staffLine ? `<div class="section-head" style="margin:14px 0 8px;"><h3 style="font-size:15px;">Staff activity (24 hours)</h3></div>` + row('id="bell-staff-row"', '🛡️', staffLine, 'Tap to see the full report') : '');
+    (staffLine ? `<div class="section-head" style="margin:14px 0 8px;"><h3 style="font-size:15px;">Staff activity (24 hours)</h3></div>` + row('id="bell-staff-row"', '🛡️', staffLine, 'Tap to see the full report') : '') +
+    (handList.length ? `<div class="section-head" style="margin:14px 0 8px;"><h3 style="font-size:15px;">Ready to hand over</h3></div>` +
+      handList.map(x=>{ const c = state.customers.find(y=>y.id===x.customerId); return row(`data-bell-hand="${x.id}"`, '📦', `<b>${escapeHtml(c?c.fullName:'Customer')}</b> · ${fmtMoney(x.subtotal)}`, 'Fully paid — tap to hand over'); }).join('') : '') +
+    (supList.length ? `<div class="section-head" style="margin:14px 0 8px;"><h3 style="font-size:15px;">You owe suppliers</h3></div>` +
+      supList.map(m=>row(`data-bell-sup="${m.sup.id}"`, '🚚', `<b>${escapeHtml(m.sup.name)}</b> · ${fmtMoney(m.total)}`, 'Owing since '+fmtDate(m.since)+' ('+daysBetween(m.since, todayISO())+' days) — tap to pay')).join('') : '');
   const ov = nzOverlay('nz-bell', `
     <div class="nz-head"><h3>Notifications</h3>
       <div style="display:flex;gap:8px;align-items:center;">
@@ -4532,6 +4542,8 @@ function openBell(){
   document.getElementById('nz-bell-settings').addEventListener('click', ()=>{ nzClose('nz-bell'); openNotifSettings(); });
   ov.querySelectorAll('[data-bell-rem]').forEach(el=>el.addEventListener('click', ()=>{ nzClose('nz-bell'); openReminderFor(el.dataset.bellRem); }));
   ov.querySelectorAll('[data-bell-occ]').forEach(el=>el.addEventListener('click', ()=>{ nzClose('nz-bell'); openOccasionFor(Number(el.dataset.bellOcc)); }));
+  ov.querySelectorAll('[data-bell-hand]').forEach(el=>el.addEventListener('click', ()=>{ nzClose('nz-bell'); openSaleDetail(el.dataset.bellHand); }));
+  ov.querySelectorAll('[data-bell-sup]').forEach(el=>el.addEventListener('click', ()=>{ nzClose('nz-bell'); route = 'suppliers'; render(); openSupplierDetail(el.dataset.bellSup); }));
   const bsr = document.getElementById('bell-staff-row');
   if(bsr) bsr.addEventListener('click', ()=>{ nzClose('nz-bell'); route = 'staffact'; render(); });
   ov.querySelectorAll('[data-bell-go]').forEach(el=>{
@@ -4881,7 +4893,7 @@ function dailyDigestBlock(){
   const txCount = shopSalesToday.length;
 
   let profitToday = 0;
-  if(isMaster()){
+  if(isOwnerLike()){
     const cogs = shopSalesToday.reduce((a,s)=> a + s.items.reduce((b,it)=>{
       const g = state.goods.find(x=>x.id===it.goodId);
       return b + (g?g.costPrice:0)*netQty(it);
@@ -4910,11 +4922,11 @@ function dailyDigestBlock(){
       </div>`
     } : null,
     { id:'sales', label: t('dash_sales_today'), value: fmtMoney(todayTotal) },
-    isMaster()
+    isOwnerLike()
       ? { id:'profit', label: t('dash_profit_today'), value: fmtMoney(profitToday) }
       : { id:'cashin', label: t('dash_cash_in'), value: fmtMoney(todayCash) },
-    isMaster() ? { id:'expenses', label:'Expenses Today', value: fmtMoney(state.expenses.filter(e=>e.shopId===state.currentShopId && e.date===todayISO()).reduce((a,e)=>a+e.amount,0)) } : null,
-    isMaster() ? { id:'credit', label:'Credit Given Today', value: fmtMoney(shopSalesToday.filter(s=>s.status==='credit'||s.status==='partial').reduce((a,s)=>a+s.balance,0)) } : null,
+    isOwnerLike() ? { id:'expenses', label:'Expenses Today', value: fmtMoney(state.expenses.filter(e=>e.shopId===state.currentShopId && e.date===todayISO()).reduce((a,e)=>a+e.amount,0)) } : null,
+    isOwnerLike() ? { id:'credit', label:'Credit Given Today', value: fmtMoney(shopSalesToday.filter(s=>s.status==='credit'||s.status==='partial').reduce((a,s)=>a+s.balance,0)) } : null,
   ].filter(Boolean);
 
   return `
@@ -5042,6 +5054,8 @@ let saleWalkInPhone = '';
 let saleNote = '';
 let saleDiscount = 0;
 let saleMode = 'cash'; // cash | credit
+let saleMethod = 'cash'; // how the customer paid: cash | transfer | pos
+let saleHold = false;    // layaway: keep the items until fully paid
 let saleSearch = '';
 
 function screenNewSale(){
@@ -5054,7 +5068,7 @@ function screenNewSale(){
   const goods = state.goods.filter(g=>g.shopId===state.currentShopId && isGoodActive(g) &&
     (!saleSearch || g.name.toLowerCase().includes(saleSearch.toLowerCase()) || (g.barcode && g.barcode===saleSearch.trim())));
   const bd = cartBreakdown();
-  const customers = state.customers.filter(c=>c.businessId===business().id);
+  const customers = state.customers.filter(c=>c.businessId===business().id && (customerVisible(c) || c.id===saleCustomerId));
   return `
     <h2 class="screen-title">${t('sale_title')}</h2>
     <p class="subtle" style="margin-bottom:14px;">${t('sale_subtitle')}</p>
@@ -5086,6 +5100,11 @@ function screenNewSale(){
           <div class="field"><label>Due Date</label><input id="ns-due" type="date" value="${defaultDueDate()}"></div>
         </div>
         <p class="subtle" style="margin-top:-6px;">Leave "Amount Paid Now" at 0 if they're taking everything on credit. Credit sales need a buyer selected above (not walk-in).</p>
+        ${saleCustomerId ? `<label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin-top:8px;"><input type="checkbox" id="ns-hold" ${saleHold?'checked':''} style="margin-top:2px;"> Hold the items until fully paid (layaway)</label>` : ''}
+      </div>
+      <label style="display:block;font-size:12px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:.05em;margin:12px 0 6px;">Paid by</label>
+      <div style="display:flex;gap:8px;">
+        ${['cash','transfer','pos'].map(m=>`<button class="btn btn-sm ${saleMethod===m?'btn-dark':'btn-outline'}" style="flex:1;" data-pm="${m}">${METHOD_LABEL[m]}</button>`).join('')}
       </div>
       <div class="field" style="margin-top:10px;margin-bottom:0;">
         <label>Note <span class="subtle">(optional — prints on the receipt, e.g. order ref, delivery note)</span></label>
@@ -5284,6 +5303,11 @@ function bindRouteEvents(){
     if(noteInput) noteInput.addEventListener('input', e=>{ saleNote = e.target.value; });
     const discInput = document.getElementById('ns-discount');
     if(discInput) discInput.addEventListener('change', e=>{ saleDiscount = Number(e.target.value||0); refreshMain(); });
+    document.querySelectorAll('[data-pm]').forEach(b=>b.addEventListener('click', ()=>{
+      saleMethod = b.dataset.pm;
+      document.querySelectorAll('[data-pm]').forEach(x=>{ const on = x.dataset.pm===saleMethod; x.classList.toggle('btn-dark', on); x.classList.toggle('btn-outline', !on); });
+    }));
+    const holdBox = document.getElementById('ns-hold'); if(holdBox) holdBox.addEventListener('change', ()=>{ saleHold = holdBox.checked; });
     const mc = document.getElementById('mode-cash'); if(mc) mc.addEventListener('click', ()=>{ saleMode='cash'; refreshMain(); });
     const md = document.getElementById('mode-credit'); if(md) md.addEventListener('click', ()=>{ saleMode='credit'; refreshMain(); });
     document.querySelectorAll('[data-add-good]').forEach(b=>{
@@ -5351,6 +5375,8 @@ function bindRouteEvents(){
   if(route==='closeday'){ bindCloseDayEvents(); bindDailySummary(); }
   if(route==='staffact') bindStaffActivityEvents();
   if(route==='reorder') bindReorderEvents();
+  if(route==='stockcount') bindStockCountEvents();
+  if(route==='quotes') bindQuotesEvents();
   if(route==='staff') bindStaffEvents();
   if(route==='audit') bindAuditEvents();
   if(route==='notes') bindNotesEvents();
@@ -5424,6 +5450,11 @@ function openWalkInModal(){
     openAddCustomerModal();
   });
 }
+// A customer is "mine" if I made a sale to them or I added them. Staff only see their own customers; Owner / Super Admin see all.
+function customerVisible(c){
+  if(isOwnerLike()) return true;
+  return c.createdByUserId===state.sessionUserId || state.sales.some(x=>x.customerId===c.id && x.soldByUserId===state.sessionUserId);
+}
 function groupName(id){ const g=state.customerGroups.find(x=>x.id===id); return g?g.name:''; }
 
 function confirmSale(){
@@ -5476,6 +5507,8 @@ function confirmSale(){
     createdAt: new Date().toISOString()
   };
   state.sales.push(sale);
+  zxSet('method', sale.id, { m: saleMethod });
+  if(saleMode==='credit' && saleHold && paid<total) zxSet('hold', sale.id, { held:true, handed:false });
   syncSaleInsert(sale);
   Object.keys(touchedBatches).forEach(batchId=>{
     const g = state.goods.find(x=>x.id===touchedBatches[batchId]);
@@ -5488,7 +5521,7 @@ function confirmSale(){
     if(v) enqueueSync('good_variants','update', { id: v.id, qty: v.qty });
   });
   logAudit('sale_created', `Sale ${fmtMoney(total)} (${status})`);
-  cart=[]; saleCustomerId=null; saleMode='cash'; saleWalkInName=''; saleWalkInPhone=''; saleNote=''; saleDiscount=0;
+  cart=[]; saleCustomerId=null; saleMode='cash'; saleMethod='cash'; saleHold=false; saleWalkInName=''; saleWalkInPhone=''; saleNote=''; saleDiscount=0;
   closeSheet();
   render(); // clears the completed sale off the New Sale screen so its button can't be tapped again
   toast('Sale saved ✅');
@@ -5852,7 +5885,7 @@ function goodRowHtml(g){
   const subLine = g.hasVariants ? `${(g.variants||[]).length} size/color option(s) · ${stock} total in stock`
     : g.spec ? `${escapeHtml(g.specLabel||'Spec')}: ${escapeHtml(g.spec)} · ${stock} in stock`
     : g.dimension && g.dimension.value ? `${escapeHtml(g.dimension.value)} ${escapeHtml(g.dimension.unit||'')} · ${stock} in stock`
-    : `${stock} in stock${isMaster()?(' · cost '+fmtMoney(g.costPrice)):''}`;
+    : `${stock} in stock${isOwnerLike()?(' · cost '+fmtMoney(g.costPrice)):''}`;
   return `
   <div class="card" style="display:flex;gap:0;padding:0;overflow:hidden;${hidden?'opacity:.75;':''}">
     <div class="expiry-flag" style="${flag}"></div>
@@ -5874,7 +5907,7 @@ function screenGoods(){
   const all = state.goods.filter(g=>g.shopId===state.currentShopId);
   const activeList = all.filter(isGoodActive);
   const hiddenList = all.filter(g=>!isGoodActive(g));
-  const showTabs = isMaster();                                   // only the owner can see / reactivate hidden items
+  const showTabs = isOwnerLike();                                   // only the owner can see / reactivate hidden items
   const tab = (showTabs && goodsTab==='hidden') ? 'hidden' : 'active';
   const lowList = activeList.filter(g=>{ const s=totalStock(g); return s>0 && s<=(g.reorderLevel||5); });
   const outList = activeList.filter(g=>totalStock(g)<=0);
@@ -5887,7 +5920,7 @@ function screenGoods(){
     : `<div class="empty"><div class="ic">${ICON_BOX}</div><b>No goods yet</b>Tap + to add your first item.</div>`;
   return `
     <h2 class="screen-title">Goods &amp; Stock</h2>
-    ${(isMaster() && !bizTypeSet) ? `
+    ${(isOwnerLike() && !bizTypeSet) ? `
     <div class="card" style="border-color:var(--marigold-dark);display:flex;align-items:center;gap:10px;" data-goto="settings">
       <div style="font-size:20px;">${ICON_SETTINGS}</div>
       <div style="flex:1;"><b>Set your Business Type</b><div class="t2">Get the right fields when adding goods — go to Settings to set it.</div></div>
@@ -5900,7 +5933,7 @@ function screenGoods(){
     ${tab==='active' ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
       ${chip('all','All',activeList.length)}${chip('low','Low stock',lowList.length)}${chip('out','Out of stock',outList.length)}
     </div>` : ''}
-    ${isMaster() && tab==='active' ?`<button class="btn btn-outline btn-sm" id="bulk-add-btn" style="margin-bottom:12px;">${ICON_FILE} Bulk Add via CSV</button>`:''}
+    ${isOwnerLike() && tab==='active' ?`<button class="btn btn-outline btn-sm" id="bulk-add-btn" style="margin-bottom:12px;">${ICON_FILE} Bulk Add via CSV</button>`:''}
     ${shown.length===0 ? emptyMsg : shown.map(goodRowHtml).join('')}
   `;
 }
@@ -5982,7 +6015,7 @@ function parseBulkCSV(raw){
 let pendingVariants = []; // used only while the Variants add-goods form is open
 function openAddGoodModal(){
   const u = currentUser();
-  if(isStaff() && !u.canAddGoods){ toast('Only the Owner can add goods (or grant you permission).'); return; }
+  if(isStaff() && !isSuperAdmin() && !u.canAddGoods){ toast('Only the Owner can add goods (or grant you permission).'); return; }
   pendingVariants = [];
   renderAddGoodSheet();
 }
@@ -6206,7 +6239,7 @@ function syncGoodInsert(g){
 function openGoodDetail(gid){
   const g = state.goods.find(x=>x.id===gid);
   const u = currentUser();
-  const canEditPrice = isMaster();
+  const canEditPrice = isOwnerLike();
   const extraInfo = g.spec ? `<div class="t2" style="margin-bottom:10px;">${g.specLabel||'Spec'}: ${escapeHtml(g.spec)}</div>`
     : (g.dimension && g.dimension.value) ? `<div class="t2" style="margin-bottom:10px;">${escapeHtml(g.dimension.value)} ${escapeHtml(g.dimension.unit||'')}</div>` : '';
   openSheet(`
@@ -6245,13 +6278,13 @@ function openGoodDetail(gid){
           <div class="t1">${b.batchNo} · ${b.qtyRemaining} left</div>
           <div class="t2">${expired?'EXPIRED':'Expires '+fmtDate(b.expiryDate)+' ('+d+'d)'} ${b.auctionActive?' · Auction -'+b.auctionDiscount+'%':''}</div>
         </div>
-        ${(isMaster() && !expired && d<=7 && b.qtyRemaining>0) ? `<button class="btn btn-sm ${b.auctionActive?'btn-outline':'btn-dark'}" data-toggle-auction="${b.id}">${b.auctionActive?'Stop Auction':'Start 30% Auction'}</button>` : ''}
+        ${(isOwnerLike() && !expired && d<=7 && b.qtyRemaining>0) ? `<button class="btn btn-sm ${b.auctionActive?'btn-outline':'btn-dark'}" data-toggle-auction="${b.id}">${b.auctionActive?'Stop Auction':'Start 30% Auction'}</button>` : ''}
         ${canDo('canAddGoods') ? `<button class="btn btn-sm btn-outline" data-correct-count="${b.id}">${ICON_HASH} Correct Count</button>` : ''}
         ${expired ? `<span class="pill pill-red">DO NOT SELL</span>` : ''}
       </div>`;
     }).join('')}
     `}
-    ${isMaster() ? hideControlsHtml(g) : ''}
+    ${isOwnerLike() ? hideControlsHtml(g) : ''}
   `);
   const soldBox = document.getElementById('sold-box');
   if(soldBox){ soldBox.addEventListener('click', ()=>openItemSalesHistory(gid)); refreshSoldBox(gid); }
@@ -6263,7 +6296,7 @@ function openGoodDetail(gid){
   if(reactivateBtn) reactivateBtn.addEventListener('click', ()=>{ reactivateGood(gid); openGoodDetail(gid); });
   const savePrice = document.getElementById('save-price');
   if(savePrice) savePrice.addEventListener('click', ()=>{
-    if(!isMaster()){ toast('Only the owner can change prices.'); return; }
+    if(!isOwnerLike()){ toast('Only the owner can change prices.'); return; }
     const np = Number(document.getElementById('edit-price').value||g.basePrice);
     const nc = Number(document.getElementById('edit-cost').value||g.costPrice);
     if(!Number.isFinite(np) || np<0 || !Number.isFinite(nc) || nc<0){ toast('Enter valid prices.'); return; }
@@ -6281,7 +6314,7 @@ function openGoodDetail(gid){
   });
   document.querySelectorAll('[data-toggle-auction]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
-      if(!isMaster()){ toast('Only the owner can run an auction.'); return; }
+      if(!isOwnerLike()){ toast('Only the owner can run an auction.'); return; }
       const b = g.batches.find(x=>x.id===btn.dataset.toggleAuction);
       b.auctionActive = !b.auctionActive;
       if(b.auctionActive){ b.auctionDiscount = currentShop().auctionDiscountDefault||30; b.auctionPrice = Math.round(g.basePrice*(1-b.auctionDiscount/100)); }
@@ -6294,7 +6327,7 @@ function openGoodDetail(gid){
   document.querySelectorAll('[data-add-variant-stock]').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
       const v = g.variants.find(x=>x.id===btn.dataset.addVariantStock);
-      if(!isGoodActive(g) && !isMaster()){ toast(`${g.name} is hidden. Ask the owner to reactivate it first.`); return; }
+      if(!isGoodActive(g) && !isOwnerLike()){ toast(`${g.name} is hidden. Ask the owner to reactivate it first.`); return; }
       const add = Number(await appPrompt(`Add how many units to "${v.label}"?`, '0')||0);
       if(!(add>0)) return;
       if(!Number.isInteger(add)){ toast('Enter a whole number.'); return; }
@@ -6348,7 +6381,7 @@ function openStockCorrectionModal(goodId, batchId){
   const updateDiff = ()=>{
     const actual = Number(actualInput.value||0);
     const diff = actual - b.qtyRemaining;
-    diffLabel.textContent = diff===0 ? '' : diff>0 ? (isMaster() ? `This will increase stock by ${diff}.` : `Only the owner can raise stock with a count. Use "＋ Add Stock" for goods you received.`) : `This will reduce stock by ${Math.abs(diff)}.`;
+    diffLabel.textContent = diff===0 ? '' : diff>0 ? (isOwnerLike() ? `This will increase stock by ${diff}.` : `Only the owner can raise stock with a count. Use "＋ Add Stock" for goods you received.`) : `This will reduce stock by ${Math.abs(diff)}.`;
     diffLabel.style.color = diff<0 ? 'var(--red)' : diff>0 ? 'var(--green)' : 'var(--text-dim)';
   };
   actualInput.addEventListener('input', updateDiff);
@@ -6359,7 +6392,7 @@ function openStockCorrectionModal(goodId, batchId){
     const oldQty = b.qtyRemaining;
     const diff = actual - oldQty;
     if(diff===0){ toast('No change to record.'); closeSheet(); return; }
-    if(diff>0 && !isMaster()){ toast('Only the owner can raise stock with a count. To add stock you received, use "＋ Add Stock".'); return; }
+    if(diff>0 && !isOwnerLike()){ toast('Only the owner can raise stock with a count. To add stock you received, use "＋ Add Stock".'); return; }
     const reason = document.getElementById('sc-reason').value.trim();
     b.qtyRemaining = actual;
     enqueueSync('good_batches','update', { id: b.id, qty_remaining: b.qtyRemaining });
@@ -6388,7 +6421,7 @@ function openStockCorrectionModal(goodId, batchId){
    ============================================================ */
 let customerSearch = '';
 function screenCustomers(){
-  const list = state.customers.filter(c=>c.businessId===business().id &&
+  const list = state.customers.filter(c=>c.businessId===business().id && customerVisible(c) &&
     (!customerSearch || c.fullName.toLowerCase().includes(customerSearch.toLowerCase())));
   return `
     <h2 class="screen-title">Customers</h2>
@@ -6503,8 +6536,9 @@ function saveCustomerFromForm(existingId){
 }
 function openCustomerDetail(cid){
   const c = state.customers.find(x=>x.id===cid);
-  const sales = state.sales.filter(s=>s.customerId===cid).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
-  const bal = customerBalance(cid);
+  // Staff see only the sales they made; the Owner sees everything.
+  const sales = state.sales.filter(s=>s.customerId===cid && (isOwnerLike() || s.soldByUserId===state.sessionUserId)).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+  const bal = isOwnerLike() ? customerBalance(cid) : sales.filter(s=>s.status!=='paid' && s.status!=='voided').reduce((a,s)=>a+s.balance,0);
   const totalBought = sales.reduce((a,s)=>a+s.subtotal,0);
   const pays = customerPayments(cid);
   openSheet(`
@@ -6549,7 +6583,7 @@ async function clearCustomerDebt(cid){
   const owing = state.sales.filter(x=>x.customerId===cid && x.status!=='paid' && x.status!=='voided' && x.balance>0);
   const total = owing.reduce((a,x)=>a+x.balance,0);
   if(total<=0){ toast(c.fullName+' owes nothing — already clear.'); return; }
-  if(!isMaster()){ toast('Only the business owner can clear a customer’s debt.'); return; }
+  if(!isOwnerLike()){ toast('Only the business owner can clear a customer’s debt.'); return; }
   const typed = await appDialog({
     message: `⚠️ Warning\n\nThis will mark ${owing.length} unpaid sale${owing.length>1?'s':''} (${fmtMoney(total)}) for ${c.fullName} as fully paid. The full amount is recorded as money received. This cannot be undone.\n\nType PROCEED to continue.`,
     input: true, requireText: 'proceed', okText: 'OK, clear it'
@@ -6569,14 +6603,14 @@ async function clearCustomerDebt(cid){
    ============================================================ */
 let creditFilter = 'all';
 function screenCredit(){
-  let sales = state.sales.filter(s=>s.shopId===state.currentShopId && s.status!=='paid' && s.status!=='voided');
+  let sales = state.sales.filter(s=>s.shopId===state.currentShopId && s.status!=='paid' && s.status!=='voided' && (isOwnerLike() || s.soldByUserId===state.sessionUserId));
   if(creditFilter==='due2') sales = sales.filter(s=>s.dueDate && daysBetween(todayISO(),s.dueDate)<=2);
   if(creditFilter==='overdue') sales = sales.filter(s=>s.dueDate && daysBetween(todayISO(),s.dueDate)<0);
   sales.sort((a,b)=>new Date(a.dueDate||0)-new Date(b.dueDate||0));
   const totalOwed = state.sales.filter(s=>s.shopId===state.currentShopId && s.status!=='paid' && s.status!=='voided').reduce((a,s)=>a+s.balance,0);
   return `
     ${subHeader("Credit Ledger")}
-    ${isMaster()?`<div class="stat-box accent" style="margin-bottom:14px;"><div class="lbl">Total Owed To You</div><div class="val">${fmtMoney(totalOwed)}</div></div>`:''}
+    ${isOwnerLike()?`<div class="stat-box accent" style="margin-bottom:14px;"><div class="lbl">Total Owed To You</div><div class="val">${fmtMoney(totalOwed)}</div></div>`:''}
     <div style="display:flex;gap:8px;margin-bottom:12px;overflow-x:auto;">
       ${['all','due2','overdue'].map(f=>`<button class="btn btn-sm ${creditFilter===f?'btn-dark':'btn-outline'}" data-filter="${f}">${f==='all'?'All':f==='due2'?'Due in 2 days':'Overdue'}</button>`).join('')}
     </div>
@@ -6586,7 +6620,7 @@ function screenCredit(){
       const d = s.dueDate? daysBetween(todayISO(), s.dueDate) : null;
       return `<div class="card">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-          <div><b>${cust?cust.fullName:'Unknown'}</b><div class="t2 subtle">${fmtDateAt(s.date, s.createdAt)}</div></div>
+          <div><b>${cust?cust.fullName:'Unknown'}</b>${holdOf(s.id)&&holdOf(s.id).held&&!holdOf(s.id).handed?' <span class="pill pill-amber">On hold</span>':''}<div class="t2 subtle">${fmtDateAt(s.date, s.createdAt)}</div></div>
           <div style="text-align:right;"><b style="color:var(--red);">${fmtMoney(s.balance)}</b>
             <div class="t2 ${d<0?'':''}" style="color:${d<0?'var(--red)':'var(--text-dim)'};">${d<0?Math.abs(d)+'d overdue':'due in '+d+'d'}</div>
           </div>
@@ -6614,7 +6648,7 @@ function bindCreditEvents(){
   }));
   document.querySelectorAll('[data-mark-paid]').forEach(b=>b.addEventListener('click', async ()=>{
     const s = state.sales.find(x=>x.id===b.dataset.markPaid);
-    if(isStaff() && s.soldByUserId !== state.sessionUserId){ toast('Staff can only mark paid sales they made.'); return; }
+    if(isStaff() && !isSuperAdmin() && s.soldByUserId !== state.sessionUserId){ toast('Staff can only mark paid sales they made.'); return; }
     const amt = Number(await appPrompt(`Amount received (balance ${fmtMoney(s.balance)}):`, s.balance) || 0);
     if(amt<=0) return;
     payLogAdd(s.id, amt, 'Payment received');
@@ -6640,10 +6674,10 @@ function screenCloseDay(){
   }
   const u = currentUser();
   const mySalesToday = state.sales.filter(s=>s.shopId===state.currentShopId && s.date===todayISO() && s.status!=='voided' &&
-    (isMaster() || s.soldByUserId===state.sessionUserId));
-  const systemCash = mySalesToday.reduce((a,s)=>a+s.paidAmount,0);
+    (isOwnerLike() || s.soldByUserId===state.sessionUserId));
+  const systemCash = mySalesToday.filter(s=>saleMethodOf(s.id)==='cash').reduce((a,s)=>a+s.paidAmount,0);
   const already = state.dayClosures.find(d=>d.shopId===state.currentShopId && d.date===todayISO() && d.userId===state.sessionUserId);
-  const allClosures = isMaster() ? state.dayClosures.filter(d=>d.shopId===state.currentShopId && d.date===todayISO()) : [];
+  const allClosures = isOwnerLike() ? state.dayClosures.filter(d=>d.shopId===state.currentShopId && d.date===todayISO()) : [];
 
   return `
     ${subHeader("Close Day")}
@@ -6656,14 +6690,15 @@ function screenCloseDay(){
       </div>
     ` : `
       <div class="card">
-        <div class="stat-box" style="margin-bottom:12px;"><div class="lbl">System Says You Collected</div><div class="val">${fmtMoney(systemCash)}</div></div>
+        <div class="stat-box" style="margin-bottom:12px;"><div class="lbl">System Says You Collected In Cash</div><div class="val">${fmtMoney(systemCash)}</div></div>
+        ${(()=>{ const o = {transfer:0,pos:0}; mySalesToday.forEach(s=>{ const m = saleMethodOf(s.id); if(m!=='cash') o[m]+=s.paidAmount; }); return (o.transfer||o.pos) ? `<p class="subtle" style="margin:-4px 0 12px;">Also received, not counted as cash: Transfer ${fmtMoney(o.transfer)} · POS ${fmtMoney(o.pos)}</p>` : ''; })()}
         <div class="field"><label>Cash You Counted</label><input id="cd-counted" type="number" min="0"></div>
         <div class="field"><label>Note <span class="subtle">(required if there's a shortage)</span></label><textarea id="cd-note" rows="2" placeholder="e.g. gave change from own pocket"></textarea></div>
         <button class="btn btn-danger" id="cd-submit">Submit &amp; Close</button>
       </div>
       <button class="btn btn-outline" id="cd-handover-btn" style="margin-top:12px;">${ICON_PIN} Leave a note for the next shift</button>
     `}
-    ${isMaster() && allClosures.length>0 ? `
+    ${isOwnerLike() && allClosures.length>0 ? `
       <div class="section-head"><h3>Today's Closures (All Staff)</h3></div>
       ${allClosures.map(d=>{
         const st = state.users.find(u2=>u2.id===d.userId);
@@ -6683,8 +6718,8 @@ function bindCloseDayEvents(){
   if(!submit) return;
   submit.addEventListener('click', ()=>{
     const mySalesToday = state.sales.filter(s=>s.shopId===state.currentShopId && s.date===todayISO() && s.status!=='voided' &&
-      (isMaster() || s.soldByUserId===state.sessionUserId));
-    const systemCash = mySalesToday.reduce((a,s)=>a+s.paidAmount,0);
+      (isOwnerLike() || s.soldByUserId===state.sessionUserId));
+    const systemCash = mySalesToday.filter(s=>saleMethodOf(s.id)==='cash').reduce((a,s)=>a+s.paidAmount,0);
     const counted = Number(document.getElementById('cd-counted').value||0);
     const note = document.getElementById('cd-note').value.trim();
     const diff = counted - systemCash;
@@ -6799,13 +6834,18 @@ function openMessageSendSheet(o){
 /* ---------------- Payments log (when each part-payment was received) ----------------
    Kept on this phone, keyed by sale. Payments made before this update are shown as "Paid at sale / earlier". */
 const PAYLOG_KEY = 'zs_paylog_v1';
-function payLogAll(){ try{ const o = JSON.parse(localStorage.getItem(PAYLOG_KEY) || '{}'); return (o && typeof o==='object') ? o : {}; }catch(_e){ return {}; } }
+function payLogAll(){
+  const map = {};
+  zxList('payment').forEach(r=>{ const d = r.data||{}; (map[d.saleId] = map[d.saleId] || []).push({ amt:Number(d.amt)||0, at:d.at, by:d.by, note:d.note||'' }); });
+  Object.values(map).forEach(a=>a.sort((x,y)=>String(x.at).localeCompare(String(y.at))));
+  return map;
+}
 function payLogAdd(saleId, amt, note){
-  try{ const all = payLogAll(); (all[saleId] = all[saleId] || []).push({ amt: Number(amt)||0, at: new Date().toISOString(), by: state.sessionUserId, note: note||'' }); localStorage.setItem(PAYLOG_KEY, JSON.stringify(all)); }catch(_e){}
+  zxSet('payment', uid('pay'), { saleId, amt: Number(amt)||0, at: new Date().toISOString(), by: state.sessionUserId, note: note||'' });
 }
 function customerPayments(cid){
   const log = payLogAll(), out = [];
-  state.sales.filter(s=>s.customerId===cid && s.status!=='voided').forEach(s=>{
+  state.sales.filter(s=>s.customerId===cid && s.status!=='voided' && (isOwnerLike() || s.soldByUserId===state.sessionUserId)).forEach(s=>{   // staff see only payments on sales they made
     const entries = log[s.id] || [];
     const logged = entries.reduce((a,e)=>a+e.amt, 0);
     const initial = Math.max(0, (s.paidAmount||0) - logged);
@@ -6815,12 +6855,12 @@ function customerPayments(cid){
   return out.sort((a,b)=>new Date(b.at)-new Date(a.at));
 }
 function customerStatementDoc(c){
-  const sales = state.sales.filter(s=>s.customerId===c.id && s.status!=='voided').sort((a,b)=>new Date(a.createdAt||a.date)-new Date(b.createdAt||b.date));
+  const sales = state.sales.filter(s=>s.customerId===c.id && s.status!=='voided' && (isOwnerLike() || s.soldByUserId===state.sessionUserId)).sort((a,b)=>new Date(a.createdAt||a.date)-new Date(b.createdAt||b.date));
   const pays = customerPayments(c.id).slice().reverse();
   const bought = sales.reduce((a,s)=>a+s.subtotal, 0);
   const paid = sales.reduce((a,s)=>a+(s.paidAmount||0), 0);
-  const owed = customerBalance(c.id);
-  const rows = [{t:'h', text:'Purchases'}];
+  const owed = sales.reduce((a,s)=>a+(s.balance||0), 0);
+  const rows = [{t:'h', text:isOwnerLike() ? 'Purchases' : 'Purchases (sales you made)'}];
   if(!sales.length) rows.push({t:'note', text:'No purchases yet.'});
   sales.forEach(s=>rows.push({ l: fmtDateAt(s.date, s.createdAt)+' · #'+s.id.slice(-6).toUpperCase(), r: fmtMoneyCanvas(s.subtotal), s: s.balance>0 ? 'Balance due '+fmtMoneyCanvas(s.balance)+(s.dueDate?' · due '+fmtDate(s.dueDate):'') : 'Paid' }));
   rows.push({t:'h', text:'Payments received'});
@@ -6837,7 +6877,7 @@ function customerStatementDoc(c){
 function reminderCandidates(){
   const map = {};
   state.sales.filter(s=>s.shopId===state.currentShopId && s.customerId && s.status!=='paid' && s.status!=='voided' && s.balance>0 && s.dueDate &&
-      (isMaster() || s.soldByUserId===state.sessionUserId) && daysBetween(todayISO(), s.dueDate) <= 2).forEach(s=>{
+      (isOwnerLike() || s.soldByUserId===state.sessionUserId) && daysBetween(todayISO(), s.dueDate) <= 2).forEach(s=>{
     const m = map[s.customerId] = map[s.customerId] || { cust: state.customers.find(c=>c.id===s.customerId), total:0, due:s.dueDate, overdue:false };
     m.total += s.balance;
     if(s.dueDate < m.due) m.due = s.dueDate;
@@ -6857,7 +6897,7 @@ function openReminderFor(custId){
 
 /* ---------------- Birthdays & customer anniversaries (birthday is kept on this phone) ---------------- */
 const BDAY_KEY = 'zs_birthdays_v1';
-function bdayAll(){ try{ const o = JSON.parse(localStorage.getItem(BDAY_KEY) || '{}'); return (o && typeof o==='object') ? o : {}; }catch(_e){ return {}; } }
+function bdayAll(){ const o = {}; zxList('birthday').forEach(r=>{ if(r.data && r.data.md) o[r.key] = r.data.md; }); return o; }
 function bdayFieldHtml(cid){
   const md = cid ? bdayGet(cid) : '', [bm, bd] = md ? md.split('-') : ['', ''];
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -6869,7 +6909,7 @@ function bdayFieldHtml(cid){
 }
 function readBdayFields(){ const m = document.getElementById('ac-bmonth'), d = document.getElementById('ac-bday'); if(!m || !d) return null; return (m.value && d.value) ? m.value+'-'+d.value : ''; }
 function bdayGet(cid){ return bdayAll()[cid] || ''; }
-function bdaySet(cid, md){ if(md===null) return; try{ const all = bdayAll(); if(md) all[cid] = md; else delete all[cid]; localStorage.setItem(BDAY_KEY, JSON.stringify(all)); }catch(_e){} }
+function bdaySet(cid, md){ if(md===null) return; if(md) zxSet('birthday', cid, { md }); else if(zxGet('birthday', cid)) zxSet('birthday', cid, {}, true); }
 function daysToMD(md){ // days from today until the next MM-DD (0 = today, negative = passed within the last 2 days)
   const t = new Date(todayISO()+'T00:00:00');
   const [m, d] = md.split('-').map(Number);
@@ -6881,7 +6921,7 @@ function daysToMD(md){ // days from today until the next MM-DD (0 = today, negat
 }
 function occasionCandidates(){
   const out = [], bd = bdayAll();
-  state.customers.filter(c=>c.businessId===business().id).forEach(c=>{
+  state.customers.filter(c=>c.businessId===business().id && customerVisible(c)).forEach(c=>{
     if(bd[c.id]){ const d = daysToMD(bd[c.id]); if(d!==null) out.push({ kind:'birthday', cust:c, days:d }); }
     const first = state.sales.filter(s=>s.customerId===c.id && s.status!=='voided').map(s=>s.date).sort()[0];
     if(first){
@@ -6926,7 +6966,7 @@ function recentRiskyActions(limit){
   return state.auditLog.filter(l=>l.businessId===biz && RISKY_ACTIONS[l.action]).slice(0, limit||30);
 }
 function staffNoticeLine(){ // bell line for the owner: other people's risky actions in the last 24 hours
-  if(!isMaster()) return null;
+  if(!isOwnerLike()) return null;
   const since = Date.now() - 86400000;
   const recent = recentRiskyActions(60).filter(l=>l.userId!==state.sessionUserId && new Date(l.timestamp).getTime() >= since);
   if(!recent.length) return null;
@@ -6940,7 +6980,7 @@ function staffNoticeLine(){ // bell line for the owner: other people's risky act
   return bits.join(' · ');
 }
 function screenStaffActivity(){
-  if(!isMaster()) return `${subHeader('Staff Activity')}<div class="empty"><div class="ic">${ICON_LOCK}</div><b>Owner only</b>Only the business owner can see staff activity.</div>`;
+  if(!isOwnerLike()) return `${subHeader('Staff Activity')}<div class="empty"><div class="ic">${ICON_LOCK}</div><b>Owner only</b>Only the business owner can see staff activity.</div>`;
   const labels = {today:'Today', week:'This Week', '7d':'7 Days', '30d':'30 Days', month:'This Month'};
   const rows = staffActivityRows(staffActRange);
   const risky = recentRiskyActions(25);
@@ -6984,13 +7024,14 @@ function bindStaffActivityEvents(){
 /* ---------------- Daily summary (Close Day) ---------------- */
 function dailySummaryData(){
   const day = todayISO(), biz = business().id;
-  const own = s=>isMaster() || s.soldByUserId===state.sessionUserId;
+  const own = s=>isOwnerLike() || s.soldByUserId===state.sessionUserId;
   const sales = state.sales.filter(s=>s.shopId===state.currentShopId && s.date===day && s.status!=='voided' && own(s));
-  const logs = state.auditLog.filter(l=>l.businessId===biz && String(l.timestamp).slice(0,10)===day && (isMaster() || l.userId===state.sessionUserId));
+  const logs = state.auditLog.filter(l=>l.businessId===biz && String(l.timestamp).slice(0,10)===day && (isOwnerLike() || l.userId===state.sessionUserId));
   const cnt = a=>logs.filter(l=>l.action===a).length;
-  const expenses = isMaster() ? state.expenses.filter(e=>e.shopId===state.currentShopId && e.date===day).reduce((a,e)=>a+e.amount,0) : null;
+  const expenses = isOwnerLike() ? state.expenses.filter(e=>e.shopId===state.currentShopId && e.date===day).reduce((a,e)=>a+e.amount,0) : null;
   const items = sales.reduce((a,s)=>a+s.items.reduce((b,it)=>b+netQty(it),0),0);
-  return { sales: sales.length, total: sales.reduce((a,s)=>a+s.subtotal,0), cash: sales.reduce((a,s)=>a+(s.paidAmount||0),0),
+  const byMethod = { cash:0, transfer:0, pos:0 }; sales.forEach(s=>{ byMethod[saleMethodOf(s.id)] += (s.paidAmount||0); });
+  return { byMethod, sales: sales.length, total: sales.reduce((a,s)=>a+s.subtotal,0), cash: sales.reduce((a,s)=>a+(s.paidAmount||0),0),
     credit: sales.reduce((a,s)=>a+(s.balance||0),0), items, expenses, voids: cnt('sale_voided'), returns: cnt('sale_return'), cleared: cnt('debt_cleared') };
 }
 function dailySummaryHtml(){
@@ -7002,7 +7043,8 @@ function dailySummaryHtml(){
         <div class="stat-box"><div class="lbl">Sales (${d.sales})</div><div class="val">${fmtMoney(d.total)}</div></div>
         <div class="stat-box"><div class="lbl">Cash received</div><div class="val">${fmtMoney(d.cash)}</div></div>
       </div>
-      <div class="t2" style="margin-top:8px;">Credit given ${fmtMoney(d.credit)} · ${d.items} item${d.items===1?'':'s'} sold${d.expenses!==null?` · Expenses ${fmtMoney(d.expenses)}`:''}</div>
+      <div class="t2" style="margin-top:8px;">Cash ${fmtMoney(d.byMethod.cash)} · Transfer ${fmtMoney(d.byMethod.transfer)} · POS ${fmtMoney(d.byMethod.pos)}</div>
+      <div class="t2" style="margin-top:4px;">Credit given ${fmtMoney(d.credit)} · ${d.items} item${d.items===1?'':'s'} sold${d.expenses!==null?` · Expenses ${fmtMoney(d.expenses)}`:''}</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
         <span class="pill ${d.voids?'pill-red':'pill-gray'}">${d.voids} void${d.voids===1?'':'s'}</span>
         <span class="pill ${d.returns?'pill-amber':'pill-gray'}">${d.returns} return${d.returns===1?'':'s'}</span>
@@ -7018,6 +7060,9 @@ function bindDailySummary(){
     const rows = [
       { l:'Sales ('+d.sales+')', r: fmtMoneyCanvas(d.total), b:true },
       { l:'Cash received', r: fmtMoneyCanvas(d.cash) },
+      { l:'  of which cash', r: fmtMoneyCanvas(d.byMethod.cash) },
+      { l:'  of which transfer', r: fmtMoneyCanvas(d.byMethod.transfer) },
+      { l:'  of which POS', r: fmtMoneyCanvas(d.byMethod.pos) },
       { l:'Credit given', r: fmtMoneyCanvas(d.credit) },
       { l:'Items sold', r: String(d.items) },
     ];
@@ -7061,6 +7106,453 @@ function bindReorderEvents(){
 }
 
 /* ============================================================
+   SHARED EXTRAS — small records every phone in the business sees
+   (birthdays, payment times, payment method, layaway holds, quotations, expense times & photos).
+   Stored in one Supabase table (business_extras) through the signed-in session. If that table has not been
+   created yet, or the phone is offline, everything keeps working from this phone and syncs later.
+   ============================================================ */
+const ZX_KEY = 'zs_extras_v2';
+let zx = null, zxBusy = false, zxTimer = null, zxOff = false;
+const zxPhotoMem = new Map();
+function zxLoad(){
+  if(zx) return zx;
+  try{ zx = JSON.parse(localStorage.getItem(ZX_KEY) || 'null'); }catch(_e){ zx = null; }
+  if(!zx || typeof zx !== 'object') zx = {};
+  zx.rows = zx.rows || {}; zx.pending = zx.pending || []; zx.lastPull = zx.lastPull || ''; zx.migrated = !!zx.migrated;
+  return zx;
+}
+function zxSave(){ try{ localStorage.setItem(ZX_KEY, JSON.stringify(zx)); return true; }catch(_e){ return false; } }
+function zxMissing(e){ return /42P01|PGRST205|PGRST204|does not exist|Could not find the table/i.test(String((e && (e.code||'')) + ' ' + (e && e.message || ''))); }
+function zxGet(kind, key){ const r = zxLoad().rows[kind+'|'+key]; return (r && !r.deleted) ? r.data : null; }
+function zxList(kind){ const biz = business() && business().id; return Object.values(zxLoad().rows).filter(r=>r.kind===kind && r.biz===biz && !r.deleted); }
+function zxSet(kind, key, data, deleted){
+  const z = zxLoad(), k = kind+'|'+key;
+  z.rows[k] = { kind, key, biz: business().id, data: data || {}, deleted: !!deleted, updated_at: new Date().toISOString(), by: state.sessionUserId };
+  if(!z.pending.includes(k)) z.pending.push(k);
+  if(!zxSave()){ if(kind==='expphoto') toast('Not enough space on this phone to keep the photo.'); }
+  zxPush();
+  return z.rows[k];
+}
+async function zxPush(){
+  const z = zxLoad();
+  if(zxBusy || zxOff || !z.pending.length || !window.sb) return;
+  zxBusy = true;
+  try{
+    const { data: sd } = await window.sb.auth.getSession();
+    if(!sd || !sd.session) return;
+    for(let guard = 0; z.pending.length && guard < 200; guard++){
+      const k = z.pending[0], r = z.rows[k];
+      if(!r){ z.pending.shift(); continue; }
+      const { error } = await window.sb.from('business_extras').upsert(
+        { business_id: r.biz, kind: r.kind, key: r.key, data: r.data, deleted: r.deleted, updated_by: String(r.by||''), updated_at: r.updated_at },
+        { onConflict: 'business_id,kind,key' });
+      if(error){ if(zxMissing(error)) zxOff = true; break; }
+      if(z.rows[k] && z.rows[k].updated_at !== r.updated_at) continue; // changed while sending: send the newer version too
+      if(z.pending[0] === k) z.pending.shift(); else z.pending = z.pending.filter(x=>x!==k);
+      if(r.kind === 'expphoto' && r.data && r.data.photo){ zxPhotoMem.set(r.key, r.data.photo); r.data = { stub: true }; } // photo is safely on the server: free the phone's storage
+    }
+  }catch(_e){ /* retry on the next tick */ }
+  finally{ zxBusy = false; zxSave(); }
+}
+async function zxPull(){
+  const z = zxLoad();
+  if(zxOff || !window.sb || !business()) return;
+  try{
+    const { data: sd } = await window.sb.auth.getSession();
+    if(!sd || !sd.session) return;
+    let changed = false;
+    for(let page = 0; page < 5; page++){
+      let q = window.sb.from('business_extras').select('kind,key,data,deleted,updated_by,updated_at,business_id')
+        .eq('business_id', business().id).neq('kind', 'expphoto').order('updated_at', { ascending: true }).limit(1000);
+      if(z.lastPull) q = q.gt('updated_at', z.lastPull);
+      const { data, error } = await q;
+      if(error){ if(zxMissing(error)) zxOff = true; break; }
+      (data || []).forEach(r=>{
+        const k = r.kind+'|'+r.key, loc = z.rows[k];
+        if(r.updated_at > z.lastPull) z.lastPull = r.updated_at;
+        if(z.pending.includes(k) && loc && loc.updated_at >= r.updated_at) return;
+        z.rows[k] = { kind: r.kind, key: r.key, biz: r.business_id, data: r.data || {}, deleted: !!r.deleted, updated_at: r.updated_at, by: r.updated_by };
+        changed = true;
+      });
+      if(!data || data.length < 1000) break;
+    }
+    zxSave();
+    if(changed) zxRefreshUI();
+  }catch(_e){}
+}
+function zxRefreshUI(){
+  const a = document.activeElement;
+  if(a && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) return;
+  if(document.getElementById('active-overlay') || document.getElementById('nz-bell')) return;
+  try{ refreshMain(); }catch(_e){}
+}
+async function zxPhoto(expId){
+  if(zxPhotoMem.has(expId)) return zxPhotoMem.get(expId);
+  const r = zxLoad().rows['expphoto|'+expId];
+  if(r && r.data && r.data.photo){ zxPhotoMem.set(expId, r.data.photo); return r.data.photo; }
+  try{
+    const { data } = await window.sb.from('business_extras').select('data').eq('business_id', business().id).eq('kind', 'expphoto').eq('key', expId).maybeSingle();
+    if(data && data.data && data.data.photo){ zxPhotoMem.set(expId, data.data.photo); return data.data.photo; }
+  }catch(_e){}
+  return null;
+}
+function zxCompressImage(file, maxSide, quality){
+  return new Promise((resolve, reject)=>{
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = ()=>{
+      const sc = Math.min(1, maxSide / Math.max(img.width, img.height));
+      const c = document.createElement('canvas'); c.width = Math.round(img.width*sc); c.height = Math.round(img.height*sc);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url); resolve(c.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = ()=>{ URL.revokeObjectURL(url); reject(new Error('Could not read that picture.')); };
+    img.src = url;
+  });
+}
+function zxKick(){
+  if(zxTimer || !business()) return;
+  const z = zxLoad();
+  if(!z.migrated){ // bring over what earlier versions kept only on this phone
+    try{
+      const pay = JSON.parse(localStorage.getItem('zs_paylog_v1') || '{}');
+      Object.keys(pay).forEach(sid=>(pay[sid]||[]).forEach((e,i)=>zxSet('payment', 'legacy-'+sid+'-'+i, { saleId: sid, amt: e.amt, at: e.at, by: e.by, note: e.note||'' })));
+      const bd = JSON.parse(localStorage.getItem('zs_birthdays_v1') || '{}');
+      Object.keys(bd).forEach(cid=>{ if(bd[cid]) zxSet('birthday', cid, { md: bd[cid] }); });
+    }catch(_e){}
+    z.migrated = true; zxSave();
+  }
+  zxPull(); zxPush();
+  zxTimer = setInterval(()=>{ zxPush(); zxPull(); }, 45000);
+  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden){ zxPush(); zxPull(); } });
+}
+function zxExpenseAt(id){ const d = zxGet('expense', id); return d ? d.at : ''; }
+function saleMethodOf(sid){ const d = zxGet('method', sid); return (d && d.m) || 'cash'; }
+const METHOD_LABEL = { cash:'Cash', transfer:'Transfer', pos:'POS' };
+
+/* ---------------- Stock count ---------------- */
+let stockCountVals = {};
+let stockCountSearch = '';
+function stockCountRows(){
+  const rows = [];
+  state.goods.filter(g=>g.shopId===state.currentShopId && isGoodActive(g)).forEach(g=>{
+    if(g.hasVariants) (g.variants||[]).forEach(v=>rows.push({ key:g.id+':'+v.id, g, v, name:g.name+' ('+v.label+')', system:Math.max(0,v.qty) }));
+    else rows.push({ key:g.id, g, v:null, name:g.name, system:totalStock(g) });
+  });
+  return rows.sort((a,b)=>a.name.localeCompare(b.name));
+}
+function stockCountResult(){
+  const out = [];
+  stockCountRows().forEach(r=>{
+    const raw = stockCountVals[r.key];
+    if(raw===undefined || raw==='') return;
+    const counted = Math.max(0, Math.floor(Number(raw)));
+    if(isNaN(counted)) return;
+    out.push({ ...r, counted, diff: counted - r.system, cost: Number(r.g.costPrice||0) });
+  });
+  return out;
+}
+function screenStockCount(){
+  if(!(isOwnerLike() || canDo('canAddGoods'))) return `${subHeader('Stock Count')}<div class="empty"><div class="ic">${ICON_LOCK}</div><b>Not available to you</b>Ask the Owner to allow you to manage goods.</div>`;
+  const q = stockCountSearch.trim().toLowerCase();
+  const rows = stockCountRows().filter(r=>!q || r.name.toLowerCase().includes(q));
+  const done = stockCountResult().length;
+  return `
+    ${subHeader('Stock Count')}
+    <p class="subtle" style="margin-bottom:10px;">Count what is physically on the shelf and type it in. Leave an item empty to skip it. Then see what is missing — nothing changes until you choose to apply the corrections.</p>
+    <input id="sc-search" placeholder="Search items…" value="${escAttr(stockCountSearch)}" style="width:100%;padding:11px 13px;border:1.5px solid var(--line);border-radius:10px;font-size:14px;margin-bottom:10px;">
+    ${rows.length===0 ? `<div class="empty"><div class="ic">${ICON_BOX}</div><b>No items</b>Add goods first.</div>` : rows.map(r=>`
+      <div class="list-row"><div class="thumb">${r.g.emoji||'🛍️'}</div>
+        <div class="info"><div class="t1">${escapeHtml(r.name)}</div><div class="t2">System: ${r.system}</div></div>
+        <div class="right"><input type="number" min="0" inputmode="numeric" data-sc-key="${escAttr(r.key)}" value="${stockCountVals[r.key]===undefined?'':escAttr(stockCountVals[r.key])}" placeholder="Counted" style="width:92px;padding:9px;border:1.5px solid var(--line);border-radius:10px;font-size:15px;text-align:center;"></div>
+      </div>`).join('')}
+    <div style="position:sticky;bottom:70px;background:var(--paper);padding:10px 0;">
+      <button class="btn btn-primary" id="sc-result" style="width:100%;">See result (${done} counted)</button>
+    </div>`;
+}
+function stockCountDoc(res){
+  const short = res.filter(r=>r.diff<0), over = res.filter(r=>r.diff>0), ok = res.filter(r=>r.diff===0);
+  const val = list=>list.reduce((a,r)=>a+Math.abs(r.diff)*r.cost, 0);
+  const rows = [{t:'h', text:'Summary'},
+    { l:'Items counted', r:String(res.length) }, { l:'Matched', r:String(ok.length) },
+    { l:'Missing ('+short.length+' items)', r:fmtMoneyCanvas(val(short)), b:true, c: short.length?'#C0392B':undefined },
+    { l:'Extra ('+over.length+' items)', r:fmtMoneyCanvas(val(over)) }];
+  if(short.length){ rows.push({t:'h', text:'Missing'}); short.forEach(r=>rows.push({ l:r.name, r:String(r.diff), s:'System '+r.system+' · counted '+r.counted+' · '+fmtMoneyCanvas(-r.diff*r.cost) })); }
+  if(over.length){ rows.push({t:'h', text:'Extra'}); over.forEach(r=>rows.push({ l:r.name, r:'+'+r.diff, s:'System '+r.system+' · counted '+r.counted })); }
+  return { title:'Stock Count', sub:[fmtDate(todayISO())+' · '+((currentShop()&&currentShop().name)||'')], rows };
+}
+function openStockCountResult(){
+  const res = stockCountResult();
+  if(!res.length){ toast('Type at least one counted number first.'); return; }
+  const changed = res.filter(r=>r.diff!==0);
+  const missingVal = res.filter(r=>r.diff<0).reduce((a,r)=>a+(-r.diff)*r.cost, 0);
+  openSheet(`
+    <div class="sheet-head"><h3>Stock Count Result</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
+    <div class="stat-grid">
+      <div class="stat-box"><div class="lbl">Counted</div><div class="val">${res.length}</div></div>
+      <div class="stat-box"><div class="lbl">Missing (at cost)</div><div class="val" style="color:${missingVal>0?'var(--red)':'var(--green)'}">${fmtMoney(missingVal)}</div></div>
+    </div>
+    ${changed.length===0 ? `<p class="subtle" style="margin:12px 0;">Everything you counted matches the system. ✅</p>` : changed.map(r=>`
+      <div class="list-row"><div class="thumb">${r.g.emoji||'🛍️'}</div>
+        <div class="info"><div class="t1">${escapeHtml(r.name)}</div><div class="t2">System ${r.system} · counted ${r.counted}</div></div>
+        <div class="right"><span class="pill ${r.diff<0?'pill-red':'pill-green'}">${r.diff>0?'+':''}${r.diff}</span></div></div>`).join('')}
+    <div style="display:flex;gap:10px;margin:14px 0 8px;">
+      <button class="btn btn-outline" id="scr-share" style="flex:1;">${ICON_EXPORT} Share / Save</button>
+      ${changed.length ? `<button class="btn btn-danger" id="scr-apply" style="flex:1;">Apply corrections</button>` : ''}
+    </div>
+    <p class="subtle">Applying changes your stock to match the count and records each change in the stock correction history. Only the Owner can raise stock.</p>`);
+  document.getElementById('scr-share').addEventListener('click', ()=>openDocSheet('Stock Count', stockCountDoc(res), 'stock-count-'+todayISO()));
+  const ap = document.getElementById('scr-apply');
+  if(ap) ap.addEventListener('click', ()=>applyStockCount(res));
+}
+function recordBatchAdjustment(g, b, oldQty, newQty, reason){
+  const adj = { id: uid('adj'), businessId: business().id, shopId: g.shopId, goodId: g.id, goodName: g.name, batchId: b.id, oldQty, newQty, difference: newQty-oldQty, reason,
+    adjustedByUserId: state.sessionUserId, adjustedAt: new Date().toISOString() };
+  state.stockAdjustments.unshift(adj);
+  enqueueSync('good_batches','update', { id: b.id, qty_remaining: b.qtyRemaining });
+  enqueueSync('stock_adjustments','insert', { id: adj.id, business_id: adj.businessId, shop_id: adj.shopId, good_id: adj.goodId, good_name: adj.goodName,
+    batch_id: adj.batchId, old_qty: oldQty, new_qty: newQty, difference: adj.difference, reason, adjusted_by_user_id: adj.adjustedByUserId });
+}
+async function applyStockCount(res){
+  const changed = res.filter(r=>r.diff!==0);
+  const raises = changed.filter(r=>r.diff>0);
+  if(raises.length && !isOwnerLike()){ toast('Only the Owner can raise stock with a count. Remove the extra items, or ask the Owner.'); return; }
+  const typed = await appDialog({
+    message: `⚠️ Warning\n\nThis changes the stock of ${changed.length} item${changed.length>1?'s':''} to match your count. It can't be undone automatically (each change is recorded in the correction history).\n\nType PROCEED to continue.`,
+    input: true, requireText: 'proceed', okText: 'OK, apply'
+  });
+  if(typed === null) return;
+  changed.forEach(r=>{
+    const g = r.g;
+    if(r.v){ const old = r.v.qty; r.v.qty = r.counted; enqueueSync('good_variants','update', { id: r.v.id, qty: r.v.qty }); logAudit('stock_corrected', `${r.name}: ${old} → ${r.counted} (stock count)`); return; }
+    const batches = g.batches.slice().sort((a,b)=>new Date(a.expiryDate)-new Date(b.expiryDate));
+    if(r.diff < 0){
+      let need = -r.diff;
+      for(const b of batches){ if(need<=0) break; if(b.qtyRemaining<=0) continue; const take = Math.min(b.qtyRemaining, need); const old = b.qtyRemaining; b.qtyRemaining -= take; need -= take; recordBatchAdjustment(g, b, old, b.qtyRemaining, 'Stock count'); }
+    } else if(batches.length){
+      const b = batches[batches.length-1], old = b.qtyRemaining; b.qtyRemaining += r.diff; recordBatchAdjustment(g, b, old, b.qtyRemaining, 'Stock count');
+    }
+    logAudit('stock_corrected', `${g.name}: ${r.system} → ${r.counted} (${r.diff>0?'+':''}${r.diff}) — stock count`);
+  });
+  stockCountVals = {};
+  toast('Stock updated ✅'); closeSheet(); render();
+}
+function bindStockCountEvents(){
+  const s = document.getElementById('sc-search');
+  if(s) s.addEventListener('input', e=>{ stockCountSearch = e.target.value; refreshMainKeepFocus('sc-search'); });
+  document.querySelectorAll('[data-sc-key]').forEach(i=>i.addEventListener('input', ()=>{ stockCountVals[i.dataset.scKey] = i.value; const b = document.getElementById('sc-result'); if(b) b.textContent = 'See result ('+stockCountResult().length+' counted)'; }));
+  const b = document.getElementById('sc-result');
+  if(b) b.addEventListener('click', openStockCountResult);
+}
+
+/* ---------------- Quotations ---------------- */
+let quoteDraft = null;
+function quotePrice(g, custId){
+  const sv = saleCustomerId; saleCustomerId = custId || null;
+  try{ return activePrice(g); } finally { saleCustomerId = sv; }
+}
+function quoteList(){ return zxList('quote').map(r=>({ id:r.key, ...r.data })).filter(q=>q.shopId===state.currentShopId).sort((a,b)=>String(b.createdAt).localeCompare(String(a.createdAt))); }
+function quoteTotal(q){ return (q.items||[]).reduce((a,i)=>a+i.price*i.qty, 0); }
+function quoteNo(q){ return 'Q-'+String(q.id).slice(-5).toUpperCase(); }
+function quoteStatus(q){ if(q.status==='sold') return ['Sold','pill-green']; if(q.validUntil && q.validUntil < todayISO()) return ['Expired','pill-gray']; return ['Open','pill-amber']; }
+function screenQuotes(){
+  const list = quoteList();
+  return `
+    ${subHeader('Quotations')}
+    <button class="btn btn-primary" id="new-quote-btn" style="width:100%;margin-bottom:14px;">＋ New quotation</button>
+    ${list.length===0 ? `<div class="empty"><div class="ic">${ICON_FILE}</div><b>No quotations yet</b>Make a price quote for a customer, share it, and turn it into a sale when they accept.</div>` : list.map(q=>{ const st = quoteStatus(q); return `
+      <div class="card" data-quote="${q.id}" style="cursor:pointer;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+          <div><div class="t1">${escapeHtml(q.name||'Walk-in')}</div><div class="t2">${quoteNo(q)} · ${fmtDate(q.createdAt.slice(0,10))}${q.validUntil?' · valid to '+fmtDate(q.validUntil):''}</div></div>
+          <div style="text-align:right;flex-shrink:0;"><b>${fmtMoney(quoteTotal(q))}</b><br><span class="pill ${st[1]}">${st[0]}</span></div>
+        </div></div>`; }).join('')}`;
+}
+function bindQuotesEvents(){
+  const n = document.getElementById('new-quote-btn'); if(n) n.addEventListener('click', ()=>openQuoteEditor());
+  document.querySelectorAll('[data-quote]').forEach(el=>el.addEventListener('click', ()=>openQuoteSheet(el.dataset.quote)));
+}
+function openQuoteEditor(){
+  const d = new Date(); d.setDate(d.getDate()+7);
+  quoteDraft = { custId:'', name:'', phone:'', items:[], validUntil:d.toISOString().slice(0,10), note:'' };
+  renderQuoteEditor();
+}
+function renderQuoteEditor(search){
+  const q = quoteDraft, s = (search||'').toLowerCase();
+  const customers = state.customers.filter(c=>c.businessId===business().id && (customerVisible(c) || c.id===saleCustomerId));
+  const goods = state.goods.filter(g=>g.shopId===state.currentShopId && isGoodActive(g) && (!s || g.name.toLowerCase().includes(s))).slice(0, 12);
+  const opts = [];
+  goods.forEach(g=>{ if(g.hasVariants) (g.variants||[]).forEach(v=>opts.push({ g, v })); else opts.push({ g, v:null }); });
+  openSheet(`
+    <div class="sheet-head"><h3>New Quotation</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
+    <div class="field"><label>Customer</label>
+      <select id="qe-cust"><option value="">Walk-in / not saved</option>${customers.map(c=>`<option value="${c.id}" ${q.custId===c.id?'selected':''}>${escapeHtml(c.fullName)}</option>`).join('')}</select></div>
+    ${q.custId ? '' : `<div class="field"><label>Name <span class="subtle">(optional)</span></label><input id="qe-name" value="${escAttr(q.name)}" placeholder="e.g. Mama Chidi"></div>`}
+    <div class="field"><label>Add items <span class="subtle">(prices come from your goods and can't be changed)</span></label><input id="qe-search" value="${escAttr(search||'')}" placeholder="Search items…"></div>
+    <div style="max-height:170px;overflow-y:auto;margin-bottom:10px;">
+      ${opts.map((o,i)=>`<div class="list-row" data-qe-add="${i}" style="cursor:pointer;"><div class="thumb">${o.g.emoji||'🛍️'}</div><div class="info"><div class="t1">${escapeHtml(o.g.name)}${o.v?' ('+escapeHtml(o.v.label)+')':''}</div><div class="t2">${fmtMoney(quotePrice(o.g, q.custId))}</div></div><div>＋</div></div>`).join('') || '<p class="subtle">No items match.</p>'}
+    </div>
+    ${q.items.length ? `<div class="section-head"><h3>In this quotation</h3></div>` + q.items.map((it,i)=>`
+      <div class="list-row"><div class="info"><div class="t1">${escapeHtml(it.name)}${it.label?' ('+escapeHtml(it.label)+')':''}</div><div class="t2">${fmtMoney(it.price)} each</div></div>
+        <div class="right" style="display:flex;align-items:center;gap:8px;"><button class="btn btn-sm btn-outline" data-qe-dec="${i}">−</button><b>${it.qty}</b><button class="btn btn-sm btn-outline" data-qe-inc="${i}">＋</button></div></div>`).join('') +
+      `<div style="display:flex;justify-content:space-between;font-weight:800;margin:10px 0;"><span>Total</span><span>${fmtMoney(quoteTotal(q))}</span></div>` : ''}
+    <div class="row2">
+      <div class="field"><label>Valid until</label><input id="qe-valid" type="date" value="${q.validUntil}"></div>
+    </div>
+    <div class="field"><label>Note <span class="subtle">(optional)</span></label><input id="qe-note" value="${escAttr(q.note)}" placeholder="e.g. Delivery included"></div>
+    <button class="btn btn-primary" id="qe-save">Save quotation</button>`);
+  const sync = ()=>{ const n = document.getElementById('qe-name'); if(n) q.name = n.value.trim(); q.validUntil = document.getElementById('qe-valid').value; q.note = document.getElementById('qe-note').value.trim(); };
+  document.getElementById('qe-cust').addEventListener('change', e=>{ sync(); q.custId = e.target.value; const c = state.customers.find(x=>x.id===q.custId); if(c){ q.name = c.fullName; q.phone = c.phoneE164||''; } else { q.name = ''; q.phone = ''; }
+    q.items.forEach(it=>{ const g = state.goods.find(x=>x.id===it.goodId); if(g) it.price = quotePrice(g, q.custId); }); renderQuoteEditor(); });
+  const si = document.getElementById('qe-search');
+  si.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); sync(); renderQuoteEditor(si.value); } });
+  si.addEventListener('change', ()=>{ sync(); renderQuoteEditor(si.value); });
+  document.querySelectorAll('[data-qe-add]').forEach(el=>el.addEventListener('click', ()=>{
+    sync(); const o = opts[Number(el.dataset.qeAdd)];
+    const ex = q.items.find(i=>i.goodId===o.g.id && (i.variantId||null)===(o.v?o.v.id:null));
+    if(ex) ex.qty++; else q.items.push({ goodId:o.g.id, variantId:o.v?o.v.id:null, label:o.v?o.v.label:'', name:o.g.name, qty:1, price:quotePrice(o.g, q.custId) });
+    renderQuoteEditor(si.value);
+  }));
+  document.querySelectorAll('[data-qe-inc]').forEach(el=>el.addEventListener('click', ()=>{ sync(); q.items[Number(el.dataset.qeInc)].qty++; renderQuoteEditor(si.value); }));
+  document.querySelectorAll('[data-qe-dec]').forEach(el=>el.addEventListener('click', ()=>{ sync(); const i = Number(el.dataset.qeDec); if(--q.items[i].qty<=0) q.items.splice(i,1); renderQuoteEditor(si.value); }));
+  document.getElementById('qe-save').addEventListener('click', ()=>{
+    sync();
+    if(!q.items.length){ toast('Add at least one item.'); return; }
+    const id = uid('quote');
+    zxSet('quote', id, { shopId: state.currentShopId, custId:q.custId, name:q.name, phone:q.phone, items:q.items, validUntil:q.validUntil, note:q.note, status:'open', createdAt:new Date().toISOString(), by:state.sessionUserId });
+    logAudit('quote_created', `Quotation ${fmtMoney(quoteTotal(q))} for ${q.name||'walk-in'}`);
+    quoteDraft = null; toast('Quotation saved ✅'); closeSheet(); render(); openQuoteSheet(id);
+  });
+}
+function quoteDoc(q){
+  const rows = [{t:'h', text:'Items'}];
+  (q.items||[]).forEach(i=>rows.push({ l:i.name+(i.label?' ('+i.label+')':'')+' x '+i.qty, r:fmtMoneyCanvas(i.price*i.qty), s: i.qty>1 ? fmtMoneyCanvas(i.price)+' each' : '' }));
+  rows.push({t:'line'}, { l:'TOTAL', r:fmtMoneyCanvas(quoteTotal(q)), b:true });
+  if(q.validUntil) rows.push({t:'note', text:'This quotation is valid until '+fmtDate(q.validUntil)+'.'});
+  if(q.note) rows.push({t:'note', text:q.note});
+  return { title:'Quotation '+quoteNo(q), sub:['Prepared for '+(q.name||'customer'), fmtDate(String(q.createdAt).slice(0,10))], rows };
+}
+function openQuoteSheet(id){
+  const r = zxGet('quote', id); if(!r){ toast('Could not find that quotation.'); return; }
+  const q = { id, ...r }, st = quoteStatus(q);
+  openSheet(`
+    <div class="sheet-head"><h3>${quoteNo(q)} <span class="pill ${st[1]}" style="margin-left:6px;">${st[0]}</span></h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
+    <div style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;justify-content:center;margin-bottom:14px;"><canvas id="doc-canvas" style="max-width:100%;height:auto;display:block;"></canvas></div>
+    <div style="display:flex;gap:10px;margin-bottom:10px;">
+      <button class="btn btn-primary" id="doc-share" style="flex:2;min-width:0;white-space:nowrap;">${ICON_EXPORT} Share</button>
+      <button class="btn btn-outline" id="doc-save" style="flex:1;min-width:0;white-space:nowrap;">💾 Save</button>
+    </div>
+    <button class="btn btn-outline" id="q-msg" style="width:100%;margin-bottom:10px;">Send as message</button>
+    ${q.status!=='sold' ? `<button class="btn btn-dark" id="q-sell" style="width:100%;margin-bottom:10px;">Make this a sale →</button>` : ''}
+    <button class="btn btn-danger btn-sm" id="q-del" style="width:100%;">Delete quotation</button>`);
+  const canvas = document.getElementById('doc-canvas'), doc = quoteDoc(q), fname = 'quotation-'+quoteNo(q);
+  drawDocToCanvas(canvas, doc);
+  document.getElementById('doc-save').addEventListener('click', ()=>saveCanvasPng(canvas, fname+'.png', 'Saved quotation '+quoteNo(q)));
+  document.getElementById('doc-share').addEventListener('click', ()=>{ canvas.toBlob(async blob=>{
+    if(!blob) return; const file = new File([blob], fname+'.png', {type:'image/png'});
+    if(navigator.canShare && navigator.canShare({files:[file]})){ try{ await navigator.share({files:[file], title:business().name}); }catch(_e){} } else saveCanvasPng(canvas, fname+'.png'); }, 'image/png'); });
+  document.getElementById('q-msg').addEventListener('click', ()=>{
+    const shop = (currentShop()&&currentShop().name)||business().name, first = (q.name||'').split(' ')[0] || 'there';
+    const lines = q.items.map(i=>`• ${i.name}${i.label?' ('+i.label+')':''} × ${i.qty} — ${fmtMoney(i.price*i.qty)}`).join('\n');
+    const c = state.customers.find(x=>x.id===q.custId);
+    openMessageSendSheet({ title:'Quotation '+quoteNo(q), who:q.name, phone:q.phone, country:c&&c.country, email:c&&c.email, subject:'Quotation '+quoteNo(q),
+      text:`Hello ${first}, here is your quotation from ${shop}:\n\n${lines}\n\nTotal: ${fmtMoney(quoteTotal(q))}${q.validUntil?'\nValid until '+fmtDate(q.validUntil):''}${q.note?'\n'+q.note:''}\n\nThank you.` });
+  });
+  const sell = document.getElementById('q-sell');
+  if(sell) sell.addEventListener('click', ()=>{
+    const bad = q.items.filter(i=>!state.goods.find(g=>g.id===i.goodId));
+    if(bad.length){ toast('Some items in this quotation no longer exist.'); return; }
+    cart = q.items.map(i=>({ goodId:i.goodId, variantId:i.variantId||null, qty:i.qty, note:'' }));
+    saleCustomerId = q.custId || null; saleWalkInName = q.custId ? '' : (q.name||''); saleWalkInPhone = q.custId ? '' : (q.phone||'');
+    zxSet('quote', id, { ...r, status:'sold', soldAt:new Date().toISOString() });
+    closeSheet(); route = 'sale'; render(); toast('Loaded into New Sale — prices are your current shop prices.');
+  });
+  document.getElementById('q-del').addEventListener('click', async ()=>{
+    if(!await appConfirm('Delete this quotation?')) return;
+    zxSet('quote', id, {}, true); closeSheet(); render();
+  });
+}
+
+/* ---------------- Layaway hold + supplier balance helpers (bell) ---------------- */
+function holdOf(sid){ return zxGet('hold', sid); }
+function readyToHandOver(){
+  return zxList('hold').filter(h=>h.data && h.data.held && !h.data.handed).map(h=>state.sales.find(s=>s.id===h.key))
+    .filter(s=>s && s.shopId===state.currentShopId && s.status!=='voided' && (s.balance||0)<=0);
+}
+function suppliersOwed(){
+  if(!isOwnerLike()) return [];
+  const map = {};
+  state.supplierPurchases.filter(p=>p.balance>0 && p.businessId===business().id).forEach(p=>{
+    const m = map[p.supplierId] = map[p.supplierId] || { sup: state.suppliers.find(x=>x.id===p.supplierId), total:0, since:p.date };
+    m.total += p.balance; if(p.date < m.since) m.since = p.date;
+  });
+  return Object.values(map).filter(m=>m.sup).sort((a,b)=>a.since<b.since?-1:1).slice(0, 6);
+}
+
+/* ---------------- Monthly export ---------------- */
+function monthData(ym){
+  const shopId = state.currentShopId;
+  const sales = state.sales.filter(s=>s.shopId===shopId && s.status!=='voided' && s.date.slice(0,7)===ym).sort((a,b)=>String(a.createdAt||a.date).localeCompare(String(b.createdAt||b.date)));
+  const expenses = state.expenses.filter(e=>e.shopId===shopId && e.date.slice(0,7)===ym).sort((a,b)=>a.date<b.date?-1:1);
+  const items = {};
+  let cogs = 0;
+  sales.forEach(s=>s.items.forEach(it=>{
+    const g = state.goods.find(x=>x.id===it.goodId), n = netQty(it); if(!g) return;
+    cogs += (g.costPrice||0) * n;
+    const m = items[g.id] = items[g.id] || { name:g.name, qty:0, rev:0 }; m.qty += n; m.rev += it.priceUsed * n;
+  }));
+  const revenue = sales.reduce((a,s)=>a+s.subtotal, 0), exp = expenses.reduce((a,e)=>a+e.amount, 0);
+  const byMethod = { cash:0, transfer:0, pos:0 }; sales.forEach(s=>{ byMethod[saleMethodOf(s.id)] += (s.paidAmount||0); });
+  const byCat = {}; expenses.forEach(e=>{ byCat[e.category] = (byCat[e.category]||0) + e.amount; });
+  return { ym, sales, expenses, items: Object.values(items).sort((a,b)=>b.rev-a.rev), revenue, cogs, gross: revenue-cogs, exp, net: revenue-cogs-exp,
+    credit: sales.reduce((a,s)=>a+(s.balance||0),0), byMethod, byCat };
+}
+function monthLabel(ym){ return new Date(ym+'-01T12:00:00').toLocaleDateString('en-GB', { month:'long', year:'numeric' }); }
+function monthDoc(ym){
+  const d = monthData(ym);
+  const rows = [{t:'h', text:'Summary'}, { l:'Sales ('+d.sales.length+')', r:fmtMoneyCanvas(d.revenue), b:true }, { l:'Cost of goods sold', r:fmtMoneyCanvas(d.cogs) }, { l:'Gross profit', r:fmtMoneyCanvas(d.gross) },
+    { l:'Expenses', r:fmtMoneyCanvas(d.exp) }, { l:'Net profit', r:fmtMoneyCanvas(d.net), b:true, c: d.net<0?'#C0392B':'#1E8E4E' }, { l:'Credit still owed from these sales', r:fmtMoneyCanvas(d.credit) },
+    {t:'h', text:'How customers paid'}, { l:'Cash', r:fmtMoneyCanvas(d.byMethod.cash) }, { l:'Transfer', r:fmtMoneyCanvas(d.byMethod.transfer) }, { l:'POS', r:fmtMoneyCanvas(d.byMethod.pos) }];
+  if(Object.keys(d.byCat).length){ rows.push({t:'h', text:'Expenses by type'}); Object.entries(d.byCat).sort((a,b)=>b[1]-a[1]).forEach(([c,v])=>rows.push({ l:c, r:fmtMoneyCanvas(v) })); }
+  rows.push({t:'h', text:'Best sellers'}); d.items.slice(0,6).forEach(i=>rows.push({ l:i.name+' x '+i.qty, r:fmtMoneyCanvas(i.rev) }));
+  if(!d.items.length) rows.push({t:'note', text:'No sales this month.'});
+  return { title:'Monthly Report', sub:[monthLabel(ym)+' · '+((currentShop()&&currentShop().name)||'')], rows };
+}
+function monthCsv(ym){
+  const d = monthData(ym), q = v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"', line = a=>a.map(q).join(',');
+  const out = [line(['ZeeShop monthly report', business().name, (currentShop()&&currentShop().name)||'', monthLabel(ym)]), '',
+    line(['SUMMARY']), line(['Sales count', d.sales.length]), line(['Revenue', d.revenue]), line(['Cost of goods', d.cogs]), line(['Gross profit', d.gross]), line(['Expenses', d.exp]), line(['Net profit', d.net]),
+    line(['Credit still owed', d.credit]), line(['Paid by cash', d.byMethod.cash]), line(['Paid by transfer', d.byMethod.transfer]), line(['Paid by POS', d.byMethod.pos]), '',
+    line(['SALES']), line(['Date','Time','Receipt','Customer','Sold by','Total','Paid','Balance','Status','Paid by'])];
+  d.sales.forEach(s=>{
+    const c = s.customerId ? state.customers.find(x=>x.id===s.customerId) : null, u = state.users.find(x=>x.id===s.soldByUserId);
+    out.push(line([s.date, fmtClock(s.createdAt), s.id.slice(-6).toUpperCase(), c ? c.fullName : (s.walkInName||'Walk-in'), u ? u.firstName+' '+u.lastName : '', s.subtotal, s.paidAmount||0, s.balance||0, s.status, METHOD_LABEL[saleMethodOf(s.id)]]));
+  });
+  out.push('', line(['EXPENSES']), line(['Date','Time','Category','Description','Amount']));
+  d.expenses.forEach(e=>out.push(line([e.date, fmtClock(zxExpenseAt(e.id)), e.category, e.description||'', e.amount])));
+  out.push('', line(['ITEMS SOLD']), line(['Item','Quantity','Revenue']));
+  d.items.forEach(i=>out.push(line([i.name, i.qty, i.rev])));
+  return '﻿' + out.join('\r\n');
+}
+function openMonthlyExport(){
+  const months = []; const t = new Date();
+  for(let i=0;i<12;i++){ const d = new Date(t.getFullYear(), t.getMonth()-i, 1, 12); months.push(d.toISOString().slice(0,7)); }
+  openSheet(`
+    <div class="sheet-head"><h3>Monthly Export</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
+    <div class="field"><label>Month</label><select id="mx-month">${months.map(m=>`<option value="${m}">${monthLabel(m)}</option>`).join('')}</select></div>
+    <div style="display:flex;gap:10px;margin-bottom:8px;">
+      <button class="btn btn-primary" id="mx-pic" style="flex:1;">Picture</button>
+      <button class="btn btn-outline" id="mx-csv" style="flex:1;">Excel (CSV)</button>
+    </div>
+    <p class="subtle">The picture is a one-page summary to share. The CSV opens in Excel or Google Sheets with every sale, expense and item for the month — handy for your accountant.</p>`);
+  document.getElementById('mx-pic').addEventListener('click', ()=>{ const ym = document.getElementById('mx-month').value; openDocSheet('Monthly Report', monthDoc(ym), 'monthly-report-'+ym); });
+  document.getElementById('mx-csv').addEventListener('click', ()=>{
+    const ym = document.getElementById('mx-month').value;
+    const blob = new Blob([monthCsv(ym)], { type:'text/csv;charset=utf-8' }), url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'zeeshop-'+ym+'.csv'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url), 2000);
+    logAudit('month_exported', 'Exported '+monthLabel(ym)); toast('Downloaded ✅');
+  });
+}
+
+/* ============================================================
    MORE / REPORTS / STAFF / SETTINGS / AUDIT
    ============================================================ */
 function screenMore(){
@@ -7073,13 +7565,15 @@ function screenMore(){
     {id:'lodging', ic:ICON_BED, label:t('more_lodging'), show:!isViewer() && isHotelBiz()},
     {id:'billpayments', ic:ICON_CARD, label:t('more_bill_payments'), show:!isViewer() && canDo('canBillPayments')},
     {id:'suppliers', ic:ICON_TRUCK, label:t('more_suppliers'), show:!isViewer()},
-    {id:'warehouse', ic:ICON_BOX, label:t('more_warehouse'), show:!isViewer() && (isMaster() || canDo('canAddGoods'))},
-    {id:'reports', ic:ICON_BARCHART, label:t('more_reports'), show:isMaster()},
-    {id:'compareshops', ic:ICON_BARCHART, label:t('more_compare'), show:isMaster() && ownerComparableShops().length>1},
+    {id:'warehouse', ic:ICON_BOX, label:t('more_warehouse'), show:!isViewer() && (isOwnerLike() || canDo('canAddGoods'))},
+    {id:'reports', ic:ICON_BARCHART, label:t('more_reports'), show:isOwnerLike()},
+    {id:'compareshops', ic:ICON_BARCHART, label:t('more_compare'), show:isOwnerLike() && ownerComparableShops().length>1},
     {id:'staff', ic:ICON_USERS, label:t('more_staff'), show:canManageStaff(), badge:pendingNameReqs},
-    {id:'audit', ic:ICON_FILE, label:t('more_audit'), show:isMaster()},
-    {id:'staffact', ic:ICON_USERS, label:'Staff Activity', show:isMaster()},
+    {id:'audit', ic:ICON_FILE, label:t('more_audit'), show:isOwnerLike()},
+    {id:'staffact', ic:ICON_USERS, label:'Staff Activity', show:isOwnerLike()},
     {id:'reorder', ic:ICON_BOX, label:'Reorder List', show:!isViewer()},
+    {id:'stockcount', ic:ICON_BOX, label:'Stock Count', show:!isViewer() && (isOwnerLike() || canDo('canAddGoods'))},
+    {id:'quotes', ic:ICON_FILE, label:'Quotations', show:!isViewer()},
     {id:'notes', ic:ICON_NOTEBOOK, label:t('more_notes'), show:true},
     {id:'calculator', ic:ICON_CALCULATOR, label:t('more_calculator'), show:true},
     {id:'profile', ic:ICON_USER, label:t('more_profile'), show:true},
@@ -7400,7 +7894,10 @@ function screenReports(){
       </div>
       <div class="subtle" style="margin-top:8px;font-size:11px;">Bar = revenue · Marigold fill = gross profit share</div>
     </div>
-    <button class="btn btn-outline btn-sm" id="report-share" style="margin-bottom:12px;">${ICON_EXPORT} Share / Save this report</button>
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
+      <button class="btn btn-outline btn-sm" id="report-share">${ICON_EXPORT} Share / Save this report</button>
+      <button class="btn btn-outline btn-sm" id="report-month">Monthly export</button>
+    </div>
     <div class="section-head"><h3>Top Items</h3></div>
     ${topItems(rangeSales).map(t=>`
       <div class="list-row"><div class="thumb">${t.emoji}</div>
@@ -7419,6 +7916,7 @@ function screenReports(){
   `;
 }
 function bindReportsEvents(){
+  const rm = document.getElementById('report-month'); if(rm) rm.addEventListener('click', openMonthlyExport);
   const rs = document.getElementById('report-share');
   if(rs) rs.addEventListener('click', ()=>openDocSheet('Profit Report', __lastReportDoc, 'profit-report-'+reportsRange));
   document.querySelectorAll('[data-rrange]').forEach(b=>b.addEventListener('click', ()=>{ reportsRange=b.dataset.rrange; refreshMain(); }));
@@ -9075,7 +9573,7 @@ function screenSettings(){
       ${isMaster()?`<button class="btn btn-outline btn-sm" id="upgrade-plan" style="margin-top:10px;">View Plans</button>`:''}
     </div>
 
-    ${isMaster()?`
+    ${isOwnerLike()?`
     <div class="section-head"><h3>Shop &amp; Receipts</h3></div>
     <div class="card">
       <div class="t1" style="margin-bottom:10px;">This Shop</div>
@@ -9605,7 +10103,7 @@ const NOTE_AUTHOR_DAYS = 7, NOTE_BOSS_DAYS = 30;
 function noteDate(n, plusDays){ const d = new Date(Date.parse(n.createdAt||'') + plusDays*86400000); return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-GB', { day:'numeric', month:'long', year:'numeric' }); }
 function noteRights(n){
   const age = Date.parse(n.createdAt||'') ? (Date.now() - Date.parse(n.createdAt)) / 86400000 : 0;
-  const mine = n.authorUserId === state.sessionUserId, boss = isMaster(), priv = !!n.isPrivate;
+  const mine = n.authorUserId === state.sessionUserId, boss = isOwnerLike(), priv = !!n.isPrivate;
   const authorOpen = mine && (priv || age < NOTE_AUTHOR_DAYS);
   const bossOpen = boss && age >= NOTE_BOSS_DAYS;
   return {
@@ -9618,7 +10116,7 @@ function noteRights(n){
       : 'Only the person who wrote this note can delete it.'
   };
 }
-function noteVisibleToMe(n){ return !n.isPrivate || n.authorUserId === state.sessionUserId || isMaster(); }
+function noteVisibleToMe(n){ return !n.isPrivate || n.authorUserId === state.sessionUserId || isOwnerLike(); }
 function noteWasEdited(n){
   const c = Date.parse(n.createdAt || ''), u = Date.parse(n.updatedAt || '');
   return !!(c && u && u - c > 60000);   // more than a minute after it was written
@@ -9839,7 +10337,7 @@ function screenHistory(){
     const type = isVoided ? 'voided' : (s.status==='paid' ? 'sale' : 'credit');
     events.push({
       type, sourceId: s.id, date: s.date, sortAt: s.createdAt, at: s.createdAt,
-      title: buyerName, subtitle: `#${s.id.slice(-6).toUpperCase()} · Sale`,
+      title: buyerName, subtitle: `#${s.id.slice(-6).toUpperCase()} · Sale${saleMethodOf(s.id)!=='cash' ? ' · '+METHOD_LABEL[saleMethodOf(s.id)] : ''}`,
       amount: s.subtotal, pill: isVoided?`<span class="pill pill-gray">VOIDED</span>`:s.status==='paid'?`<span class="pill pill-green">Paid</span>`:`<span class="pill pill-red">${s.status}</span>`,
       onClick: ()=>openSaleDetail(s.id), dim: isVoided
     });
@@ -9857,7 +10355,7 @@ function screenHistory(){
 
   state.expenses.filter(e=>e.shopId===shopId).forEach(e=>{
     events.push({
-      type:'expense', sourceId: e.id, date: e.date, sortAt: e.date,
+      type:'expense', sourceId: e.id, date: e.date, sortAt: zxExpenseAt(e.id) || e.date, at: zxExpenseAt(e.id) || undefined,
       title: e.description || e.category, subtitle: `${e.category} · Expense`,
       amount: e.amount, pill: `<span class="pill pill-gray">Expense</span>`, onClick: null
     });
@@ -10186,22 +10684,28 @@ function openSaleDetail(saleId){
     <div style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;justify-content:center;margin-bottom:14px;">
       <canvas id="sale-receipt-canvas" style="max-width:100%;height:auto;display:block;"></canvas>
     </div>
+    ${(()=>{ const h = holdOf(s.id); if(!h || !h.held) return '';
+      if(h.handed) return `<div class="locked-msg" style="background:var(--paper-dim);color:var(--text);margin-bottom:12px;">✅ Items handed over${h.handedAt?' on '+fmtDate(h.handedAt.slice(0,10)):''}.</div>`;
+      if(s.balance>0) return `<div class="locked-msg" style="background:var(--paper-dim);color:var(--text);margin-bottom:12px;">🔒 On hold — hand the items over only after full payment. Balance ${fmtMoney(s.balance)}.</div>`;
+      return `<div class="locked-msg" style="background:var(--paper-dim);color:var(--text);margin-bottom:12px;">✅ Fully paid — ready to hand over.</div><button class="btn btn-dark" id="hold-handed" style="margin-bottom:10px;">Mark as handed over</button>`; })()}
     <div style="display:flex;gap:10px;margin-bottom:10px;">
       <button class="btn btn-primary" id="share-sale-btn" style="flex:2;min-width:0;white-space:nowrap;">${ICON_EXPORT} Share Receipt</button>
       <button class="btn btn-outline" id="save-sale-btn" style="flex:1;min-width:0;white-space:nowrap;">💾 Save</button>
     </div>
-    ${(!isVoided && (isMaster() || (isStaff() && canDo('canVoidReturn') && s.soldByUserId===state.sessionUserId))) ? `
+    ${(!isVoided && (isOwnerLike() || (isStaff() && canDo('canVoidReturn') && s.soldByUserId===state.sessionUserId))) ? `
       <div style="display:flex;gap:10px;">
         <button class="btn btn-outline" id="open-return-sale" style="flex:1;min-width:0;white-space:nowrap;padding-left:8px;padding-right:8px;">↩️ Process Return</button>
         <button class="btn btn-danger" id="void-sale-btn" style="flex:1;min-width:0;white-space:nowrap;padding-left:8px;padding-right:8px;">${ICON_BAN} Void Sale</button>
       </div>
     ` : ''}
-    ${(!isVoided && isStaff() && canDo('canVoidReturn') && s.soldByUserId!==state.sessionUserId) ? `
+    ${(!isVoided && isStaff() && !isSuperAdmin() && canDo('canVoidReturn') && s.soldByUserId!==state.sessionUserId) ? `
       <p class="subtle">You can only void or return sales you personally made.</p>
     ` : ''}
   `);
   // The picture shown here is the very same receipt that Share sends.
   drawReceiptToCanvas(document.getElementById('sale-receipt-canvas'), s, state.shops.find(x=>x.id===s.shopId), cust, seller).catch(err=>console.warn('Receipt draw failed:', err));
+  const handBtn = document.getElementById('hold-handed');
+  if(handBtn) handBtn.addEventListener('click', ()=>{ zxSet('hold', s.id, { ...holdOf(s.id), handed:true, handedAt:new Date().toISOString() }); toast('Marked as handed over ✅'); openSaleDetail(saleId); });
   const saveSaleBtn = document.getElementById('save-sale-btn');
   if(saveSaleBtn) saveSaleBtn.addEventListener('click', ()=>saveCanvasPng(document.getElementById('sale-receipt-canvas'), `sale-${s.id.slice(-6)}.png`, `Saved sale receipt: ${buyerName}`));
   const shareSaleBtn = document.getElementById('share-sale-btn');
@@ -10230,7 +10734,7 @@ function openSaleDetail(saleId){
 }
 async function voidSale(saleId){
   const s = state.sales.find(x=>x.id===saleId);
-  if(!(isMaster() || (isStaff() && canDo('canVoidReturn') && s.soldByUserId===state.sessionUserId))){
+  if(!(isOwnerLike() || (isStaff() && canDo('canVoidReturn') && s.soldByUserId===state.sessionUserId))){
     toast("You don't have permission to void this sale."); return;
   }
   const reason = await appPrompt('Why are you voiding this sale? (e.g. entered by mistake)');
@@ -10263,7 +10767,7 @@ async function voidSale(saleId){
 }
 function openReturnModal(saleId){
   const s = state.sales.find(x=>x.id===saleId);
-  if(!(isMaster() || (isStaff() && canDo('canVoidReturn') && s.soldByUserId===state.sessionUserId))){
+  if(!(isOwnerLike() || (isStaff() && canDo('canVoidReturn') && s.soldByUserId===state.sessionUserId))){
     toast("You don't have permission to return items from this sale."); return;
   }
   openSheet(`
@@ -10354,9 +10858,10 @@ function screenExpenses(){
     expenses.map(e=>`
       <div class="list-row">
         <div class="thumb">${ICON_CASH}</div>
-        <div class="info"><div class="t1">${escapeHtml(e.description||e.category)}</div><div class="t2">${e.category} · ${fmtDate(e.date)}</div></div>
+        <div class="info"><div class="t1">${escapeHtml(e.description||e.category)}</div><div class="t2">${e.category} · ${fmtDateAt(e.date, zxExpenseAt(e.id))}</div></div>
         <div class="right"><b>${fmtMoney(e.amount)}</b><br>
-          ${(isMaster()||e.createdByUserId===state.sessionUserId)?`<button data-delete-expense="${e.id}" style="background:none;border:none;color:var(--red);font-size:11px;font-weight:700;padding:0;">Delete</button>`:''}
+          ${(zxGet('expense', e.id)||{}).photo ? `<button data-exp-photo="${e.id}" style="background:none;border:none;color:var(--marigold-dark);font-size:11px;font-weight:700;padding:0 8px 0 0;">📷 Receipt</button>` : ''}
+          ${(isOwnerLike()||e.createdByUserId===state.sessionUserId)?`<button data-delete-expense="${e.id}" style="background:none;border:none;color:var(--red);font-size:11px;font-weight:700;padding:0;">Delete</button>`:''}
         </div>
       </div>`).join('')}
   `;
@@ -10364,6 +10869,11 @@ function screenExpenses(){
 function bindExpensesEvents(){
   const addBtn = document.getElementById('add-expense-btn');
   if(addBtn) addBtn.addEventListener('click', openAddExpenseModal);
+  document.querySelectorAll('[data-exp-photo]').forEach(b=>b.addEventListener('click', async ()=>{
+    b.disabled = true; const src = await zxPhoto(b.dataset.expPhoto); b.disabled = false;
+    if(!src){ toast('Could not load the photo — check your connection.'); return; }
+    openSheet(`<div class="sheet-head"><h3>Receipt photo</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div><img src="${src}" alt="Receipt" style="width:100%;border-radius:12px;display:block;">`);
+  }));
   document.querySelectorAll('[data-delete-expense]').forEach(b=>b.addEventListener('click', async ()=>{
     if(!await appConfirm('Delete this expense?')) return;
     state.expenses = state.expenses.filter(x=>x.id!==b.dataset.deleteExpense);
@@ -10382,15 +10892,20 @@ function openAddExpenseModal(){
       <div class="field"><label>Amount</label><input id="exp-amount" type="number" min="0"></div>
       <div class="field"><label>Date</label><input id="exp-date" type="date" value="${todayISO()}"></div>
     </div>
+    <div class="field"><label>Receipt photo <span class="subtle">(optional)</span></label><input id="exp-photo" type="file" accept="image/*" capture="environment"></div>
     <button class="btn btn-primary" id="save-expense-btn">Save Expense</button>
   `);
-  document.getElementById('save-expense-btn').addEventListener('click', ()=>{
+  document.getElementById('save-expense-btn').addEventListener('click', async ()=>{
     const amount = Number(document.getElementById('exp-amount').value||0);
     if(amount<=0){ toast('Enter an amount.'); return; }
     const expenseId = uid('exp');
     const category = document.getElementById('exp-category').value;
     const description = document.getElementById('exp-desc').value.trim();
     const date = document.getElementById('exp-date').value || todayISO();
+    const pf = document.getElementById('exp-photo').files[0]; let photo = null;
+    if(pf){ try{ photo = await zxCompressImage(pf, 640, 0.55); }catch(e){ toast(e.message); return; } }
+    zxSet('expense', expenseId, { at: new Date().toISOString(), photo: !!photo });
+    if(photo) zxSet('expphoto', expenseId, { photo });
     state.expenses.push({ id: expenseId, businessId: business().id, shopId: state.currentShopId,
       category, description, amount, date, createdByUserId: state.sessionUserId });
     enqueueSync('expenses','insert', {
@@ -10626,7 +11141,7 @@ function openRoomDetail(roomId){
     `:`
       <button class="btn btn-primary" id="checkin-btn" style="width:100%;margin-bottom:14px;">＋ Check In Guest</button>
     `}
-    ${isMaster()?`<button class="btn btn-danger btn-sm" data-delete-room="${r.id}" style="width:100%;margin-bottom:14px;">Delete Room</button>`:''}
+    ${isOwnerLike()?`<button class="btn btn-danger btn-sm" data-delete-room="${r.id}" style="width:100%;margin-bottom:14px;">Delete Room</button>`:''}
     <div class="section-head"><h3>Past Stays</h3></div>
     ${history.length===0?`<p class="subtle">No past stays yet.</p>`:history.map(h=>`
       <div class="card" data-receipt="${h.id}" style="cursor:pointer;">
@@ -13655,6 +14170,15 @@ const FAQ_GROUPS = [
     { q:"What is Staff Activity?", a:"Owner only. More → Staff Activity shows, for today, this week, 7 days, 30 days or this month, what each person sold and how many voids, returns, cleared debts and payments they handled, plus a list of recent voids and cleared debts. When someone voids a sale, returns goods or clears a debt, the bell also tells the Owner for the next 24 hours. It is a notice after the fact, not an approval step." },
     { q:"What is the Reorder List?", a:"More → Reorder List shows everything that is out of stock or at/below its reorder level. Tap Send to supplier to share the list by WhatsApp, SMS or email, or Picture to share it as an image." },
     { q:"Can I share my profit report?", a:"Yes. In More → Reports (Owner) pick Today, This Week, 7 Days, 30 Days, This Month or Last Month, then tap Share / Save this report. It includes revenue, profit, expenses, best sellers and Slow Movers — items in stock that did not sell in that period." },
+    { q:"Why do some things (birthdays, payment times, quotations) show on every phone?", a:"Birthdays, part-payment times, how a sale was paid, layaway holds, quotations, expense times and receipt photos are saved to your business account, so the Owner and staff all see the same thing. They sync in the background every minute or so. If your phone is offline they wait on the phone and sync when you are back online." },
+    { q:"What does the Paid by option do on a sale?", a:"On New Sale you can tap Cash, Transfer or POS to record how the customer paid. Close Day then compares the cash you counted against cash only — transfers and POS are listed separately — so a shortage is much easier to spot. History shows Transfer or POS next to the sale." },
+    { q:"What is layaway (Hold the items until fully paid)?", a:"On a credit sale with a saved customer, tick Hold the items until fully paid. The sale shows an On hold tag in the Credit Ledger. When the customer has paid in full, the bell shows Ready to hand over; open the sale and tap Mark as handed over once you give them the items." },
+    { q:"How do quotations work?", a:"Open More → Quotations and tap New quotation. Pick the customer, tap items to add them (prices come from your goods and cannot be changed) and set how long it is valid. Save it, then Share or Save the picture, or send it as a message. When the customer accepts, tap Make this a sale and the items load into New Sale." },
+    { q:"How do I count my stock?", a:"Open More → Stock Count, type what is physically on the shelf for each item (skip any you don't want to count) and tap See result. You see what is missing and its value at cost, and can share it. Nothing changes until you tap Apply corrections and type PROCEED. Only the Owner can raise stock." },
+    { q:"Can I add a time or a photo to an expense?", a:"Expenses now record the time they were saved, and Add Expense has a Receipt photo option that opens the camera. Tap 📷 Receipt on the expense later to see it. Expenses saved before this update have a date only." },
+    { q:"What does You owe suppliers in the bell mean?", a:"For the Owner, the bell lists suppliers you still owe money to, with how long you have owed them. Tap one to open the supplier and record a payment." },
+    { q:"How do I export a month for my accountant?", a:"In More → Reports (Owner), tap Monthly export, choose the month, then tap Picture for a one-page summary to share, or Excel (CSV) to download every sale, expense and item sold for that month." },
+    { q:"What can staff see, and what can a Super Admin see?", a:"A regular staff member sees only the customers they have sold to (or added themselves), and only the sales, credit and payments on those sales. The Owner sees everything. A staff member the Owner promotes to Super Admin (More → Staff → open their name) sees and can do everything the Owner can in the business, including reports, staff activity, stock and credit. Only the Owner manages the subscription, the Bill Payments PIN, data export and who is a Super Admin." },
     { q:"How do I clear a customer's debt?", a:"Open Customers and tap the customer. In the Owes box you'll see a tag: green Clear means they owe nothing; a red Clear debt button means they still owe. Tap Clear debt and a warning appears. Type PROCEED and an OK, clear it button shows up — tap it. Every unpaid sale for that customer is marked fully paid, and the amount counts as money received. It can't be undone and only the Owner can do it. For part payments, use Mark Paid in the Credit Ledger instead." },
   ]},
   { category: "Suppliers & Expenses", items: [
@@ -13820,7 +14344,7 @@ function screenWarehouse(){
   const warehouses = state.shops.filter(s=>s.isWarehouse);
   const activeWh = currentShop()?.isWarehouse ? currentShop() : warehouses[0];
   if(!activeWh){
-    if(!isMaster()){
+    if(!isOwnerLike()){
       return `${subHeader("Warehouse")}<div class="empty"><div class="ic">${ICON_BOX}</div><b>No warehouse set up yet</b>Ask your Owner to set one up — once they do, you'll be able to record and move stock here.</div>`;
     }
     return `${subHeader("Warehouse")}
@@ -14097,7 +14621,7 @@ function openSupplierDetail(supplierId){
     <div class="contact-btns" style="margin-bottom:14px;">
       <a href="tel:${toTelHref(sup.phone, sup.country)}">${ICON_PHONE} Call</a>
       <a href="https://wa.me/${toIntlDigits(sup.phone, sup.country)}" target="_blank">WhatsApp</a>
-      ${isMaster()?`<button data-delete-supplier="${sup.id}">Delete</button>`:''}
+      ${isOwnerLike()?`<button data-delete-supplier="${sup.id}">Delete</button>`:''}
     </div>
     <button class="btn btn-primary" id="log-restock-btn" style="width:100%;margin-bottom:14px;">＋ Log a Restock</button>
     <div class="section-head"><h3>Purchase History</h3></div>

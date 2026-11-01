@@ -338,7 +338,7 @@ main{flex:1;padding:14px 14px 90px;max-width:640px;margin:0 auto;width:100%;}
 body.market-mode{
   background:#000;color:#eee;color-scheme:dark;
   --ink-text:#fff; --text:#eee; --text-dim:#9a9a9a; --line:#2a2a2a;
-  --paper-dim:#1a1a1a; --green-bg:#123420; --red-bg:#3a1414; --amber-bg:#3a2a10;
+  --paper:#0a0a0a; --paper-dim:#1a1a1a; --green-bg:#123420; --red-bg:#3a1414; --amber-bg:#3a2a10;
 }
 body.market-mode *{animation:none !important;transition:none !important;box-shadow:none !important;}
 body.market-mode main{color:#eee;}
@@ -1577,7 +1577,7 @@ function appDialog(o){
     ov.setAttribute('role','dialog'); ov.setAttribute('aria-modal','true');
     ov.style.cssText = 'position:fixed;inset:0;z-index:10050;background:rgba(8,10,24,.6);display:flex;align-items:center;justify-content:center;padding:22px;';
     const box = document.createElement('div');
-    box.style.cssText = 'width:100%;max-width:380px;background:var(--paper,#fff);color:var(--ink-text,#12213B);border-radius:20px;padding:22px 20px 16px;box-shadow:0 20px 60px rgba(0,0,0,.45);font-family:inherit;';
+    box.style.cssText = 'width:100%;max-width:380px;background:'+(document.body.classList.contains('market-mode')?'#1b1c20;border:1px solid #33343a':'var(--paper,#fff)')+';color:var(--ink-text,#12213B);border-radius:20px;padding:22px 20px 16px;box-shadow:0 20px 60px rgba(0,0,0,.45);font-family:inherit;';
     const msg = document.createElement('div');
     msg.style.cssText = 'font-size:16px;line-height:1.5;font-weight:600;white-space:pre-wrap;word-break:break-word;margin-bottom:14px;';
     msg.textContent = o.message || '';

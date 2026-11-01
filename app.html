@@ -3899,6 +3899,8 @@ function renderRoute(){
     case 'billpayments': return screenBillPayments();
     case 'faq': return screenFAQ();
     case 'greetings': return screenGreetings();
+    case 'staffact': return screenStaffActivity();
+    case 'reorder': return screenReorder();
     case 'about-us': return screenAboutUs();
     case 'contact-us': return screenContactUs();
     case 'profile': return screenProfile();
@@ -4500,6 +4502,14 @@ function openBell(){
       <div class="nz-main"><div class="nz-t1" style="font-weight:600;white-space:normal;">${i.text}</div></div>
       <div class="nz-chev">›</div>
     </div>`).join('') : `<div class="nz-empty"><div class="e">✅</div><b>All clear</b><div style="font-size:13px;margin-top:4px;">Nothing needs your attention right now.</div></div>`;
+  const remList = reminderCandidates(), occList = occasionCandidates(), staffLine = staffNoticeLine();
+  const row = (attr, icon, t1, t2)=>`<div class="nz-row" ${attr} role="button" tabindex="0"><div class="nz-tile">${icon}</div><div class="nz-main"><div class="nz-t1" style="font-weight:600;white-space:normal;">${t1}</div>${t2?`<div class="nz-t2">${t2}</div>`:''}</div><div class="nz-chev">›</div></div>`;
+  const extra =
+    (remList.length ? `<div class="section-head" style="margin:14px 0 8px;"><h3 style="font-size:15px;">Send payment reminders</h3></div>` +
+      remList.slice(0,8).map(m=>row(`data-bell-rem="${m.cust.id}"`, '💬', `<b>${escapeHtml(m.cust.fullName)}</b> · ${fmtMoney(m.total)}`, m.overdue ? 'Overdue — tap to send a reminder' : 'Due soon — tap to send a reminder')).join('') : '') +
+    (occList.length ? `<div class="section-head" style="margin:14px 0 8px;"><h3 style="font-size:15px;">Birthdays &amp; anniversaries</h3></div>` +
+      occList.map((o,i)=>row(`data-bell-occ="${i}"`, o.kind==='birthday'?'🎂':'🎉', `<b>${escapeHtml(o.cust.fullName)}</b> · ${o.kind==='birthday'?'birthday':o.years+'-year customer'}`, (o.days===0?'Today':o.days>0?'In '+o.days+' day'+(o.days>1?'s':''):'Was '+(-o.days)+' day'+(o.days<-1?'s':'')+' ago')+' — tap to send a wish')).join('') : '') +
+    (staffLine ? `<div class="section-head" style="margin:14px 0 8px;"><h3 style="font-size:15px;">Staff activity (24 hours)</h3></div>` + row('id="bell-staff-row"', '🛡️', staffLine, 'Tap to see the full report') : '');
   const ov = nzOverlay('nz-bell', `
     <div class="nz-head"><h3>Notifications</h3>
       <div style="display:flex;gap:8px;align-items:center;">
@@ -4508,6 +4518,7 @@ function openBell(){
       </div></div>
     <div class="section-head" style="margin:4px 0 8px;"><h3 style="font-size:15px;">Needs attention</h3></div>
     ${rows}
+    ${extra}
     <div class="section-head" style="margin:14px 0 8px;"><h3 style="font-size:15px;">Stock</h3></div>
     <div class="nz-row" id="bell-stock-row" role="button" tabindex="0">
       <div class="nz-tile">📦</div>
@@ -4519,6 +4530,10 @@ function openBell(){
   if(!ov) return;
   document.getElementById('nz-bell-x').addEventListener('click', ()=>nzClose('nz-bell'));
   document.getElementById('nz-bell-settings').addEventListener('click', ()=>{ nzClose('nz-bell'); openNotifSettings(); });
+  ov.querySelectorAll('[data-bell-rem]').forEach(el=>el.addEventListener('click', ()=>{ nzClose('nz-bell'); openReminderFor(el.dataset.bellRem); }));
+  ov.querySelectorAll('[data-bell-occ]').forEach(el=>el.addEventListener('click', ()=>{ nzClose('nz-bell'); openOccasionFor(Number(el.dataset.bellOcc)); }));
+  const bsr = document.getElementById('bell-staff-row');
+  if(bsr) bsr.addEventListener('click', ()=>{ nzClose('nz-bell'); route = 'staffact'; render(); });
   ov.querySelectorAll('[data-bell-go]').forEach(el=>{
     const go = ()=>{
       const it = items[Number(el.dataset.bellGo)]; if(!it) return;
@@ -5333,7 +5348,9 @@ function bindRouteEvents(){
   if(route==='customers') bindCustomersEvents();
   if(route==='more') bindMoreEvents();
   if(route==='credit') bindCreditEvents();
-  if(route==='closeday') bindCloseDayEvents();
+  if(route==='closeday'){ bindCloseDayEvents(); bindDailySummary(); }
+  if(route==='staffact') bindStaffActivityEvents();
+  if(route==='reorder') bindReorderEvents();
   if(route==='staff') bindStaffEvents();
   if(route==='audit') bindAuditEvents();
   if(route==='notes') bindNotesEvents();
@@ -6408,6 +6425,7 @@ function customerFormFields(c){
     <div class="field"><label>Phone</label><input id="ac-phone" placeholder="0802 730 0375 or +234..." value="${c?escAttr(c.phoneE164):''}"></div>
     <div class="field"><label>WhatsApp Number <span class="subtle">(if different)</span></label><input id="ac-wa" placeholder="0802 730 0375 or +234..." value="${c?escAttr(c.whatsappNumber):''}"></div>
     <div class="field"><label>Email</label><input id="ac-email" type="email" value="${c?escAttr(c.email):''}"></div>
+    ${bdayFieldHtml(c?c.id:null)}
     <div class="field"><label>Group</label>
       <select id="ac-group">${state.customerGroups.map(g=>`<option value="${g.id}" ${c&&c.groupId===g.id?'selected':''}>${g.name}</option>`).join('')}</select>
     </div>
@@ -6454,6 +6472,7 @@ function saveCustomerFromForm(existingId){
   if(existingId){
     const c = state.customers.find(x=>x.id===existingId);
     Object.assign(c, data);
+    bdaySet(c.id, readBdayFields());
     logAudit('customer_edited', 'Edited customer '+fullName);
     enqueueSync('customers','update', {
       id: c.id, group_id: c.groupId || null, full_name: c.fullName, country: c.country,
@@ -6469,6 +6488,7 @@ function saveCustomerFromForm(existingId){
     }
     const newCust = { id: uid('cust'), businessId: business().id, address:'', createdByUserId: state.sessionUserId, ...data };
     state.customers.push(newCust);
+    bdaySet(newCust.id, readBdayFields());
     enqueueSync('customers','insert', {
       id: newCust.id, business_id: newCust.businessId, group_id: newCust.groupId || null,
       full_name: newCust.fullName, country: newCust.country, phone_e164: newCust.phoneE164,
@@ -6486,6 +6506,7 @@ function openCustomerDetail(cid){
   const sales = state.sales.filter(s=>s.customerId===cid).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
   const bal = customerBalance(cid);
   const totalBought = sales.reduce((a,s)=>a+s.subtotal,0);
+  const pays = customerPayments(cid);
   openSheet(`
     <div class="sheet-head">
       <h3>${c.fullName}</h3>
@@ -6504,6 +6525,7 @@ function openCustomerDetail(cid){
       <a href="https://wa.me/${toIntlDigits(c.whatsappNumber||c.phoneE164, c.country)}" target="_blank">WhatsApp</a>
       <a href="mailto:${c.email||''}">${ICON_MAIL} Email</a>
     </div>
+    <button class="btn btn-outline" id="cust-statement-btn" style="margin-bottom:14px;">📄 Statement</button>
     <div class="section-head"><h3>Purchase History</h3></div>
     ${sales.length===0?`<p class="subtle">No purchases yet.</p>`:sales.map(s=>`
       <div class="list-row">
@@ -6511,7 +6533,13 @@ function openCustomerDetail(cid){
         <div class="info"><div class="t1">${fmtMoney(s.subtotal)}</div><div class="t2">${fmtDateAt(s.date, s.createdAt)} · ${s.status}</div></div>
         ${s.balance>0?`<span class="pill pill-red">${fmtMoney(s.balance)} due</span>`:`<span class="pill pill-green">Paid</span>`}
       </div>`).join('')}
+    <div class="section-head"><h3>Payments Received</h3></div>
+    ${pays.length===0?`<p class="subtle">No payments yet.</p>`:pays.slice(0,30).map(p=>`
+      <div class="list-row"><div class="thumb">${ICON_CASH}</div>
+        <div class="info"><div class="t1">${fmtMoney(p.amt)}</div><div class="t2">${p.dateOnly?fmtDate(String(p.at).slice(0,10)):fmtDateAt(String(p.at).slice(0,10), p.at)} · ${escapeHtml(p.note)}</div></div>
+      </div>`).join('')}
   `);
+  document.getElementById('cust-statement-btn').addEventListener('click', ()=>openDocSheet('Customer Statement', customerStatementDoc(c), 'statement-'+String(c.fullName).replace(/\W+/g,'-').toLowerCase()));
   document.getElementById('edit-cust-btn').addEventListener('click', ()=>openEditCustomerModal(cid));
   document.getElementById('clear-debt-btn').addEventListener('click', ()=>clearCustomerDebt(cid));
 }
@@ -6528,6 +6556,7 @@ async function clearCustomerDebt(cid){
   });
   if(typed===null) return;
   owing.forEach(x=>{
+    payLogAdd(x.id, x.balance, 'Debt cleared');
     x.paidAmount = x.subtotal; x.balance = 0; x.status = 'paid';
     enqueueSync('sales','update', { id: x.id, paid_amount: x.paidAmount, balance: 0, status: 'paid' });
   });
@@ -6588,6 +6617,7 @@ function bindCreditEvents(){
     if(isStaff() && s.soldByUserId !== state.sessionUserId){ toast('Staff can only mark paid sales they made.'); return; }
     const amt = Number(await appPrompt(`Amount received (balance ${fmtMoney(s.balance)}):`, s.balance) || 0);
     if(amt<=0) return;
+    payLogAdd(s.id, amt, 'Payment received');
     s.paidAmount += amt;
     s.balance = Math.max(0, s.subtotal - s.paidAmount);
     s.status = s.balance<=0 ? 'paid' : 'partial';
@@ -6617,6 +6647,7 @@ function screenCloseDay(){
 
   return `
     ${subHeader("Close Day")}
+    ${dailySummaryHtml()}
     ${already? `
       <div class="card">
         <b>${ICON_CHECK_CIRCLE} Already closed today</b>
@@ -6667,6 +6698,369 @@ function bindCloseDayEvents(){
 }
 
 /* ============================================================
+   SHARED HELPERS FOR REPORTS, STATEMENTS AND MESSAGES
+   - openDocSheet: a picture "document" (title + rows) with Share and Save, same as every receipt
+   - openMessageSendSheet: an editable message that opens WhatsApp / SMS / Email / the phone's share sheet
+   Nothing here is sent automatically: the person always taps the button.
+   ============================================================ */
+function layoutDoc(doc, ctx){
+  const W = 380, PAD = 24, F = 'Arial,Helvetica,sans-serif';
+  let y = 34;
+  const T = (txt, x, al, font, col)=>{ if(!ctx) return; ctx.textAlign = al; ctx.font = font; ctx.fillStyle = col; ctx.fillText(txt, x, y); };
+  const LN = ()=>{ if(ctx) drawDashedLine(ctx, PAD, y, W-PAD, y); };
+  T(canvasSafeText(business().name), W/2, 'center', '800 17px '+F, '#12213B'); y += 19;
+  T(canvasSafeText(doc.title).toUpperCase(), W/2, 'center', '700 10.5px '+F, '#F2A93B'); y += 16;
+  (doc.sub||[]).forEach(l=>wrapPlainText(canvasSafeText(l), 48).forEach(w=>{ T(w, W/2, 'center', '400 11px '+F, '#6B7280'); y += 14; }));
+  y += 8; LN(); y += 22;
+  (doc.rows||[]).forEach(r=>{
+    if(r.t==='h'){ y += 6; T(canvasSafeText(r.text).toUpperCase(), PAD, 'left', '700 10.5px '+F, '#9AA0AB'); y += 18; }
+    else if(r.t==='line'){ LN(); y += 18; }
+    else if(r.t==='gap'){ y += 8; }
+    else if(r.t==='note'){ wrapPlainText(canvasSafeText(r.text), 52).forEach(w=>{ T(w, PAD, 'left', 'italic 400 10.5px '+F, '#8A8F99'); y += 14; }); }
+    else {
+      const lines = wrapPlainText(canvasSafeText(r.l), r.r ? 36 : 52);
+      lines.forEach((w, i)=>{
+        T(w, PAD, 'left', (r.b?'700 ':'400 ')+'12.5px '+F, r.c || '#242B38');
+        if(i===0 && r.r) T(canvasSafeText(r.r), W-PAD, 'right', (r.b?'800 ':'700 ')+'12.5px '+F, r.c || '#12213B');
+        y += 17;
+      });
+      if(r.s){ wrapPlainText(canvasSafeText(r.s), 52).forEach(w=>{ T(w, PAD, 'left', '400 10.5px '+F, '#8A8F99'); y += 13; }); y += 2; }
+    }
+  });
+  y += 4; LN(); y += 20;
+  T('Generated '+fmtDate(todayISO())+' · '+fmtClock(new Date().toISOString()), W/2, 'center', '400 10px '+F, '#9AA0AB'); y += 14;
+  T('Powered by ZeeShop', W/2, 'center', '700 10px '+F, '#9AA0AB'); y += 14;
+  return y + 14;
+}
+function drawDocToCanvas(canvas, doc){
+  const W = 380, scale = 2;
+  const h = layoutDoc(doc, null);
+  canvas.width = W*scale; canvas.height = h*scale;
+  canvas.style.width = W+'px'; canvas.style.height = h+'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(scale, scale);
+  ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, W, h);
+  layoutDoc(doc, ctx);
+}
+function openDocSheet(title, doc, fileName){
+  openSheet(`
+    <div class="sheet-head"><h3>${escapeHtml(title)}</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
+    <div style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;justify-content:center;margin-bottom:14px;">
+      <canvas id="doc-canvas" style="max-width:100%;height:auto;display:block;"></canvas>
+    </div>
+    <div style="display:flex;gap:10px;margin-bottom:6px;">
+      <button class="btn btn-primary" id="doc-share" style="flex:2;min-width:0;white-space:nowrap;">${ICON_EXPORT} Share</button>
+      <button class="btn btn-outline" id="doc-save" style="flex:1;min-width:0;white-space:nowrap;">💾 Save</button>
+    </div>`);
+  const canvas = document.getElementById('doc-canvas');
+  drawDocToCanvas(canvas, doc);
+  document.getElementById('doc-save').addEventListener('click', ()=>saveCanvasPng(canvas, fileName+'.png', 'Saved '+title));
+  document.getElementById('doc-share').addEventListener('click', ()=>{
+    canvas.toBlob(async blob=>{
+      if(!blob){ toast('Could not make the picture.'); return; }
+      const file = new File([blob], fileName+'.png', {type:'image/png'});
+      if(navigator.canShare && navigator.canShare({files:[file]})){
+        try{ await navigator.share({files:[file], title: business().name}); logAudit('doc_shared', 'Shared '+title); }catch(_e){ /* cancelled */ }
+      } else { saveCanvasPng(canvas, fileName+'.png', 'Saved '+title); }
+    }, 'image/png');
+  });
+}
+// Message sheet: edit the text, then pick how to send it. Never sends by itself.
+function openMessageSendSheet(o){
+  openSheet(`
+    <div class="sheet-head"><h3>${escapeHtml(o.title||'Send message')}</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
+    ${o.who?`<div class="t2" style="margin-bottom:8px;">To: <b>${escapeHtml(o.who)}</b>${o.phone?' · '+escapeHtml(o.phone):''}</div>`:''}
+    <div class="field"><textarea id="msg-text" rows="7" style="width:100%;">${escapeHtml(o.text||'')}</textarea></div>
+    <div style="display:flex;gap:10px;margin-bottom:10px;">
+      <button class="btn btn-primary" id="msg-wa" style="flex:1;min-width:0;">WhatsApp</button>
+      <button class="btn btn-outline" id="msg-sms" style="flex:1;min-width:0;">SMS</button>
+      <button class="btn btn-outline" id="msg-mail" style="flex:1;min-width:0;">Email</button>
+    </div>
+    <div style="display:flex;gap:10px;">
+      <button class="btn btn-outline" id="msg-share" style="flex:1;min-width:0;white-space:nowrap;">${ICON_EXPORT} Share</button>
+      <button class="btn btn-outline" id="msg-copy" style="flex:1;min-width:0;white-space:nowrap;">Copy</button>
+    </div>
+    <p class="subtle" style="margin-top:12px;">ZeeShop never sends anything on its own — you choose how it goes.</p>`);
+  const val = ()=>document.getElementById('msg-text').value;
+  const open = url=>{ const a = document.createElement('a'); a.href = url; a.target = '_blank'; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove(); };
+  const digits = o.phone ? toIntlDigits(o.phone, o.country) : '';
+  document.getElementById('msg-wa').addEventListener('click', ()=>open('https://wa.me/'+digits+'?text='+encodeURIComponent(val())));
+  document.getElementById('msg-sms').addEventListener('click', ()=>open('sms:'+(o.phone?toTelHref(o.phone, o.country):'')+'?body='+encodeURIComponent(val())));
+  document.getElementById('msg-mail').addEventListener('click', ()=>open('mailto:'+(o.email||'')+'?subject='+encodeURIComponent(o.subject||o.title||'')+'&body='+encodeURIComponent(val())));
+  document.getElementById('msg-share').addEventListener('click', async ()=>{
+    if(navigator.share){ try{ await navigator.share({text: val()}); }catch(_e){} }
+    else { try{ await navigator.clipboard.writeText(val()); toast('Copied — paste it into any app'); }catch(_e){ toast('Could not share on this browser.'); } }
+  });
+  document.getElementById('msg-copy').addEventListener('click', async ()=>{
+    try{ await navigator.clipboard.writeText(val()); toast('Copied ✅'); }catch(_e){ toast('Could not copy.'); }
+  });
+}
+
+/* ---------------- Payments log (when each part-payment was received) ----------------
+   Kept on this phone, keyed by sale. Payments made before this update are shown as "Paid at sale / earlier". */
+const PAYLOG_KEY = 'zs_paylog_v1';
+function payLogAll(){ try{ const o = JSON.parse(localStorage.getItem(PAYLOG_KEY) || '{}'); return (o && typeof o==='object') ? o : {}; }catch(_e){ return {}; } }
+function payLogAdd(saleId, amt, note){
+  try{ const all = payLogAll(); (all[saleId] = all[saleId] || []).push({ amt: Number(amt)||0, at: new Date().toISOString(), by: state.sessionUserId, note: note||'' }); localStorage.setItem(PAYLOG_KEY, JSON.stringify(all)); }catch(_e){}
+}
+function customerPayments(cid){
+  const log = payLogAll(), out = [];
+  state.sales.filter(s=>s.customerId===cid && s.status!=='voided').forEach(s=>{
+    const entries = log[s.id] || [];
+    const logged = entries.reduce((a,e)=>a+e.amt, 0);
+    const initial = Math.max(0, (s.paidAmount||0) - logged);
+    if(initial>0) out.push({ at: s.createdAt || (s.date+'T00:00:00'), amt: initial, note: 'Paid at sale', saleId: s.id, dateOnly: !s.createdAt });
+    entries.forEach(e=>out.push({ at: e.at, amt: e.amt, note: e.note || 'Payment received', saleId: s.id }));
+  });
+  return out.sort((a,b)=>new Date(b.at)-new Date(a.at));
+}
+function customerStatementDoc(c){
+  const sales = state.sales.filter(s=>s.customerId===c.id && s.status!=='voided').sort((a,b)=>new Date(a.createdAt||a.date)-new Date(b.createdAt||b.date));
+  const pays = customerPayments(c.id).slice().reverse();
+  const bought = sales.reduce((a,s)=>a+s.subtotal, 0);
+  const paid = sales.reduce((a,s)=>a+(s.paidAmount||0), 0);
+  const owed = customerBalance(c.id);
+  const rows = [{t:'h', text:'Purchases'}];
+  if(!sales.length) rows.push({t:'note', text:'No purchases yet.'});
+  sales.forEach(s=>rows.push({ l: fmtDateAt(s.date, s.createdAt)+' · #'+s.id.slice(-6).toUpperCase(), r: fmtMoneyCanvas(s.subtotal), s: s.balance>0 ? 'Balance due '+fmtMoneyCanvas(s.balance)+(s.dueDate?' · due '+fmtDate(s.dueDate):'') : 'Paid' }));
+  rows.push({t:'h', text:'Payments received'});
+  if(!pays.length) rows.push({t:'note', text:'No payments recorded.'});
+  pays.forEach(p=>rows.push({ l: p.dateOnly ? fmtDate(String(p.at).slice(0,10)) : fmtDateAt(String(p.at).slice(0,10), p.at), r: fmtMoneyCanvas(p.amt), s: p.note }));
+  rows.push({t:'line'});
+  rows.push({ l:'Total bought', r: fmtMoneyCanvas(bought) });
+  rows.push({ l:'Total paid', r: fmtMoneyCanvas(paid) });
+  rows.push({ l:'Balance owed', r: fmtMoneyCanvas(owed), b:true, c: owed>0 ? '#C0392B' : '#1E8E4E' });
+  return { title:'Customer Statement', sub:[c.fullName + (c.phoneE164 ? ' · '+c.phoneE164 : '')], rows };
+}
+
+/* ---------------- Payment reminders (bell → tap → WhatsApp / SMS / Email / Share) ---------------- */
+function reminderCandidates(){
+  const map = {};
+  state.sales.filter(s=>s.shopId===state.currentShopId && s.customerId && s.status!=='paid' && s.status!=='voided' && s.balance>0 && s.dueDate &&
+      (isMaster() || s.soldByUserId===state.sessionUserId) && daysBetween(todayISO(), s.dueDate) <= 2).forEach(s=>{
+    const m = map[s.customerId] = map[s.customerId] || { cust: state.customers.find(c=>c.id===s.customerId), total:0, due:s.dueDate, overdue:false };
+    m.total += s.balance;
+    if(s.dueDate < m.due) m.due = s.dueDate;
+    if(daysBetween(todayISO(), s.dueDate) < 0) m.overdue = true;
+  });
+  return Object.values(map).filter(m=>m.cust).sort((a,b)=>(b.overdue-a.overdue) || (a.due<b.due?-1:1));
+}
+function reminderText(m){
+  const shop = (currentShop() && currentShop().name) || business().name;
+  const first = (m.cust.fullName||'').split(' ')[0] || 'there';
+  return `Hello ${first}, this is a friendly reminder from ${shop}. Your balance of ${fmtMoney(m.total)} ${m.overdue?'was due on':'is due on'} ${fmtDate(m.due)}. Please make payment at your earliest convenience. Thank you. 🙏`;
+}
+function openReminderFor(custId){
+  const m = reminderCandidates().find(x=>x.cust.id===custId); if(!m){ toast('Nothing due for this customer.'); return; }
+  openMessageSendSheet({ title:'Payment reminder', who:m.cust.fullName, phone:m.cust.whatsappNumber||m.cust.phoneE164, country:m.cust.country, email:m.cust.email, subject:'Payment reminder', text: reminderText(m) });
+}
+
+/* ---------------- Birthdays & customer anniversaries (birthday is kept on this phone) ---------------- */
+const BDAY_KEY = 'zs_birthdays_v1';
+function bdayAll(){ try{ const o = JSON.parse(localStorage.getItem(BDAY_KEY) || '{}'); return (o && typeof o==='object') ? o : {}; }catch(_e){ return {}; } }
+function bdayFieldHtml(cid){
+  const md = cid ? bdayGet(cid) : '', [bm, bd] = md ? md.split('-') : ['', ''];
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `<div class="field"><label>Birthday <span class="subtle">(optional — saved on this phone, used for birthday reminders)</span></label>
+    <div style="display:flex;gap:8px;">
+      <select id="ac-bmonth" style="flex:1;"><option value="">Month</option>${months.map((m,i)=>`<option value="${String(i+1).padStart(2,'0')}" ${bm===String(i+1).padStart(2,'0')?'selected':''}>${m}</option>`).join('')}</select>
+      <select id="ac-bday" style="flex:1;"><option value="">Day</option>${Array.from({length:31},(_,i)=>`<option value="${String(i+1).padStart(2,'0')}" ${bd===String(i+1).padStart(2,'0')?'selected':''}>${i+1}</option>`).join('')}</select>
+    </div></div>`;
+}
+function readBdayFields(){ const m = document.getElementById('ac-bmonth'), d = document.getElementById('ac-bday'); if(!m || !d) return null; return (m.value && d.value) ? m.value+'-'+d.value : ''; }
+function bdayGet(cid){ return bdayAll()[cid] || ''; }
+function bdaySet(cid, md){ if(md===null) return; try{ const all = bdayAll(); if(md) all[cid] = md; else delete all[cid]; localStorage.setItem(BDAY_KEY, JSON.stringify(all)); }catch(_e){} }
+function daysToMD(md){ // days from today until the next MM-DD (0 = today, negative = passed within the last 2 days)
+  const t = new Date(todayISO()+'T00:00:00');
+  const [m, d] = md.split('-').map(Number);
+  for(const yr of [t.getFullYear()-1, t.getFullYear(), t.getFullYear()+1]){
+    const diff = Math.round((new Date(yr, m-1, d) - t) / 86400000);
+    if(diff >= -2 && diff <= 3) return diff;
+  }
+  return null;
+}
+function occasionCandidates(){
+  const out = [], bd = bdayAll();
+  state.customers.filter(c=>c.businessId===business().id).forEach(c=>{
+    if(bd[c.id]){ const d = daysToMD(bd[c.id]); if(d!==null) out.push({ kind:'birthday', cust:c, days:d }); }
+    const first = state.sales.filter(s=>s.customerId===c.id && s.status!=='voided').map(s=>s.date).sort()[0];
+    if(first){
+      const yrs = new Date().getFullYear() - Number(first.slice(0,4));
+      if(yrs>=1){ const d = daysToMD(first.slice(5)); if(d!==null) out.push({ kind:'anniversary', cust:c, days:d, years:yrs }); }
+    }
+  });
+  return out.sort((a,b)=>a.days-b.days).slice(0, 8);
+}
+function occasionText(o){
+  const shop = (currentShop() && currentShop().name) || business().name;
+  const first = (o.cust.fullName||'').split(' ')[0] || 'there';
+  if(o.kind==='birthday'){
+    const g = GREET_BUILTIN.find(x=>x.id==='b034');
+    return (g ? g.body : 'Dear {to},\nHappy birthday from all of us! — {from}').replace(/\{to\}/g, first).replace(/\{from\}/g, shop);
+  }
+  return `Dear ${first},\nIt has been ${o.years} year${o.years>1?'s':''} since you first shopped with us. Thank you for your loyalty — we truly appreciate you.\n— ${shop}`;
+}
+function openOccasionFor(idx){
+  const o = occasionCandidates()[idx]; if(!o) return;
+  openMessageSendSheet({ title: o.kind==='birthday' ? 'Birthday wish' : 'Customer anniversary', who:o.cust.fullName, phone:o.cust.whatsappNumber||o.cust.phoneE164, country:o.cust.country, email:o.cust.email, subject: o.kind==='birthday'?'Happy birthday!':'Thank you!', text: occasionText(o) });
+}
+
+/* ---------------- Staff activity (owner): who sold, voided, returned, cleared ---------------- */
+let staffActRange = '7d';
+const RISKY_ACTIONS = { sale_voided:'voided a sale', sale_return:'processed a return', debt_cleared:'cleared a customer debt' };
+function staffActivityRows(range){
+  const days = getRangeDates(range);
+  const biz = business().id;
+  const users = state.users.filter(u=>u.businessId===biz);
+  const rows = users.map(u=>{
+    const sales = state.sales.filter(s=>s.shopId===state.currentShopId && s.soldByUserId===u.id && s.status!=='voided' && days.includes(s.date));
+    const logs = state.auditLog.filter(l=>l.businessId===biz && l.userId===u.id && days.includes(String(l.timestamp).slice(0,10)));
+    const cnt = a=>logs.filter(l=>l.action===a).length;
+    return { u, name: (u.firstName||'')+' '+(u.lastName||''), count:sales.length, total:sales.reduce((a,s)=>a+s.subtotal,0),
+      credit: sales.reduce((a,s)=>a+(s.balance||0),0), voids:cnt('sale_voided'), returns:cnt('sale_return'), cleared:cnt('debt_cleared'), collected:cnt('credit_payment') };
+  }).filter(r=>r.count || r.voids || r.returns || r.cleared || r.collected);
+  return rows.sort((a,b)=>b.total-a.total);
+}
+function recentRiskyActions(limit){
+  const biz = business().id;
+  return state.auditLog.filter(l=>l.businessId===biz && RISKY_ACTIONS[l.action]).slice(0, limit||30);
+}
+function staffNoticeLine(){ // bell line for the owner: other people's risky actions in the last 24 hours
+  if(!isMaster()) return null;
+  const since = Date.now() - 86400000;
+  const recent = recentRiskyActions(60).filter(l=>l.userId!==state.sessionUserId && new Date(l.timestamp).getTime() >= since);
+  if(!recent.length) return null;
+  const by = {};
+  recent.forEach(l=>{ const u = state.users.find(x=>x.id===l.userId); const n = u ? u.firstName : 'Someone'; (by[n] = by[n] || []).push(l.action); });
+  const bits = Object.entries(by).map(([n, acts])=>{
+    const c = a=>acts.filter(x=>x===a).length;
+    const parts = []; if(c('sale_voided')) parts.push(c('sale_voided')+' void'+(c('sale_voided')>1?'s':'')); if(c('sale_return')) parts.push(c('sale_return')+' return'+(c('sale_return')>1?'s':'')); if(c('debt_cleared')) parts.push(c('debt_cleared')+' debt cleared');
+    return `<b>${escapeHtml(n)}</b>: ${parts.join(', ')}`;
+  });
+  return bits.join(' · ');
+}
+function screenStaffActivity(){
+  if(!isMaster()) return `${subHeader('Staff Activity')}<div class="empty"><div class="ic">${ICON_LOCK}</div><b>Owner only</b>Only the business owner can see staff activity.</div>`;
+  const labels = {today:'Today', week:'This Week', '7d':'7 Days', '30d':'30 Days', month:'This Month'};
+  const rows = staffActivityRows(staffActRange);
+  const risky = recentRiskyActions(25);
+  return `
+    ${subHeader('Staff Activity')}
+    <div style="display:flex;gap:8px;margin-bottom:14px;overflow-x:auto;">
+      ${Object.keys(labels).map(r=>`<button class="btn btn-sm ${staffActRange===r?'btn-dark':'btn-outline'}" data-sarange="${r}">${labels[r]}</button>`).join('')}
+    </div>
+    ${rows.length ? `<button class="btn btn-outline btn-sm" id="staffact-share" style="margin-bottom:12px;">${ICON_EXPORT} Share / Save this report</button>` : ''}
+    ${rows.length===0 ? `<div class="empty"><div class="ic">${ICON_USERS}</div><b>No activity</b>Nothing recorded for ${labels[staffActRange].toLowerCase()}.</div>` : rows.map(r=>`
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;"><b>${escapeHtml(r.name)}${r.u.id===state.sessionUserId?' (you)':''}</b><b>${fmtMoney(r.total)}</b></div>
+        <div class="t2" style="margin-top:4px;">${r.count} sale${r.count===1?'':'s'} · credit given ${fmtMoney(r.credit)}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
+          <span class="pill ${r.voids?'pill-red':'pill-gray'}">${r.voids} void${r.voids===1?'':'s'}</span>
+          <span class="pill ${r.returns?'pill-amber':'pill-gray'}">${r.returns} return${r.returns===1?'':'s'}</span>
+          <span class="pill ${r.cleared?'pill-red':'pill-gray'}">${r.cleared} debt${r.cleared===1?'':'s'} cleared</span>
+          <span class="pill pill-gray">${r.collected} payment${r.collected===1?'':'s'} collected</span>
+        </div>
+      </div>`).join('')}
+    <div class="section-head"><h3>Recent voids, returns &amp; cleared debts</h3></div>
+    ${risky.length===0 ? '<p class="subtle">None recorded.</p>' : risky.map(l=>{ const u = state.users.find(x=>x.id===l.userId); return `<div class="list-row"><div class="thumb">${ICON_EDIT_NOTE}</div><div class="info"><div class="t1" style="white-space:normal;">${escapeHtml(l.details||l.action)}</div><div class="t2">${u?escapeHtml(u.firstName+' '+u.lastName):'System'} · ${timeAgo(l.timestamp)}</div></div></div>`; }).join('')}
+    <p class="subtle" style="margin-top:12px;">This is a notice after the fact, not an approval step — every void, return and cleared debt is recorded with who did it and when.</p>`;
+}
+function bindStaffActivityEvents(){
+  document.querySelectorAll('[data-sarange]').forEach(b=>b.addEventListener('click', ()=>{ staffActRange = b.dataset.sarange; refreshMain(); }));
+  const sh = document.getElementById('staffact-share');
+  if(sh) sh.addEventListener('click', ()=>{
+    const labels = {today:'Today', week:'This week', '7d':'Last 7 days', '30d':'Last 30 days', month:'This month'};
+    const rows = [];
+    staffActivityRows(staffActRange).forEach(r=>{
+      rows.push({t:'h', text:r.name});
+      rows.push({ l: r.count+' sale'+(r.count===1?'':'s'), r: fmtMoneyCanvas(r.total), b:true });
+      rows.push({ l:'Credit given', r: fmtMoneyCanvas(r.credit) });
+      rows.push({ l:'Voids / returns / debts cleared', r: r.voids+' / '+r.returns+' / '+r.cleared });
+    });
+    openDocSheet('Staff Activity', { title:'Staff Activity', sub:[labels[staffActRange]+' · '+((currentShop()&&currentShop().name)||'')], rows }, 'staff-activity');
+  });
+}
+
+/* ---------------- Daily summary (Close Day) ---------------- */
+function dailySummaryData(){
+  const day = todayISO(), biz = business().id;
+  const own = s=>isMaster() || s.soldByUserId===state.sessionUserId;
+  const sales = state.sales.filter(s=>s.shopId===state.currentShopId && s.date===day && s.status!=='voided' && own(s));
+  const logs = state.auditLog.filter(l=>l.businessId===biz && String(l.timestamp).slice(0,10)===day && (isMaster() || l.userId===state.sessionUserId));
+  const cnt = a=>logs.filter(l=>l.action===a).length;
+  const expenses = isMaster() ? state.expenses.filter(e=>e.shopId===state.currentShopId && e.date===day).reduce((a,e)=>a+e.amount,0) : null;
+  const items = sales.reduce((a,s)=>a+s.items.reduce((b,it)=>b+netQty(it),0),0);
+  return { sales: sales.length, total: sales.reduce((a,s)=>a+s.subtotal,0), cash: sales.reduce((a,s)=>a+(s.paidAmount||0),0),
+    credit: sales.reduce((a,s)=>a+(s.balance||0),0), items, expenses, voids: cnt('sale_voided'), returns: cnt('sale_return'), cleared: cnt('debt_cleared') };
+}
+function dailySummaryHtml(){
+  const d = dailySummaryData();
+  return `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;"><b>Today's Summary</b><span class="t2">${fmtDate(todayISO())}</span></div>
+      <div class="stat-grid">
+        <div class="stat-box"><div class="lbl">Sales (${d.sales})</div><div class="val">${fmtMoney(d.total)}</div></div>
+        <div class="stat-box"><div class="lbl">Cash received</div><div class="val">${fmtMoney(d.cash)}</div></div>
+      </div>
+      <div class="t2" style="margin-top:8px;">Credit given ${fmtMoney(d.credit)} · ${d.items} item${d.items===1?'':'s'} sold${d.expenses!==null?` · Expenses ${fmtMoney(d.expenses)}`:''}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
+        <span class="pill ${d.voids?'pill-red':'pill-gray'}">${d.voids} void${d.voids===1?'':'s'}</span>
+        <span class="pill ${d.returns?'pill-amber':'pill-gray'}">${d.returns} return${d.returns===1?'':'s'}</span>
+        <span class="pill ${d.cleared?'pill-red':'pill-gray'}">${d.cleared} debt${d.cleared===1?'':'s'} cleared</span>
+      </div>
+      <button class="btn btn-outline btn-sm" id="daily-share" style="margin-top:12px;">${ICON_EXPORT} Share / Save summary</button>
+    </div>`;
+}
+function bindDailySummary(){
+  const b = document.getElementById('daily-share'); if(!b) return;
+  b.addEventListener('click', ()=>{
+    const d = dailySummaryData();
+    const rows = [
+      { l:'Sales ('+d.sales+')', r: fmtMoneyCanvas(d.total), b:true },
+      { l:'Cash received', r: fmtMoneyCanvas(d.cash) },
+      { l:'Credit given', r: fmtMoneyCanvas(d.credit) },
+      { l:'Items sold', r: String(d.items) },
+    ];
+    if(d.expenses!==null) rows.push({ l:'Expenses', r: fmtMoneyCanvas(d.expenses) });
+    rows.push({t:'line'}, { l:'Voids', r:String(d.voids) }, { l:'Returns', r:String(d.returns) }, { l:'Debts cleared', r:String(d.cleared) });
+    openDocSheet("Today's Summary", { title:"Daily Summary", sub:[fmtDate(todayISO())+' · '+((currentShop()&&currentShop().name)||'')], rows }, 'daily-summary-'+todayISO());
+  });
+}
+
+/* ---------------- Reorder list ---------------- */
+function reorderItems(){
+  return state.goods.filter(g=>g.shopId===state.currentShopId && isGoodActive(g) && totalStock(g) <= (g.reorderLevel||5))
+    .map(g=>({ g, stock: totalStock(g), level: g.reorderLevel||5 })).sort((a,b)=>a.stock-b.stock);
+}
+function reorderText(list){
+  const shop = (currentShop() && currentShop().name) || business().name;
+  return `Reorder list — ${shop} (${fmtDate(todayISO())})\n\n` + list.map((r,i)=>`${i+1}. ${r.g.name} — ${r.stock<=0?'OUT OF STOCK':r.stock+' left'}`).join('\n') + '\n\nPlease let me know what you can supply and the prices. Thank you.';
+}
+function screenReorder(){
+  const list = reorderItems();
+  return `
+    ${subHeader('Reorder List')}
+    ${list.length===0 ? `<div class="empty"><div class="ic">${ICON_BOX}</div><b>Nothing to reorder</b>Every item is above its reorder level.</div>` : `
+      <p class="subtle" style="margin-bottom:12px;">Items that are out of stock or at/below their reorder level. Send the list to your supplier.</p>
+      <div style="display:flex;gap:10px;margin-bottom:14px;">
+        <button class="btn btn-primary" id="reorder-send" style="flex:1;">${ICON_EXPORT} Send to supplier</button>
+        <button class="btn btn-outline" id="reorder-pic" style="flex:1;">Picture</button>
+      </div>
+      ${list.map(r=>`<div class="list-row"><div class="thumb">${r.g.emoji||'🛍️'}</div>
+        <div class="info"><div class="t1">${escapeHtml(r.g.name)}</div><div class="t2">Reorder level ${r.level}</div></div>
+        <div class="right">${r.stock<=0?'<span class="pill pill-red">Out</span>':`<span class="pill pill-amber">${r.stock} left</span>`}</div></div>`).join('')}`}`;
+}
+function bindReorderEvents(){
+  const s = document.getElementById('reorder-send');
+  if(s) s.addEventListener('click', ()=>openMessageSendSheet({ title:'Reorder list', subject:'Reorder list', text: reorderText(reorderItems()) }));
+  const p = document.getElementById('reorder-pic');
+  if(p) p.addEventListener('click', ()=>{
+    const rows = reorderItems().map(r=>({ l:r.g.name, r: r.stock<=0 ? 'OUT' : r.stock+' left', c: r.stock<=0 ? '#C0392B' : undefined }));
+    openDocSheet('Reorder List', { title:'Reorder List', sub:[fmtDate(todayISO())+' · '+((currentShop()&&currentShop().name)||'')], rows }, 'reorder-list');
+  });
+}
+
+/* ============================================================
    MORE / REPORTS / STAFF / SETTINGS / AUDIT
    ============================================================ */
 function screenMore(){
@@ -6684,6 +7078,8 @@ function screenMore(){
     {id:'compareshops', ic:ICON_BARCHART, label:t('more_compare'), show:isMaster() && ownerComparableShops().length>1},
     {id:'staff', ic:ICON_USERS, label:t('more_staff'), show:canManageStaff(), badge:pendingNameReqs},
     {id:'audit', ic:ICON_FILE, label:t('more_audit'), show:isMaster()},
+    {id:'staffact', ic:ICON_USERS, label:'Staff Activity', show:isMaster()},
+    {id:'reorder', ic:ICON_BOX, label:'Reorder List', show:!isViewer()},
     {id:'notes', ic:ICON_NOTEBOOK, label:t('more_notes'), show:true},
     {id:'calculator', ic:ICON_CALCULATOR, label:t('more_calculator'), show:true},
     {id:'profile', ic:ICON_USER, label:t('more_profile'), show:true},
@@ -6855,17 +7251,20 @@ function bindCalculatorEvents(){
   });
 }
 
+let __lastReportDoc = null;
 let reportsRange = '7d'; // today | 7d | 30d | month
 function getRangeDates(range){
   const today = new Date();
-  let start;
+  let start, end = new Date(today);
   if(range==='today') start = new Date(today);
   else if(range==='30d'){ start = new Date(today); start.setDate(start.getDate()-29); }
-  else if(range==='month') start = new Date(today.getFullYear(), today.getMonth(), 1);
+  else if(range==='week'){ start = new Date(today); start.setDate(start.getDate() - ((start.getDay()+6)%7)); } // Monday
+  else if(range==='month') start = new Date(today.getFullYear(), today.getMonth(), 1, 12);
+  else if(range==='lastmonth'){ start = new Date(today.getFullYear(), today.getMonth()-1, 1, 12); end = new Date(today.getFullYear(), today.getMonth(), 0, 12); }
   else { start = new Date(today); start.setDate(start.getDate()-6); } // 7d default
-  const days = [];
+  const days = [], endISO = end.toISOString().slice(0,10);
   let d = new Date(start);
-  while(d<=today){ days.push(d.toISOString().slice(0,10)); d.setDate(d.getDate()+1); }
+  for(let i=0; i<400; i++){ const iso = d.toISOString().slice(0,10); if(iso > endISO) break; days.push(iso); d.setDate(d.getDate()+1); }
   return days;
 }
 
@@ -6969,7 +7368,16 @@ function screenReports(){
     return { name: u ? u.firstName+' '+u.lastName : 'Unknown', ...d };
   }).sort((a,b)=>b.total-a.total);
 
-  const rangeLabels = {today:'Today', '7d':'7 Days', '30d':'30 Days', month:'This Month'};
+  const soldIds = new Set(); rangeSales.forEach(s=>s.items.forEach(it=>{ if(netQty(it)>0) soldIds.add(it.goodId); }));
+  const slowMovers = state.goods.filter(g=>g.shopId===state.currentShopId && isGoodActive(g) && totalStock(g)>0 && !soldIds.has(g.id)).slice(0,10);
+  const periodLabel = {today:'Today', week:'This week', '7d':'Last 7 days', '30d':'Last 30 days', month:'This month', lastmonth:'Last month'}[reportsRange];
+  const topList = topItems(rangeSales);
+  __lastReportDoc = { title:'Profit Report', sub:[periodLabel+' · '+((currentShop()&&currentShop().name)||'')], rows:[
+    {t:'h', text:'Summary'}, {l:'Revenue', r:fmtMoneyCanvas(totalRev)}, {l:'Gross profit', r:fmtMoneyCanvas(grossProfit)}, {l:'Expenses', r:fmtMoneyCanvas(totalExpenses)},
+    {l:'Net profit', r:fmtMoneyCanvas(netProfit), b:true, c: netProfit<0?'#C0392B':'#1E8E4E'},
+    {t:'h', text:'Best sellers'}, ...(topList.slice(0,6).map(t=>({l:t.name+' x '+t.qty, r:fmtMoneyCanvas(t.rev)}))), ...(topList.length?[]:[{t:'note', text:'No sales in this period.'}]),
+    {t:'h', text:'Slow movers'}, ...(slowMovers.map(g=>({l:g.name, r:totalStock(g)+' in stock'}))), ...(slowMovers.length?[]:[{t:'note', text:'None - everything in stock sold.'}]) ] };
+  const rangeLabels = {today:'Today', week:'This Week', '7d':'7 Days', '30d':'30 Days', month:'This Month', lastmonth:'Last Month'};
   return `
     ${subHeader("Profit Reports")}
     <div style="display:flex;gap:8px;margin-bottom:14px;overflow-x:auto;">
@@ -6992,12 +7400,15 @@ function screenReports(){
       </div>
       <div class="subtle" style="margin-top:8px;font-size:11px;">Bar = revenue · Marigold fill = gross profit share</div>
     </div>
+    <button class="btn btn-outline btn-sm" id="report-share" style="margin-bottom:12px;">${ICON_EXPORT} Share / Save this report</button>
     <div class="section-head"><h3>Top Items</h3></div>
     ${topItems(rangeSales).map(t=>`
       <div class="list-row"><div class="thumb">${t.emoji}</div>
         <div class="info"><div class="t1">${t.name}</div><div class="t2">${t.qty} sold</div></div>
         <div class="right"><b>${fmtMoney(t.rev)}</b></div>
       </div>`).join('') || '<p class="subtle">No sales in this period.</p>'}
+    <div class="section-head"><h3>Slow Movers</h3></div>
+    ${slowMovers.length ? slowMovers.map(g=>`<div class="list-row"><div class="thumb">${g.emoji||'🛍️'}</div><div class="info"><div class="t1">${escapeHtml(g.name)}</div><div class="t2">No sales in this period · ${totalStock(g)} in stock</div></div></div>`).join('') : '<p class="subtle">Everything in stock sold at least once in this period.</p>'}
     ${staffRows.length>1 || (staffRows.length===1) ? `
     <div class="section-head"><h3>Staff Performance</h3></div>
     ${staffRows.map(sr=>`
@@ -7008,6 +7419,8 @@ function screenReports(){
   `;
 }
 function bindReportsEvents(){
+  const rs = document.getElementById('report-share');
+  if(rs) rs.addEventListener('click', ()=>openDocSheet('Profit Report', __lastReportDoc, 'profit-report-'+reportsRange));
   document.querySelectorAll('[data-rrange]').forEach(b=>b.addEventListener('click', ()=>{ reportsRange=b.dataset.rrange; refreshMain(); }));
 }
 function topItems(sales){
@@ -13234,6 +13647,14 @@ const FAQ_GROUPS = [
   { category: "Customers & Credit", items: [
     { q:"How do I sell to a customer on credit?", a:"During a sale, choose the customer (or add a walk-in), and enter a smaller Amount Paid than the total. The rest is tracked as credit under More → Credit Ledger with a due date." },
     { q:"How do I see who owes me money?", a:"Go to More → Credit Ledger. It lists every unpaid or partly-paid sale with balances and due dates, and lets you send WhatsApp or SMS payment reminders — these open your own phone's WhatsApp/SMS app with the message pre-filled for you to send, nothing is sent automatically. To wipe a customer's whole debt at once, open the customer under Customers and tap Clear debt — see the next question." },
+    { q:"How do payment reminders work?", a:"When a customer's credit is overdue or due within 2 days, tap the bell. Under Send payment reminders you'll see their name and amount. Tap it, check or edit the message, then choose WhatsApp, SMS, Email or Share. ZeeShop never sends anything on its own — you always tap the button, so there are no email or SMS costs. Staff see reminders only for sales they made; the Owner sees all." },
+    { q:"How do I see when a customer paid?", a:"Tap the customer under Customers and scroll to Payments Received. Each part-payment shows the date, time and amount. Payments recorded before this feature, or at the time of sale, show as Paid at sale. These payment times are kept on the phone that recorded them." },
+    { q:"How do I send a customer their statement?", a:"Tap the customer, then tap Statement. You get one picture listing everything they bought, every payment, the total paid and the balance owed. Tap Share to send it on WhatsApp or email, or Save to keep it on your phone." },
+    { q:"How do I get birthday and anniversary reminders?", a:"Add a customer's birthday (month and day) when adding or editing them — it is saved on that phone. On the day, and for a few days around it, the bell shows Birthdays & anniversaries. Tap it to send a ready-made wish. The bell also reminds you of the yearly anniversary of a customer's first purchase." },
+    { q:"What is the Today's Summary on Close Day?", a:"At the top of More → Close Day you'll see today's sales, cash received, credit given, items sold, expenses (Owner only), and how many voids, returns and cleared debts happened. Tap Share / Save summary to send it as a picture." },
+    { q:"What is Staff Activity?", a:"Owner only. More → Staff Activity shows, for today, this week, 7 days, 30 days or this month, what each person sold and how many voids, returns, cleared debts and payments they handled, plus a list of recent voids and cleared debts. When someone voids a sale, returns goods or clears a debt, the bell also tells the Owner for the next 24 hours. It is a notice after the fact, not an approval step." },
+    { q:"What is the Reorder List?", a:"More → Reorder List shows everything that is out of stock or at/below its reorder level. Tap Send to supplier to share the list by WhatsApp, SMS or email, or Picture to share it as an image." },
+    { q:"Can I share my profit report?", a:"Yes. In More → Reports (Owner) pick Today, This Week, 7 Days, 30 Days, This Month or Last Month, then tap Share / Save this report. It includes revenue, profit, expenses, best sellers and Slow Movers — items in stock that did not sell in that period." },
     { q:"How do I clear a customer's debt?", a:"Open Customers and tap the customer. In the Owes box you'll see a tag: green Clear means they owe nothing; a red Clear debt button means they still owe. Tap Clear debt and a warning appears. Type PROCEED and an OK, clear it button shows up — tap it. Every unpaid sale for that customer is marked fully paid, and the amount counts as money received. It can't be undone and only the Owner can do it. For part payments, use Mark Paid in the Credit Ledger instead." },
   ]},
   { category: "Suppliers & Expenses", items: [

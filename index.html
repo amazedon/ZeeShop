@@ -366,5 +366,10 @@ footer{border-top:1px solid var(--line);padding:28px 0;}
     }catch(e){ /* keep static fallback content on any failure */ }
   })();
 </script>
+<script>
+/* A receipt QR code opens this page. Anyone sees the normal home page; the shop owner just taps Log In and the check carries on. */
+(function(){try{var m=location.search.match(/[?&]v=([^&#]+)/);if(!m)return;
+document.querySelectorAll('a[href="app.html"]').forEach(function(a){a.setAttribute('href','app.html?v='+m[1]);});}catch(e){}})();
+</script>
 </body>
 </html>

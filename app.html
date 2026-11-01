@@ -6482,15 +6482,16 @@ function openCustomerDetail(cid){
   const totalBought = sales.reduce((a,s)=>a+s.subtotal,0);
   openSheet(`
     <div class="sheet-head">
-      <h3>${c.fullName}</h3>
-      <div style="display:flex;gap:8px;align-items:center;">
+      <h3 style="min-width:0;overflow-wrap:anywhere;">${c.fullName}</h3>
+      <div style="display:flex;gap:8px;align-items:center;flex-shrink:0;">
+        ${bal>0?`<span class="pill pill-red">Owes</span>`:`<span class="pill pill-green">Clear</span>`}
         <button class="btn btn-sm btn-outline" id="edit-cust-btn">${ICON_PENCIL} Edit</button>
         <button class="close-x" id="sheet-close">${ICON_CLOSE}</button>
       </div>
     </div>
     <div class="stat-grid">
       <div class="stat-box"><div class="lbl">Total Bought</div><div class="val">${fmtMoney(totalBought)}</div></div>
-      <div class="stat-box"><div class="lbl">Owes</div><div class="val" style="color:${bal>0?'var(--red)':'var(--green)'}">${fmtMoney(bal)}</div><div style="margin-top:6px;">${bal>0?`<span class="pill pill-red">Owes</span>`:`<span class="pill pill-green">Clear</span>`}</div></div>
+      <div class="stat-box"><div class="lbl">Owes</div><div class="val" style="color:${bal>0?'var(--red)':'var(--green)'}">${fmtMoney(bal)}</div></div>
     </div>
     <div class="contact-btns">
       <a href="tel:${toTelHref(c.phoneE164, c.country)}">${ICON_PHONE} Call</a>

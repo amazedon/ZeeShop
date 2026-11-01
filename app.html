@@ -6379,7 +6379,6 @@ function screenCustomers(){
         <div class="info" style="flex:1;min-width:0;">
           <div class="t1">${c.fullName}</div>
           <div class="t2">${c.groupId?groupName(c.groupId):'Retail'} · ${c.phoneE164||'no phone'}</div>
-          <div style="margin-top:6px;">${bal>0?`<span class="pill pill-red">Owes ${fmtMoney(bal)}</span>`:`<span class="pill pill-green">Clear</span>`}</div>
         </div>
       </div>`;
     }).join('')}
@@ -6491,7 +6490,7 @@ function openCustomerDetail(cid){
     </div>
     <div class="stat-grid">
       <div class="stat-box"><div class="lbl">Total Bought</div><div class="val">${fmtMoney(totalBought)}</div></div>
-      <div class="stat-box"><div class="lbl">Owes</div><div class="val" style="color:${bal>0?'var(--red)':'var(--green)'}">${fmtMoney(bal)}</div></div>
+      <div class="stat-box"><div class="lbl">Owes</div><div class="val" style="color:${bal>0?'var(--red)':'var(--green)'}">${fmtMoney(bal)}</div><div style="margin-top:6px;">${bal>0?`<span class="pill pill-red">Owes</span>`:`<span class="pill pill-green">Clear</span>`}</div></div>
     </div>
     <div class="contact-btns">
       <a href="tel:${toTelHref(c.phoneE164, c.country)}">${ICON_PHONE} Call</a>

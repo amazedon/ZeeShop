@@ -9822,7 +9822,11 @@ async function voidSale(saleId){
   }
   const reason = await appPrompt('Why are you voiding this sale? (e.g. entered by mistake)');
   if(reason===null) return;
-  if(!await appConfirm('This restores all items to stock and removes the sale from your totals. Continue?')) return;
+  const typed = await appDialog({
+    message: `⚠️ Warning\n\nVoiding this sale (${fmtMoney(s.subtotal)}) puts all its items back in stock and removes it from your totals. A voided sale can NOT be undone or restored.\n\nType PROCEED to continue.`,
+    input: true, requireText: 'proceed', okText: 'OK, void it'
+  });
+  if(typed===null) return;
   s.items.forEach(it=>{
     const remaining = it.qty - (it.returnedQty||0);
     if(remaining<=0) return;
@@ -13217,7 +13221,7 @@ const FAQ_GROUPS = [
     { q:"A customer returned an item — how do I process that?", a:"Open the sale from History or the customer's record, and tap Process Return (next to Void Sale). Choose the quantity being returned — the sale total, any balance owed, and your stock count all update automatically." },
     { q:"Does History show the time of each sale?", a:"Yes. Each entry in More → History shows the date and the time it was recorded, for example 31 Oct 2026 · 3:45 PM. The same goes for customer purchases, credit, supplier restocks, stock corrections and salary payments. Expenses and entries saved before this update only have a date, because no time was recorded for them." },
     { q:"How do I share or save a receipt from History?", a:"Tap the entry in History. Sales open the receipt with Share Receipt and Save buttons under it; Process Return and Void Sale sit below. Supplier, expense and correction entries open a picture with Share and Save. There is no Share button on the list itself any more." },
-    { q:"I made a mistake on a sale — can I cancel it?", a:"Yes. Open the sale from History and tap Void Sale (next to Process Return). A voided sale is kept for your records but no longer counts toward totals or stock." },
+    { q:"I made a mistake on a sale — can I cancel it?", a:"Yes. Open the sale from History and tap Void Sale (next to Process Return). A voided sale is kept for your records but no longer counts toward totals, and its items go back into stock. Because it can't be undone, ZeeShop asks for a reason, then shows a warning where you must type PROCEED before the OK, void it button appears. If you voided by mistake, make a new sale for the same items." },
   ]},
   { category: "Hotel / Lodging", items: [
     { q:"How do I track food, drinks, or meat stock?", a:"The same way as any other item — through Goods. Batches with expiry dates work well for perishables like meat, drinks, and cooked food, and you'll get a low-stock or expiring alert automatically." },

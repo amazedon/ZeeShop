@@ -6488,16 +6488,15 @@ function openCustomerDetail(cid){
   const totalBought = sales.reduce((a,s)=>a+s.subtotal,0);
   openSheet(`
     <div class="sheet-head">
-      <h3 style="min-width:0;overflow-wrap:anywhere;">${c.fullName}</h3>
-      <div style="display:flex;gap:8px;align-items:center;flex-shrink:0;">
-        <button id="clear-debt-btn" class="pill ${bal>0?'pill-red':'pill-green'}" style="border:none;cursor:pointer;font-family:inherit;">${bal>0?'Clear debt':'Clear'}</button>
+      <h3>${c.fullName}</h3>
+      <div style="display:flex;gap:8px;align-items:center;">
         <button class="btn btn-sm btn-outline" id="edit-cust-btn">${ICON_PENCIL} Edit</button>
         <button class="close-x" id="sheet-close">${ICON_CLOSE}</button>
       </div>
     </div>
     <div class="stat-grid">
       <div class="stat-box"><div class="lbl">Total Bought</div><div class="val">${fmtMoney(totalBought)}</div></div>
-      <div class="stat-box"><div class="lbl">Owes</div><div class="val" style="color:${bal>0?'var(--red)':'var(--green)'}">${fmtMoney(bal)}</div></div>
+      <div class="stat-box"><div class="lbl">Owes</div><div class="val" style="color:${bal>0?'var(--red)':'var(--green)'}">${fmtMoney(bal)}</div><div style="margin-top:6px;"><button id="clear-debt-btn" class="pill ${bal>0?'pill-red':'pill-green'}" style="border:none;cursor:pointer;font-family:inherit;">${bal>0?'Clear debt':'Clear'}</button></div></div>
     </div>
     <div class="contact-btns">
       <a href="tel:${toTelHref(c.phoneE164, c.country)}">${ICON_PHONE} Call</a>
@@ -13231,7 +13230,7 @@ const FAQ_GROUPS = [
   { category: "Customers & Credit", items: [
     { q:"How do I sell to a customer on credit?", a:"During a sale, choose the customer (or add a walk-in), and enter a smaller Amount Paid than the total. The rest is tracked as credit under More → Credit Ledger with a due date." },
     { q:"How do I see who owes me money?", a:"Go to More → Credit Ledger. It lists every unpaid or partly-paid sale with balances and due dates, and lets you send WhatsApp or SMS payment reminders — these open your own phone's WhatsApp/SMS app with the message pre-filled for you to send, nothing is sent automatically. To wipe a customer's whole debt at once, open the customer under Customers and tap Clear debt — see the next question." },
-    { q:"How do I clear a customer's debt?", a:"Open Customers and tap the customer. Next to Edit you'll see a tag: green Clear means they owe nothing; a red Clear debt button means they still owe. Tap Clear debt and a warning appears. Type PROCEED and an OK, clear it button shows up — tap it. Every unpaid sale for that customer is marked fully paid, and the amount counts as money received. It can't be undone and only the Owner can do it. For part payments, use Mark Paid in the Credit Ledger instead." },
+    { q:"How do I clear a customer's debt?", a:"Open Customers and tap the customer. In the Owes box you'll see a tag: green Clear means they owe nothing; a red Clear debt button means they still owe. Tap Clear debt and a warning appears. Type PROCEED and an OK, clear it button shows up — tap it. Every unpaid sale for that customer is marked fully paid, and the amount counts as money received. It can't be undone and only the Owner can do it. For part payments, use Mark Paid in the Credit Ledger instead." },
   ]},
   { category: "Suppliers & Expenses", items: [
     { q:"What's the difference between Goods and Suppliers?", a:"Goods is your shelf inventory — what you have to sell, in batches with cost, price, and expiry. Suppliers tracks who you buy stock from and what you still owe them, separate from your sales and profit reports." },

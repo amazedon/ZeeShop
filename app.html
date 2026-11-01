@@ -1786,6 +1786,7 @@ let freshConnectCode = null;   // a Staff Connect Code is only shown on the visi
 function render(){
   try{ zxKick(); }catch(_e){}
   try{ zvCheckPending(); }catch(_e){}
+  if(route !== 'privacy' && privOpen) privOpen = '';
   if(route !== 'staff'){ staffOpen = new Set(); freshConnectCode = null; if(state.joinCode) state.joinCode = null; }   // codes vanish when you leave the Staff page
   if(!state.sessionUserId && route === 'note-view') route = 'notes';   // never leave a note open on the lock screen
   if(route !== 'note-view') noteMenuOpen = false;
@@ -3959,6 +3960,7 @@ function renderRoute(){
     case 'stockcount': return screenStockCount();
     case 'quotes': return screenQuotes();
     case 'verify': return screenVerify();
+    case 'jobs': return screenJobs();
     case 'about-us': return screenAboutUs();
     case 'contact-us': return screenContactUs();
     case 'profile': return screenProfile();
@@ -4560,13 +4562,15 @@ function openBell(){
       <div class="nz-main"><div class="nz-t1" style="font-weight:600;white-space:normal;">${i.text}</div></div>
       <div class="nz-chev">›</div>
     </div>`).join('') : `<div class="nz-empty"><div class="e">✅</div><b>All clear</b><div style="font-size:13px;margin-top:4px;">Nothing needs your attention right now.</div></div>`;
-  const remList = reminderCandidates(), occList = occasionCandidates(), staffLine = staffNoticeLine(), handList = readyToHandOver().slice(0,6), supList = suppliersOwed();
+  const remList = reminderCandidates(), occList = occasionCandidates(), staffLine = staffNoticeLine(), handList = readyToHandOver().slice(0,6), supList = suppliersOwed(), jobReady = jobsReadyList().slice(0,6);
   const row = (attr, icon, t1, t2)=>`<div class="nz-row" ${attr} role="button" tabindex="0"><div class="nz-tile">${icon}</div><div class="nz-main"><div class="nz-t1" style="font-weight:600;white-space:normal;">${t1}</div>${t2?`<div class="nz-t2">${t2}</div>`:''}</div><div class="nz-chev">›</div></div>`;
   const extra =
     (remList.length ? `<div class="section-head" style="margin:14px 0 8px;"><h3 style="font-size:15px;">Send payment reminders</h3></div>` +
       remList.slice(0,8).map(m=>row(`data-bell-rem="${m.cust.id}"`, '💬', `<b>${escapeHtml(m.cust.fullName)}</b> · ${fmtMoney(m.total)}`, m.overdue ? 'Overdue — tap to send a reminder' : 'Due soon — tap to send a reminder')).join('') : '') +
     (occList.length ? `<div class="section-head" style="margin:14px 0 8px;"><h3 style="font-size:15px;">Birthdays &amp; anniversaries</h3></div>` +
       occList.map((o,i)=>row(`data-bell-occ="${i}"`, o.kind==='birthday'?'🎂':'🎉', `<b>${escapeHtml(o.cust.fullName)}</b> · ${o.kind==='birthday'?'birthday':o.years+'-year customer'}`, (o.days===0?'Today':o.days>0?'In '+o.days+' day'+(o.days>1?'s':''):'Was '+(-o.days)+' day'+(o.days<-1?'s':'')+' ago')+' — tap to send a wish')).join('') : '') +
+    (jobReady.length ? `<div class="section-head" style="margin:14px 0 8px;"><h3 style="font-size:15px;">Jobs ready for pickup</h3></div>` +
+      jobReady.map(x=>{ const b = jobBuyer(x.s); return row(`data-bell-job="${x.s.id}"`, '✅', `<b>${escapeHtml(b.name)}</b> · ${escapeHtml(jobSummaryText(x.s))}`, 'Tap to message or mark collected'); }).join('') : '') +
     (staffLine ? `<div class="section-head" style="margin:14px 0 8px;"><h3 style="font-size:15px;">Staff activity (24 hours)</h3></div>` + row('id="bell-staff-row"', '🛡️', staffLine, 'Tap to see the full report') : '') +
     (handList.length ? `<div class="section-head" style="margin:14px 0 8px;"><h3 style="font-size:15px;">Ready to hand over</h3></div>` +
       handList.map(x=>{ const c = state.customers.find(y=>y.id===x.customerId); return row(`data-bell-hand="${x.id}"`, '📦', `<b>${escapeHtml(c?c.fullName:'Customer')}</b> · ${fmtMoney(x.subtotal)}`, 'Fully paid — tap to hand over'); }).join('') : '') +
@@ -4594,6 +4598,7 @@ function openBell(){
   document.getElementById('nz-bell-settings').addEventListener('click', ()=>{ nzClose('nz-bell'); openNotifSettings(); });
   ov.querySelectorAll('[data-bell-rem]').forEach(el=>el.addEventListener('click', ()=>{ nzClose('nz-bell'); openReminderFor(el.dataset.bellRem); }));
   ov.querySelectorAll('[data-bell-occ]').forEach(el=>el.addEventListener('click', ()=>{ nzClose('nz-bell'); openOccasionFor(Number(el.dataset.bellOcc)); }));
+  ov.querySelectorAll('[data-bell-job]').forEach(el=>el.addEventListener('click', ()=>{ nzClose('nz-bell'); openJobSheet(el.dataset.bellJob); }));
   ov.querySelectorAll('[data-bell-hand]').forEach(el=>el.addEventListener('click', ()=>{ nzClose('nz-bell'); openSaleDetail(el.dataset.bellHand); }));
   ov.querySelectorAll('[data-bell-sup]').forEach(el=>el.addEventListener('click', ()=>{ nzClose('nz-bell'); route = 'suppliers'; render(); openSupplierDetail(el.dataset.bellSup); }));
   const bsr = document.getElementById('bell-staff-row');
@@ -5091,7 +5096,22 @@ function subHeader(title){
     <h2 class="screen-title" style="margin:0;">${title}</h2>
   </div>`;
 }
+/* ---- services (laundry, mechanic, salon, hotel rooms...): an item with no stock. Saved in the good's existing spec fields so every phone sees it. ---- */
+function isSvc(g){ return !!g && g.specLabel === '__service'; }
+function svcInfo(g){ const m = { unit:'each', ask:false }; String((g && g.spec) || '').split(';').forEach(p=>{ const [k,v] = p.split('='); if(k==='unit') m.unit = v || 'each'; if(k==='ask') m.ask = (v==='1'); }); return m; }
+function svcUnitText(u){ return ({each:'each', kg:'per kg', hour:'per hour', day:'per day', job:'per job'})[u] || 'each'; }
+function svcQtySuffix(g){ if(!isSvc(g)) return ''; return ({kg:' kg', hour:' hr', day:' day(s)'})[svcInfo(g).unit] || ''; }
+function jobLabels(){
+  const t = String((business() && business().businessType) || '').toLowerCase();
+  if(t.includes('laundry')) return { ref:'Items / tag no.', refEx:'e.g. 5 pieces, tag 27', detail:'Special instructions', detailEx:'e.g. starch the shirts, stain on trouser' };
+  if(t.includes('mechanic')) return { ref:'Vehicle (plate / model)', refEx:'e.g. ABC-123XY Toyota Camry', detail:'Work to be done', detailEx:'e.g. change brake pads, check AC' };
+  if(t.includes('tailor')) return { ref:'Measurement / tag no.', refEx:'e.g. tag 12', detail:'Style / details', detailEx:'e.g. 2 native, slim fit' };
+  if(t.includes('salon') || t.includes('barber')) return { ref:'Appointment / name', refEx:'e.g. 3pm with Ada', detail:'Style / details', detailEx:'e.g. braids, medium length' };
+  return { ref:'Reference (optional)', refEx:'e.g. job or order reference', detail:'Details (optional)', detailEx:'e.g. what was agreed' };
+}
+function saleIsAllServices(s){ return s.items.length>0 && s.items.every(it=>{ const g=state.goods.find(x=>x.id===it.goodId); return isSvc(g); }); }
 function totalStock(g){
+  if(isSvc(g)) return 999999;
   if(g.hasVariants) return (g.variants||[]).reduce((a,v)=>a+Math.max(0,v.qty),0);
   return g.batches.reduce((a,b)=>a+Math.max(0,b.qtyRemaining),0);
 }
@@ -5108,6 +5128,7 @@ let saleDiscount = 0;
 let saleMode = 'cash'; // cash | credit
 let saleMethod = 'cash'; // how the customer paid: cash | transfer | pos
 let saleHold = false;    // layaway: keep the items until fully paid
+var saleJob = { ready:'', ref:'', detail:'' };   // service jobs: ready-by date, tag / vehicle, details
 let saleSearch = '';
 
 function screenNewSale(){
@@ -5170,7 +5191,7 @@ function screenNewSale(){
       const g = state.goods.find(x=>x.id===c.goodId);
       const variant = c.variantId ? (g.variants||[]).find(v=>v.id===c.variantId) : null;
       const batch = fifoBatch(g);
-      const price = (batch && batch.auctionActive) ? batch.auctionPrice : activePrice(g);
+      const price = (c.price!=null) ? c.price : (batch && batch.auctionActive) ? batch.auctionPrice : activePrice(g);
       const stockForLine = c.variantId ? variantStock(g, c.variantId) : totalStock(g);
       const key = lineKey(c.goodId, c.variantId);
       return `
@@ -5178,7 +5199,7 @@ function screenNewSale(){
         <div class="thumb">${g.emoji||'🛍️'}</div>
         <div class="info">
           <div class="t1">${g.name}${variant?` — ${escapeHtml(variant.label)}`:''}</div>
-          <div class="t2">${fmtMoney(price)} each · ${stockForLine} in stock</div>
+          <div class="t2">${isSvc(g) ? (svcInfo(g).ask ? `<button data-edit-price="${key}" style="background:none;border:none;padding:0;font-size:inherit;font-weight:700;color:var(--marigold-dark);text-decoration:underline;">${fmtMoney(price)} · change price</button>` : fmtMoney(price)+' '+svcUnitText(svcInfo(g).unit)) : fmtMoney(price)+' each · '+stockForLine+' in stock'}</div>
           <button data-item-note="${key}" style="background:none;border:none;text-align:left;padding:2px 0;font-size:11px;font-weight:700;${c.note?'color:var(--marigold-dark);':'color:var(--text-dim);text-decoration:underline;'}">
             ${c.note ? '${ICON_EDIT_NOTE} '+c.note : '+ Add size / spec / part no.'}
           </button>
@@ -5195,6 +5216,14 @@ function screenNewSale(){
       </div>`;
     }).join('')}
     ` : ''}
+
+    ${(cart.length && cart.some(c=>isSvc(state.goods.find(x=>x.id===c.goodId)))) ? (()=>{ const jl = jobLabels(); return `
+    <div class="card" id="job-card">
+      <div style="font-weight:800;margin-bottom:8px;">🧾 Job details <span class="subtle" style="font-weight:400;">(prints on the receipt)</span></div>
+      <div class="field"><label>Ready by <span class="subtle">(optional)</span></label><input id="ns-job-ready" type="date" value="${escAttr(saleJob.ready||'')}"></div>
+      <div class="field"><label>${jl.ref}</label><input id="ns-job-ref" placeholder="${escAttr(jl.refEx)}" value="${escAttr(saleJob.ref||'')}"></div>
+      <div class="field" style="margin-bottom:0;"><label>${jl.detail}</label><input id="ns-job-detail" placeholder="${escAttr(jl.detailEx)}" value="${escAttr(saleJob.detail||'')}"></div>
+    </div>`; })() : ''}
 
     ${cart.length? `
     <div class="card">
@@ -5224,8 +5253,8 @@ function screenNewSale(){
         return `
         <button class="good-tile ${stock<=0?'instock0':''}" data-add-good="${g.id}" ${stock<=0?'disabled':''}>
           <div class="gic">${g.emoji||'🛍️'}</div>
-          <div class="gname">${g.name}${inCartQty?` (${inCartQty})`:''}${g.hasVariants?' · sizes':''}</div>
-          <div class="gprice">${fmtMoney(activePrice(g))}</div>
+          <div class="gname">${g.name}${inCartQty?` (${inCartQty})`:''}${g.hasVariants?' · sizes':''}${isSvc(g)?' · service':''}</div>
+          <div class="gprice">${isSvc(g) && svcInfo(g).ask ? 'Set price' : fmtMoney(activePrice(g))}</div>
         </button>`;
       }).join('') : `<div class="empty" style="grid-column:1/-1;"><div class="ic">${ICON_BOX}</div><b>No goods yet</b>Add stock from the Goods tab, then come back here.</div>`}
     </div>
@@ -5292,7 +5321,7 @@ function cartTotal(){
   return cart.reduce((sum,c)=>{
     const g = state.goods.find(x=>x.id===c.goodId);
     const batch = fifoBatch(g);
-    const price = (batch && batch.auctionActive) ? batch.auctionPrice : activePrice(g);
+    const price = (c.price!=null) ? c.price : (batch && batch.auctionActive) ? batch.auctionPrice : activePrice(g);
     return sum + price*c.qty;
   },0);
 }
@@ -5351,6 +5380,7 @@ function bindRouteEvents(){
     });
     const ewb = document.getElementById('edit-walkin-btn');
     if(ewb) ewb.addEventListener('click', openWalkInModal);
+    [['ns-job-ready','ready'],['ns-job-ref','ref'],['ns-job-detail','detail']].forEach(([id,k])=>{ const el=document.getElementById(id); if(el) el.addEventListener('input', ()=>{ saleJob[k]=el.value; }); });
     const noteInput = document.getElementById('ns-note');
     if(noteInput) noteInput.addEventListener('input', e=>{ saleNote = e.target.value; });
     const discInput = document.getElementById('ns-discount');
@@ -5363,12 +5393,18 @@ function bindRouteEvents(){
     const mc = document.getElementById('mode-cash'); if(mc) mc.addEventListener('click', ()=>{ saleMode='cash'; refreshMain(); });
     const md = document.getElementById('mode-credit'); if(md) md.addEventListener('click', ()=>{ saleMode='credit'; refreshMain(); });
     document.querySelectorAll('[data-add-good]').forEach(b=>{
-      b.addEventListener('click', ()=>{
+      b.addEventListener('click', async ()=>{
         const gid = b.dataset.addGood;
         const g = state.goods.find(x=>x.id===gid);
         if(g.hasVariants){ openVariantPickerModal(gid); return; }
         const stock = totalStock(g);
         const existing = cart.find(c=>c.goodId===gid && !c.variantId);
+        if(isSvc(g) && svcInfo(g).ask && !existing){
+          const v = await appPrompt('Price for '+g.name+' ('+svcUnitText(svcInfo(g).unit)+'):', g.basePrice ? String(g.basePrice) : '');
+          const n = Number(String(v==null?'':v).replace(/[^0-9.]/g,''));
+          if(!n || n<=0){ if(v!==null) toast('Type the price for this job.'); return; }
+          cart.push({goodId:gid, variantId:null, qty:1, note:'', price:n}); refreshMain(); return;
+        }
         if(existing){
           if(existing.qty+1 > stock){ toast('Not enough stock.'); return; }
           existing.qty++;
@@ -5388,6 +5424,16 @@ function bindRouteEvents(){
         const stock = variantId ? variantStock(g, variantId) : totalStock(g);
         if(line.qty+1 > stock){ toast('Not enough stock.'); return; }
         line.qty++; refreshMain();
+      });
+    });
+    document.querySelectorAll('[data-edit-price]').forEach(b=>{
+      b.addEventListener('click', async ()=>{
+        const {goodId,variantId} = parseKey(b.dataset.editPrice);
+        const line = cart.find(c=>c.goodId===goodId && c.variantId===variantId); const g = state.goods.find(x=>x.id===goodId);
+        if(!line) return;
+        const v = await appPrompt('Price for '+g.name+':', String(line.price!=null?line.price:g.basePrice||''));
+        const n = Number(String(v==null?'':v).replace(/[^0-9.]/g,''));
+        if(n>0){ line.price = n; refreshMain(); } else if(v!==null) toast('Type a price above zero.');
       });
     });
     document.querySelectorAll('[data-qty-dec]').forEach(b=>{
@@ -5430,6 +5476,7 @@ function bindRouteEvents(){
   if(route==='stockcount') bindStockCountEvents();
   if(route==='quotes') bindQuotesEvents();
   if(route==='verify') bindVerifyEvents();
+  if(route==='jobs') bindJobsEvents();
   if(route==='staff') bindStaffEvents();
   if(route==='audit') bindAuditEvents();
   if(route==='notes') bindNotesEvents();
@@ -5525,9 +5572,10 @@ function confirmSale(){
   }
   const touchedBatches = {}; // batchId -> good_id (for syncing updated qty_remaining after deduction)
   const touchedVariants = {}; // variantId -> good_id
+  const hasSvcLine = cart.some(c=>isSvc(state.goods.find(x=>x.id===c.goodId)));
   const items = cart.map(c=>{
     const g = state.goods.find(x=>x.id===c.goodId);
-    const price = activePrice(g);
+    const price = (c.price!=null) ? c.price : activePrice(g);
     let batchId = null;
     let variantLabel = '';
     if(c.variantId){
@@ -5561,6 +5609,7 @@ function confirmSale(){
   };
   state.sales.push(sale);
   zxSet('method', sale.id, { m: saleMethod });
+  if(hasSvcLine) zxSet('job', sale.id, { status:'received', ready: saleJob.ready||'', ref: (saleJob.ref||'').trim(), detail: (saleJob.detail||'').trim(), at: new Date().toISOString() });
   if(saleMode==='credit' && saleHold && paid<total) zxSet('hold', sale.id, { held:true, handed:false });
   syncSaleInsert(sale);
   Object.keys(touchedBatches).forEach(batchId=>{
@@ -5574,7 +5623,7 @@ function confirmSale(){
     if(v) enqueueSync('good_variants','update', { id: v.id, qty: v.qty });
   });
   logAudit('sale_created', `Sale ${fmtMoney(total)} (${status})`);
-  cart=[]; saleCustomerId=null; saleMode='cash'; saleMethod='cash'; saleHold=false; saleWalkInName=''; saleWalkInPhone=''; saleNote=''; saleDiscount=0;
+  cart=[]; saleJob={ready:'',ref:'',detail:''}; saleCustomerId=null; saleMode='cash'; saleMethod='cash'; saleHold=false; saleWalkInName=''; saleWalkInPhone=''; saleNote=''; saleDiscount=0;
   closeSheet();
   render(); // clears the completed sale off the New Sale screen so its button can't be tapped again
   toast('Sale saved ✅');
@@ -5827,7 +5876,7 @@ function layoutAndDrawReceipt(s, shop, cust, seller, ctx, logoImg){
   y += 8;
   L(PAD, y, W-PAD, y); y += 20;
 
-  T('Receipt #'+s.id.slice(-6).toUpperCase(), PAD, 'left', '700 12px Arial,Helvetica,sans-serif', '#242B38');
+  T((saleIsAllServices(s) ? 'Service Receipt #' : 'Receipt #')+s.id.slice(-6).toUpperCase(), PAD, 'left', '700 12px Arial,Helvetica,sans-serif', '#242B38');
   T(fmtDate(s.date), W-PAD, 'right', '400 12px Arial,Helvetica,sans-serif'); y += 17;
   T('Sold by: '+seller.firstName+' '+seller.lastName, PAD, 'left', '400 12px Arial,Helvetica,sans-serif', '#6B7280');
   if(s.createdAt && !isNaN(new Date(s.createdAt).getTime())){
@@ -5839,12 +5888,19 @@ function layoutAndDrawReceipt(s, shop, cust, seller, ctx, logoImg){
   const buyerPhone = cust ? cust.phoneE164 : s.walkInPhone;
   if(buyerPhone){ y += 15; T(buyerPhone, PAD, 'left', '400 11.5px Arial,Helvetica,sans-serif', '#6B7280'); }
   y += 14;
+  const jobx = zxGet('job', s.id);
+  if(jobx){
+    const jl = jobLabels();
+    if(jobx.ready){ y += 4; T('Ready by: '+fmtDate(jobx.ready), PAD, 'left', '700 12px Arial,Helvetica,sans-serif', '#12213B'); y += 15; }
+    if(jobx.ref){ wrapPlainText(canvasSafeText(jl.ref+': '+jobx.ref), 52).forEach(ln=>{ T(ln, PAD, 'left', '400 11.5px Arial,Helvetica,sans-serif', '#242B38'); y += 15; }); }
+    if(jobx.detail){ wrapPlainText(canvasSafeText(jl.detail+': '+jobx.detail), 52).forEach(ln=>{ T(ln, PAD, 'left', 'italic 400 11px Arial,Helvetica,sans-serif', '#6B7280'); y += 14; }); }
+  }
   L(PAD, y, W-PAD, y); y += 18;
 
   s.items.forEach((it,idx)=>{
     const g = state.goods.find(x=>x.id===it.goodId);
     const itemLabel = it.variantLabel ? `${g.name} (${it.variantLabel})` : g.name;
-    T(`${itemLabel} × ${it.qty}${it.returnedQty?` (${it.returnedQty} returned)`:''}`, PAD, 'left', '400 12.5px Arial,Helvetica,sans-serif', '#242B38');
+    T(`${itemLabel} × ${it.qty}${svcQtySuffix(g)}${it.returnedQty?` (${it.returnedQty} returned)`:''}`, PAD, 'left', '400 12.5px Arial,Helvetica,sans-serif', '#242B38');
     T(fmtMoneyCanvas(it.priceUsed*it.qty), W-PAD, 'right');
     y += LINE_H;
     if(itemNoteLines[idx].length){
@@ -5885,7 +5941,7 @@ function layoutAndDrawReceipt(s, shop, cust, seller, ctx, logoImg){
 
   T(shop.receiptFooter||'Thank you for your business!', W/2, 'center', '400 11.5px Arial,Helvetica,sans-serif', '#6B7280');
   y += 16;
-  const terms = shop.receiptTerms!=null ? shop.receiptTerms : 'Goods sold in good condition. No refund after payment.';
+  const terms = shop.receiptTerms!=null ? shop.receiptTerms : (saleIsAllServices(s) ? 'Please bring this receipt when you come to collect.' : 'Goods sold in good condition. No refund after payment.');
   if(terms){
     wrapPlainText(canvasSafeText(terms), 56).forEach(line=>{
       T(line, W/2, 'center', 'italic 400 9.5px Arial,Helvetica,sans-serif', '#9AA0AB'); y += 12;
@@ -5909,6 +5965,7 @@ async function drawReceiptToCanvas(canvas, s, shop, cust, seller){
 }
 function receiptText(s,shop,cust){
   let t = `${shop.name}${business().businessType?' ('+business().businessType+')':''}\n${shop.address?shop.address+'\n':''}${business().registrationNumber?'Reg. No: '+business().registrationNumber+'\n':''}Receipt #${s.id.slice(-6).toUpperCase()} — ${fmtDate(s.date)}${s.createdAt && !isNaN(new Date(s.createdAt).getTime()) ? ', '+new Date(s.createdAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true}) : ''}\nTxn ID: ${s.id}\nBuyer: ${cust?cust.fullName:(s.walkInName||'Walk-in customer')}\n`;
+  { const j = zxGet('job', s.id), jl = jobLabels(); if(j){ if(j.ready) t += `Ready by: ${fmtDate(j.ready)}\n`; if(j.ref) t += `${jl.ref}: ${j.ref}\n`; if(j.detail) t += `${jl.detail}: ${j.detail}\n`; } }
   s.items.forEach((it,idx)=>{ const g=state.goods.find(x=>x.id===it.goodId); const itemLabel = it.variantLabel ? `${g.name} (${it.variantLabel})` : g.name; t+=`${idx+1}. ${itemLabel} x${it.qty} — ${fmtMoney(it.priceUsed*it.qty)}\n`; if(it.note) t+=`   (${it.note})\n`; });
   if(s.note) t += `${s.note}\n`;
   if((s.discount>0) || (s.taxAmount>0)){
@@ -5918,7 +5975,7 @@ function receiptText(s,shop,cust){
   }
   t += `Total: ${fmtMoney(s.subtotal)}\n`;
   if(s.status!=='paid') t += `Paid: ${fmtMoney(s.paidAmount)} | Balance: ${fmtMoney(s.balance)} due ${fmtDate(s.dueDate)}\n`;
-  const terms = shop.receiptTerms!=null ? shop.receiptTerms : 'Goods sold in good condition. No refund after payment.';
+  const terms = shop.receiptTerms!=null ? shop.receiptTerms : (saleIsAllServices(s) ? 'Please bring this receipt when you come to collect.' : 'Goods sold in good condition. No refund after payment.');
   if(terms) t += `${terms}\n`;
   t += `- ${shop.name}`;
   return t;
@@ -5943,7 +6000,7 @@ function goodRowHtml(g){
   if(hidden) pill = `<span class="pill pill-gray">HIDDEN</span>`;
   else if(stock<=0) pill = `<span class="pill pill-gray">OUT OF STOCK</span>`;
   else if(!pill && stock<=(g.reorderLevel||5)) pill = `<span class="pill pill-amber">LOW STOCK</span>`;
-  const subLine = g.hasVariants ? `${(g.variants||[]).length} size/color option(s) · ${stock} total in stock`
+  const subLine = isSvc(g) ? ('Service · ' + svcUnitText(svcInfo(g).unit) + (svcInfo(g).ask ? ' · price set at sale' : '')) : g.hasVariants ? `${(g.variants||[]).length} size/color option(s) · ${stock} total in stock`
     : g.spec ? `${escapeHtml(g.specLabel||'Spec')}: ${escapeHtml(g.spec)} · ${stock} in stock`
     : g.dimension && g.dimension.value ? `${escapeHtml(g.dimension.value)} ${escapeHtml(g.dimension.unit||'')} · ${stock} in stock`
     : `${stock} in stock${isOwnerLike()?(' · cost '+fmtMoney(g.costPrice)):''}`;
@@ -6074,10 +6131,12 @@ function parseBulkCSV(raw){
 }
 
 let pendingVariants = []; // used only while the Variants add-goods form is open
+var addGoodKind = 'product';
 function openAddGoodModal(){
   const u = currentUser();
   if(isStaff() && !isSuperAdmin() && !u.canAddGoods){ toast('Only the Owner can add goods (or grant you permission).'); return; }
   pendingVariants = [];
+  { const bt = String((business() && business().businessType) || '').toLowerCase(); addGoodKind = /laundry|mechanic|salon|barber|tailor|hotel|lodging|rental/.test(bt) ? 'service' : 'product'; }
   renderAddGoodSheet();
 }
 function iconOptionsHTML(){
@@ -6087,6 +6146,28 @@ function iconOptionsHTML(){
 function renderAddGoodSheet(){
   const profile = goodsFormProfile();
   let bodyHTML = '';
+  const kindToggle = `<div style="display:flex;gap:8px;margin-bottom:12px;">
+      <button type="button" class="btn btn-sm ${addGoodKind==='product'?'btn-dark':'btn-outline'}" data-ag-kind="product" style="flex:1;">📦 Product <span style="font-weight:400;font-size:11px;">(has stock)</span></button>
+      <button type="button" class="btn btn-sm ${addGoodKind==='service'?'btn-dark':'btn-outline'}" data-ag-kind="service" style="flex:1;">🧺 Service <span style="font-weight:400;font-size:11px;">(no stock)</span></button>
+    </div>`;
+  if(addGoodKind==='service'){
+    openSheet(`
+      <div class="sheet-head"><h3>Add Service</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
+      ${kindToggle}
+      <div class="field"><label>Service name</label><input id="ag-name" placeholder="${escAttr(findBizTypeMapping(GOODS_NAME_EXAMPLES) || 'e.g. Wash and iron')}"></div>
+      <div class="row2">
+        <div class="field"><label>Price</label><input id="ag-price" type="number" min="0"></div>
+        <div class="field"><label>Charged</label><select id="ag-unit"><option value="each">each</option><option value="kg">per kg</option><option value="hour">per hour</option><option value="day">per day</option><option value="job">per job</option></select></div>
+      </div>
+      <label style="display:flex;gap:8px;align-items:flex-start;margin:4px 0 12px;font-size:13px;"><input type="checkbox" id="ag-ask" style="margin-top:3px;"><span><b>Type the price at the time of sale</b><br><span class="subtle">Use this when the price changes every job, like a mechanic's labour. The price above is then only a suggestion.</span></span></label>
+      <div class="field"><label>Your cost per service <span class="subtle">(optional — e.g. detergent, so profit is exact)</span></label><input id="ag-cost" type="number" min="0" value="0"></div>
+      <div class="field"><label>Icon</label><select id="ag-emoji">${iconOptionsHTML()}</select></div>
+      <button class="btn btn-primary" id="save-good">Save Service</button>
+    `);
+    document.querySelectorAll('[data-ag-kind]').forEach(b=>b.addEventListener('click', ()=>{ addGoodKind = b.dataset.agKind; renderAddGoodSheet(); }));
+    document.getElementById('save-good').addEventListener('click', ()=>saveNewService());
+    return;
+  }
 
   if(profile==='variants'){
     const nameExample = findBizTypeMapping(GOODS_NAME_EXAMPLES) || 'Polo Shirt';
@@ -6180,11 +6261,30 @@ function renderAddGoodSheet(){
 
   openSheet(`
     <div class="sheet-head"><h3>Add Goods</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
+    ${kindToggle}
     ${bodyHTML}
     <div class="field"><label>Icon</label><select id="ag-emoji">${iconOptionsHTML()}</select></div>
     <button class="btn btn-primary" id="save-good">Save Item</button>
   `);
+  document.querySelectorAll('[data-ag-kind]').forEach(b=>b.addEventListener('click', ()=>{ addGoodKind = b.dataset.agKind; renderAddGoodSheet(); }));
   bindAddGoodEvents(profile);
+}
+function saveNewService(){
+  const limits = planLimits();
+  if(state.goods.length >= limits.goods){ toast(`Your ${planLabel()} plan allows up to ${limits.goods} goods. Upgrade for more.`); return; }
+  const name = document.getElementById('ag-name').value.trim();
+  const price = Number(document.getElementById('ag-price').value||0);
+  const cost = Number(document.getElementById('ag-cost').value||0);
+  const unit = document.getElementById('ag-unit').value;
+  const ask = document.getElementById('ag-ask').checked;
+  const emoji = document.getElementById('ag-emoji').value;
+  if(!name){ toast('Type the service name.'); return; }
+  if(!ask && price<=0){ toast('Type the price, or tick "Type the price at the time of sale".'); return; }
+  const g = { id: uid('good'), shopId: state.currentShopId, name, basePrice:price, costPrice:cost, emoji, groupPrices:[], barcode:null, reorderLevel:0, hasVariants:false, batches:[], spec:'unit='+unit+';ask='+(ask?'1':'0'), specLabel:'__service' };
+  state.goods.push(g);
+  syncGoodInsert(g);
+  logAudit('good_added', 'Added service '+name);
+  closeSheet(); toast('Service added ✅'); render();
 }
 function bindAddGoodEvents(profile){
   if(profile==='variants'){
@@ -6301,13 +6401,13 @@ function openGoodDetail(gid){
   const g = state.goods.find(x=>x.id===gid);
   const u = currentUser();
   const canEditPrice = isOwnerLike();
-  const extraInfo = g.spec ? `<div class="t2" style="margin-bottom:10px;">${g.specLabel||'Spec'}: ${escapeHtml(g.spec)}</div>`
+  const extraInfo = isSvc(g) ? `<div class="t2" style="margin-bottom:10px;">Service · ${svcUnitText(svcInfo(g).unit)}${svcInfo(g).ask?' · price is typed at the time of sale':''}</div>` : g.spec ? `<div class="t2" style="margin-bottom:10px;">${g.specLabel||'Spec'}: ${escapeHtml(g.spec)}</div>`
     : (g.dimension && g.dimension.value) ? `<div class="t2" style="margin-bottom:10px;">${escapeHtml(g.dimension.value)} ${escapeHtml(g.dimension.unit||'')}</div>` : '';
   openSheet(`
     <div class="sheet-head"><h3>${escapeHtml(g.name)}</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
     ${!isGoodActive(g) ? `<div class="zs-note zs-note-amber" style="margin-bottom:12px;"><b>Hidden item.</b> It is not shown for sale or in stock alerts. Past sales and receipts still include it.${g.deactivationReason?`<br>Reason: ${escapeHtml(g.deactivationReason)}${g.deactivatedAt?' · '+fmtDate(g.deactivatedAt.slice(0,10)):''}`:''}</div>` : ''}
     <div class="stat-grid" ${canSeeSold() ? 'style="grid-template-columns:repeat(3,1fr);"' : ''}>
-      <div class="stat-box"><div class="lbl">In Stock</div><div class="val">${totalStock(g)}</div></div>
+      ${isSvc(g) ? '<div class="stat-box"><div class="lbl">Type</div><div class="val" style="font-size:15px;">Service</div></div>' : `<div class="stat-box"><div class="lbl">In Stock</div><div class="val">${totalStock(g)}</div></div>`}
       <div class="stat-box"><div class="lbl">Price</div><div class="val" id="price-display">${fmtMoney(g.basePrice)}</div></div>
       ${canSeeSold() ? `<button type="button" class="stat-box" id="sold-box" data-gid="${g.id}" aria-label="Total sold — tap to see the sales history" style="text-align:left;cursor:pointer;font:inherit;"><div class="lbl">Total Sold ›</div><div class="val" id="sold-val">${fmtQty(summarizeSaleLines(localItemSalesLines([g.id], null)).net)}</div></button>` : ''}
     </div>
@@ -6318,9 +6418,9 @@ function openGoodDetail(gid){
       <button class="btn btn-outline" id="save-price" style="margin-bottom:14px;">Save Changes</button>
     ` : `<button class="btn btn-outline" id="try-edit-price" style="margin-bottom:6px;">${ICON_PENCIL} Edit Price</button>`}
     <div id="lock-msg"></div>
-    ${(!g.hasVariants && canDo('canAddGoods')) ? `<button class="btn btn-primary" id="add-stock-btn" style="margin-bottom:14px;">＋ Add Stock</button>` : ''}
+    ${(!g.hasVariants && !isSvc(g) && canDo('canAddGoods')) ? `<button class="btn btn-primary" id="add-stock-btn" style="margin-bottom:14px;">＋ Add Stock</button>` : ''}
 
-    ${g.hasVariants ? `
+    ${isSvc(g) ? '' : g.hasVariants ? `
     <div class="section-head"><h3>Sizes / Colors</h3></div>
     ${(g.variants||[]).map(v=>`<div class="list-row">
         <div class="thumb">${v.qty<=0?ICON_INBOX_EMPTY:ICON_BOX}</div>
@@ -7135,7 +7235,7 @@ function bindDailySummary(){
 
 /* ---------------- Reorder list ---------------- */
 function reorderItems(){
-  return state.goods.filter(g=>g.shopId===state.currentShopId && isGoodActive(g) && totalStock(g) <= (g.reorderLevel||5))
+  return state.goods.filter(g=>g.shopId===state.currentShopId && isGoodActive(g) && !isSvc(g) && totalStock(g) <= (g.reorderLevel||5))
     .map(g=>({ g, stock: totalStock(g), level: g.reorderLevel||5 })).sort((a,b)=>a.stock-b.stock);
 }
 function reorderText(list){
@@ -7295,7 +7395,7 @@ let stockCountVals = {};
 let stockCountSearch = '';
 function stockCountRows(){
   const rows = [];
-  state.goods.filter(g=>g.shopId===state.currentShopId && isGoodActive(g)).forEach(g=>{
+  state.goods.filter(g=>g.shopId===state.currentShopId && isGoodActive(g) && !isSvc(g)).forEach(g=>{
     if(g.hasVariants) (g.variants||[]).forEach(v=>rows.push({ key:g.id+':'+v.id, g, v, name:g.name+' ('+v.label+')', system:Math.max(0,v.qty) }));
     else rows.push({ key:g.id, g, v:null, name:g.name, system:totalStock(g) });
   });
@@ -7636,6 +7736,7 @@ function screenMore(){
     {id:'stockcount', ic:ICON_BOX, label:'Stock Count', show:!isViewer() && (isOwnerLike() || canDo('canAddGoods'))},
     {id:'quotes', ic:ICON_FILE, label:'Quotations', show:!isViewer()},
     {id:'verify', ic:ICON_CHECK_CIRCLE, label:'Verify Receipt', show:isOwnerLike()},
+    {id:'jobs', ic:ICON_FILE, label:'Jobs', show:!isViewer() && hasServicesOrJobs()},
     {id:'notes', ic:ICON_NOTEBOOK, label:t('more_notes'), show:true},
     {id:'calculator', ic:ICON_CALCULATOR, label:t('more_calculator'), show:true},
     {id:'profile', ic:ICON_USER, label:t('more_profile'), show:true},
@@ -7925,7 +8026,7 @@ function screenReports(){
   }).sort((a,b)=>b.total-a.total);
 
   const soldIds = new Set(); rangeSales.forEach(s=>s.items.forEach(it=>{ if(netQty(it)>0) soldIds.add(it.goodId); }));
-  const slowMovers = state.goods.filter(g=>g.shopId===state.currentShopId && isGoodActive(g) && totalStock(g)>0 && !soldIds.has(g.id)).slice(0,10);
+  const slowMovers = state.goods.filter(g=>g.shopId===state.currentShopId && isGoodActive(g) && !isSvc(g) && totalStock(g)>0 && !soldIds.has(g.id)).slice(0,10);
   const periodLabel = {today:'Today', week:'This week', '7d':'Last 7 days', '30d':'Last 30 days', month:'This month', lastmonth:'Last month'}[reportsRange];
   const topList = topItems(rangeSales);
   __lastReportDoc = { title:'Profit Report', sub:[periodLabel+' · '+((currentShop()&&currentShop().name)||'')], rows:[
@@ -9665,33 +9766,44 @@ function screenSettings(){
     `:''}
   `;
 }
+var privOpen = '';
+var PRIV_SHIELD = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v5c0 4.2 2.7 7.6 7 9 4.3-1.4 7-4.8 7-9V6l-7-3z"/><path d="M8.5 11.5h.01M11 11.5h.01M13.5 11.5h.01M16 11.5h.01" stroke-width="2.4"/></svg>`;
+function privRow(key, iconHtml, label, bodyHtml){
+  const open = privOpen === key;
+  return `<div class="card" style="padding:0;overflow:hidden;">
+    <button type="button" data-priv-toggle="${key}" aria-expanded="${open}" style="width:100%;display:flex;align-items:center;gap:14px;padding:14px 16px;background:none;border:none;text-align:left;font:inherit;color:inherit;cursor:pointer;">
+      <span style="width:44px;height:44px;border-radius:50%;background:rgba(128,128,128,.16);display:flex;align-items:center;justify-content:center;flex-shrink:0;">${iconHtml}</span>
+      <span style="flex:1;font-weight:600;font-size:16px;">${label}</span>
+      <span style="font-size:24px;line-height:1;transition:transform .15s;${open?'transform:rotate(90deg);':''}">›</span>
+    </button>
+    ${open ? `<div style="padding:0 16px 16px;">${bodyHtml}</div>` : ''}
+  </div>`;
+}
 function screenPrivacy(){
   const u = currentUser();
+  if(typeof billPinOtpSent!=='undefined' && (billPinOtpSent || billPinOtpSending)) privOpen = 'bill';
   return `
     ${subHeader("Privacy &amp; Security")}
 
     <div class="section-head"><h3>Sign-in</h3></div>
     ${u.role==='master'?`
-    <div class="card">
-      <div class="t1" style="margin-bottom:10px;">${u.passwordHash?'Change Password':'Set a Password'}</div>
+    ${privRow('pass', ICON_LOCK, u.passwordHash?'Change Password':'Set a Password', `
       ${u.passwordHash ? '' : `<p class="subtle" style="margin-bottom:10px;">You signed up with Google, so you don't have a password yet. Setting one now means you can also log in with your email and password, not just Google — useful as a backup if you ever lose access to that Google account.</p>`}
       ${u.passwordHash ? `<div class="field"><label>Current Password</label><input id="pf-currentpass" type="password" placeholder="Required to confirm it's you"></div>` : ''}
       <div class="field"><label>New Password</label><input id="pf-newpass" type="password" placeholder="Min 6 characters"></div>
       <div class="field"><label>Confirm New Password</label><input id="pf-newpass2" type="password"></div>
       <button class="btn btn-outline" id="save-password-btn">${u.passwordHash?'Update Password':'Set Password'}</button>
-    </div>` : `
-    <div class="card">
-      <div class="t1" style="margin-bottom:10px;">Change My PIN</div>
+    `)}` : `
+    ${privRow('pin', ICON_LOCK, 'Change My PIN', `
       <div class="field"><label>Current PIN</label><input id="pf-currentpin" type="tel" maxlength="6" placeholder="Required to confirm it's you"></div>
       <div class="field"><label>New PIN <span class="subtle">(4-6 digits)</span></label><input id="pf-newpin" type="tel" maxlength="6" placeholder="••••"></div>
       <div class="field"><label>Confirm New PIN</label><input id="pf-newpin2" type="tel" maxlength="6"></div>
       <button class="btn btn-outline" id="save-pin-btn">Update PIN</button>
-    </div>`}
+    `)}`}
 
     ${isMaster()?`
     <div class="section-head"><h3>Payments</h3></div>
-    <div class="card">
-      <div class="t1" style="margin-bottom:6px;">Bill Payments PIN</div>
+    ${privRow('bill', PRIV_SHIELD, 'Bill Payments PIN', `
       <p class="subtle" style="margin:0 0 10px;">${billPinSet ? "Your Bill Payments PIN is turned on. It's asked for before every airtime, data, electricity, or other bill payment purchase, so nobody who picks up an unlocked device can spend money from your Bill Wallet without it." : "You haven't set a Bill Payments PIN yet, so anyone using this device while it's unlocked can currently make bill payment purchases with no PIN needed. Set a 4-digit PIN below to require it before every purchase."}</p>
       ${!billPinSet ? `
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -9710,7 +9822,7 @@ function screenPrivacy(){
       </div>
       <a href="#" id="bp-pin-resend" style="display:inline-block;margin-top:8px;font-size:12px;">Resend code</a>
       `}
-    </div>` : ''}
+    `)}` : ''}
     <div class="section-head"><h3>Device</h3></div>
     <div class="card">
       <button class="btn btn-outline" id="lock-device">${ICON_LOCK} Lock Screen</button>
@@ -9730,6 +9842,7 @@ function screenPrivacy(){
   `;
 }
 function bindPrivacyEvents(){
+  document.querySelectorAll('[data-priv-toggle]').forEach(b=>b.addEventListener('click', ()=>{ const k = b.dataset.privToggle; privOpen = (privOpen===k) ? '' : k; refreshMain(); }));
   // Same handlers as before — only the screen they live on changed. Every handler checks its element exists.
   bindSettingsEvents();
   bindProfileEvents();
@@ -12468,7 +12581,7 @@ function bpFailSet(msg, action){ billAlert = { screen: billScreen, msg: String(m
 function bpFailNow(msg, action){ bpFailSet(msg, action); billPurchaseInFlight = false; billPurchaseStage = ''; refreshMain(); const b = document.querySelector('.bps-body'); if(b) b.scrollTop = 0; }
 function bindBpAlertEvents(){
   const pin = document.getElementById('bp-alert-pin');
-  if(pin) pin.addEventListener('click', ()=>{ billAlert = null; route = 'privacy'; render(); toast('Open Payments → Bill Payments PIN to set your PIN.'); });
+  if(pin) pin.addEventListener('click', ()=>{ billAlert = null; privOpen = 'bill'; route = 'privacy'; render(); toast('Open Payments → Bill Payments PIN to set your PIN.'); });
   const fund = document.getElementById('bp-alert-fund');
   if(fund) fund.addEventListener('click', ()=>{ billAlert = null; billScreen = 'topup'; refreshMain(); });
 }
@@ -14268,6 +14381,8 @@ const FAQ_GROUPS = [
     { q:"How is the Staff page organised?", a:"Everything is a row you tap to open, and only one row is open at a time. Add someone: New staff member (Join Code) and Staff on a second phone (Connect Code). People Without App Access: add people who won't use the app. Send Offer Letter to a Candidate. Team: tap it to show everyone — staff who use the app (marked App user) and people without app access (marked No app access). Tap a name to see their details and buttons." },
   ]},
   { category: "Reports & Receipts", items: [
+    { q:"How do I sell services (laundry, mechanic, salon, hotel) instead of goods?", a:"Go to Goods and tap + — at the top choose Service instead of Product. A service has no stock: just a name, a price, and how it is charged (each, per kg, per hour, per day, per job). Tick Type the price at the time of sale when the price changes every job, like a mechanic's labour. On New Sale, tap the service like any item; a Job details box appears where you can set the Ready-by date and a tag number, vehicle or special instructions — they print on the receipt, which then says Service Receipt." },
+    { q:"How do I follow up laundry or workshop jobs?", a:"Open More → Jobs. Each job moves from Received to In progress to Ready to Collected. Tap Mark Ready and ZeeShop prepares a message for the customer — send it by WhatsApp, SMS or email. Ready jobs also appear in the bell under Jobs ready for pickup. Staff only see the jobs they took in; the Owner and Super Admins see all." },
     { q:"How do I check that a receipt is really from my shop?", a:"Every receipt has a green SCAN TO VERIFY box with a QR code. As the Owner (or a Super Admin) go to More → Verify Receipt, tap Scan receipt QR and point the camera at it — or type the Receipt number or Txn ID. You will see Genuine, Voided, Amount does not match, or Not in your records. Type the amount shown on the receipt to catch altered amounts. If anyone else scans the QR with their phone camera, they only land on the ZeeShop home page and see nothing about the sale. Old receipts made before this update have no QR, but you can still verify them by typing their number." },
     { q:"How do I see my profit, not just my revenue?", a:"Go to More → Profit Reports. It shows revenue, cost of goods sold, and expenses together so you see real profit, not just what came in." },
     { q:"How do I share a receipt with a customer or guest?", a:"Open the sale (from History or the customer's record) or the booking and you'll see the receipt itself — exactly the picture that gets sent. Tap Share Receipt and your phone's share sheet opens with it attached — pick WhatsApp, email, or any app. Tap Save to keep a copy on your phone as a PNG." },
@@ -14424,7 +14539,7 @@ function screenWarehouse(){
       <button class="btn btn-primary" id="create-warehouse-btn" style="width:100%;margin-top:14px;">＋ Create Warehouse</button>`;
   }
 
-  const goods = state.goods.filter(g=>g.shopId===activeWh.id && isGoodActive(g));
+  const goods = state.goods.filter(g=>g.shopId===activeWh.id && isGoodActive(g) && !isSvc(g));
   const withStock = goods.filter(g=>totalStock(g)>0);
   const lowStock = goods.filter(g=>{ const s=totalStock(g); return s>0 && s<=(g.reorderLevel||5); }).length;
   const shops = state.shops.filter(s=>!s.isWarehouse);
@@ -14464,7 +14579,7 @@ function bindWarehouseEvents(){
 
 function openStockTransferModal(){
   const warehouse = currentShop();
-  const goods = state.goods.filter(g=>g.shopId===warehouse.id && isGoodActive(g) && totalStock(g)>0);
+  const goods = state.goods.filter(g=>g.shopId===warehouse.id && isGoodActive(g) && !isSvc(g) && totalStock(g)>0);
   const shops = state.shops.filter(s=>!s.isWarehouse);
   if(goods.length===0){ toast('Nothing in stock here to move.'); return; }
   openSheet(`
@@ -14808,6 +14923,91 @@ function openLogRestockModal(supplierId){
   });
 }
 
+
+
+/* ============================================================
+   JOBS — laundry, mechanic, tailor, salon: Received → In progress → Ready → Collected
+   ============================================================ */
+var jobsTab = 'open';
+var JOB_STEPS = { received:'Received', progress:'In progress', ready:'Ready for pickup', collected:'Collected' };
+function jobRows(){
+  const me = state.sessionUserId, owner = isOwnerLike();
+  return zxList('job').map(r=>({ s: state.sales.find(x=>x.id===r.key), job: r.data || {} }))
+    .filter(x=>x.s && x.s.shopId===state.currentShopId && x.s.status!=='voided' && (owner || x.s.soldByUserId===me));
+}
+function jobsReadyList(){ return jobRows().filter(x=>x.job.status==='ready'); }
+function hasServicesOrJobs(){ return state.goods.some(g=>g.shopId===state.currentShopId && isSvc(g)) || zxList('job').length>0; }
+function jobSummaryText(s){ return s.items.map(it=>{ const g=state.goods.find(x=>x.id===it.goodId); return (g?g.name:'Item')+' ×'+it.qty; }).join(', '); }
+function jobBuyer(s){ const c = s.customerId ? state.customers.find(x=>x.id===s.customerId) : null; return { c, name: c ? c.fullName : (s.walkInName || 'Walk-in customer'), phone: c ? (c.whatsappNumber||c.phoneE164) : s.walkInPhone, country: c && c.country, email: c && c.email }; }
+function screenJobs(){
+  const rows = jobRows();
+  const grp = { open: rows.filter(x=>x.job.status==='received'||x.job.status==='progress'||!x.job.status), ready: rows.filter(x=>x.job.status==='ready'), collected: rows.filter(x=>x.job.status==='collected') };
+  const list = (grp[jobsTab]||[]).slice().sort((a,b)=> jobsTab==='collected' ? String(b.job.at||'').localeCompare(String(a.job.at||'')) : String(a.job.ready||'9999').localeCompare(String(b.job.ready||'9999')) || String(a.s.createdAt||'').localeCompare(String(b.s.createdAt||'')));
+  const tab = (k,label)=>`<button type="button" class="btn btn-sm ${jobsTab===k?'btn-dark':'btn-outline'}" data-jobs-tab="${k}" style="flex:1;">${label} (${grp[k].length})</button>`;
+  const today = todayISO();
+  return `
+    ${subHeader('Jobs')}
+    <div style="display:flex;gap:8px;margin-bottom:12px;">${tab('open','In the shop')}${tab('ready','Ready')}${tab('collected','Collected')}</div>
+    ${list.length ? list.map(x=>{
+      const b = jobBuyer(x.s), late = (jobsTab==='open' && x.job.ready && x.job.ready < today);
+      return `<div class="list-row" data-job-open="${x.s.id}" style="cursor:pointer;">
+        <div class="thumb">${({received:'📥',progress:'🛠️',ready:'✅',collected:'📦'})[x.job.status||'received']}</div>
+        <div class="info"><div class="t1">${escapeHtml(b.name)} · ${fmtMoney(x.s.subtotal)}</div>
+          <div class="t2">${escapeHtml(jobSummaryText(x.s))}</div>
+          <div class="t2">${x.job.ready ? 'Ready by '+escapeHtml(fmtDate(x.job.ready)) : 'Received '+escapeHtml(fmtDate(x.s.date))}${(x.s.balance||0)>0 ? ' · owes '+fmtMoney(x.s.balance) : ''}</div></div>
+        <div class="right">${late?'<span class="pill pill-red">LATE</span>':''}${x.job.ref?`<div class="t2" style="max-width:90px;text-align:right;">${escapeHtml(x.job.ref)}</div>`:''}</div>
+      </div>`; }).join('') : `<div class="empty"><div class="ic">${ICON_CHECK_CIRCLE}</div><b>${jobsTab==='ready'?'Nothing waiting for pickup':jobsTab==='collected'?'No collected jobs yet':'No jobs in the shop'}</b>Jobs appear here when you sell a service on New Sale.</div>`}
+  `;
+}
+function bindJobsEvents(){
+  document.querySelectorAll('[data-jobs-tab]').forEach(b=>b.addEventListener('click', ()=>{ jobsTab = b.dataset.jobsTab; refreshMain(); }));
+  document.querySelectorAll('[data-job-open]').forEach(b=>b.addEventListener('click', ()=>openJobSheet(b.dataset.jobOpen)));
+}
+function jobReadyText(s){
+  const shop = (currentShop() && currentShop().name) || business().name, b = jobBuyer(s);
+  const first = (b.name||'').split(' ')[0] || 'there';
+  return `Hello ${first}, your ${jobSummaryText(s)} at ${shop} is ready for pickup.${(s.balance||0)>0 ? ' Balance to pay: '+fmtMoney(s.balance)+'.' : ''} Thank you. 🙏`;
+}
+function openJobMessage(saleId){
+  const s = state.sales.find(x=>x.id===saleId); if(!s) return; const b = jobBuyer(s);
+  openMessageSendSheet({ title:'Tell the customer it is ready', who:b.name, phone:b.phone, country:b.country, email:b.email, subject:'Your order is ready', text: jobReadyText(s) });
+}
+function setJobStatus(saleId, st){
+  const j = zxGet('job', saleId) || {};
+  zxSet('job', saleId, Object.assign({}, j, { status: st, [st+'At']: new Date().toISOString() }));
+  logAudit('job_status', 'Job '+saleId.slice(-6).toUpperCase()+' → '+JOB_STEPS[st]);
+}
+function openJobSheet(saleId){
+  const s = state.sales.find(x=>x.id===saleId); if(!s) return;
+  const j = zxGet('job', saleId) || { status:'received' }, b = jobBuyer(s), jl = jobLabels(), st = j.status || 'received';
+  const btn = (id, label, cls)=>`<button class="btn ${cls||'btn-primary'}" id="${id}" style="width:100%;margin-bottom:8px;">${label}</button>`;
+  openSheet(`
+    <div class="sheet-head"><h3>Job #${escapeHtml(saleId.slice(-6).toUpperCase())}</h3><button class="close-x" id="sheet-close">${ICON_CLOSE}</button></div>
+    <div class="card">
+      <div style="font-weight:800;">${escapeHtml(b.name)}${b.phone?` <span class="subtle" style="font-weight:400;">· ${escapeHtml(b.phone)}</span>`:''}</div>
+      <div class="t2" style="margin:4px 0;">${escapeHtml(jobSummaryText(s))}</div>
+      <div class="t2">Status: <b>${JOB_STEPS[st]}</b>${j.ready?' · Ready by <b>'+escapeHtml(fmtDate(j.ready))+'</b>':''}</div>
+      ${j.ref?`<div class="t2">${escapeHtml(jl.ref)}: <b>${escapeHtml(j.ref)}</b></div>`:''}
+      ${j.detail?`<div class="t2">${escapeHtml(jl.detail)}: ${escapeHtml(j.detail)}</div>`:''}
+      <div style="margin-top:8px;font-weight:800;">${fmtMoney(s.subtotal)} ${(s.balance||0)>0?`<span class="pill pill-red">owes ${fmtMoney(s.balance)}</span>`:'<span class="pill pill-green">paid</span>'}</div>
+    </div>
+    ${st==='received' ? btn('jb-progress','🛠️ Start work','btn-outline') : ''}
+    ${(st==='received'||st==='progress') ? btn('jb-ready','✅ Mark Ready & tell customer') : ''}
+    ${st==='ready' ? btn('jb-collect','📦 Mark Collected') + btn('jb-msg','💬 Message the customer again','btn-outline') : ''}
+    ${st==='collected' ? btn('jb-back','↩ Move back to Ready','btn-outline') : ''}
+    ${btn('jb-receipt','🧾 Open receipt','btn-outline')}
+  `);
+  const on = (id, fn)=>{ const el = document.getElementById(id); if(el) el.addEventListener('click', fn); };
+  on('jb-progress', ()=>{ setJobStatus(saleId,'progress'); closeSheet(); refreshMain(); toast('Work started'); });
+  on('jb-ready', ()=>{ setJobStatus(saleId,'ready'); jobsTab='ready'; refreshMain(); openJobMessage(saleId); });
+  on('jb-msg', ()=>openJobMessage(saleId));
+  on('jb-collect', async ()=>{
+    if((s.balance||0)>0){ const ok = await appConfirm(`${b.name} still owes ${fmtMoney(s.balance)}. Mark as collected anyway?`); if(!ok) return; }
+    setJobStatus(saleId,'collected'); closeSheet(); refreshMain(); toast('Marked collected ✅');
+  });
+  on('jb-back', ()=>{ setJobStatus(saleId,'ready'); closeSheet(); refreshMain(); });
+  on('jb-receipt', ()=>openSaleDetail(saleId));
+}
 
 /* ============================================================
    RECEIPT VERIFICATION — QR on every receipt + "Verify Receipt" (owner only)

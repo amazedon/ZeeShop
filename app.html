@@ -14279,15 +14279,20 @@ function bindContactUsEvents(){
   const box = document.getElementById('site-content-box');
   fetchSiteContent('contact_us').then(row=>{
     if(!row){ box.innerHTML = `<div class="card"><p class="subtle">This business hasn't added contact details yet.</p></div>`; return; }
-    const lines = [];
-    if(row.phone) lines.push(`<div class="t2">${ICON_PHONE} <a href="tel:${escAttr(row.phone)}">${escapeHtml(row.phone)}</a></div>`);
-    if(row.whatsapp) lines.push(`<div class="t2">${ICON_CHAT} <a href="https://wa.me/${row.whatsapp.replace(/[^\d]/g,'')}" target="_blank">WhatsApp: ${escapeHtml(row.whatsapp)}</a></div>`);
-    if(row.email) lines.push(`<div class="t2">${ICON_MAIL} <a href="mailto:${escAttr(row.email)}">${escapeHtml(row.email)}</a></div>`);
-    box.innerHTML = `<div class="card">
-      <h2 style="margin:0 0 10px;color:var(--ink-text);">${escapeHtml(row.heading||'Contact Us')}</h2>
-      ${row.body?`<p style="white-space:pre-wrap;line-height:1.6;margin:0 0 14px;">${escapeHtml(row.body)}</p>`:''}
-      ${lines.join('')}
-    </div>`;
+    const sv = (d)=>`<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+    const IC_MAIL = sv('<path d="M5 3.5h14a2 2 0 0 1 2 2V14a2 2 0 0 1-2 2H9.5L5 19.5V16a2 2 0 0 1-2-2V5.5a2 2 0 0 1 2-2z"/><path d="M8 7.5h8M8 11h5"/>');
+    const IC_WA = sv('<path d="M12 3.5a8.5 8.5 0 0 0-7.3 12.9L3.5 20.5l4.2-1.1A8.5 8.5 0 1 0 12 3.5z"/><path d="M9.3 8.6c.3-.5.8-.5 1-.1l.8 1.7c.1.3 0 .5-.3.8l-.4.5c.6 1.2 1.5 2.1 2.7 2.7l.5-.5c.3-.3.5-.3.8-.2l1.6.8c.4.2.4.7 0 1.1-.6.7-1.6.9-2.6.6-2.5-.8-4.2-2.5-5-5-.2-.8-.1-1.6.4-2.4z"/>');
+    const IC_CALL = sv('<path d="M6.6 3.8 9 3.5l1.6 3.8-1.7 1.4a11 11 0 0 0 5.6 5.6l1.4-1.7 3.8 1.6-.3 2.4a2.5 2.5 0 0 1-2.5 2.2A15.5 15.5 0 0 1 4.4 6.3a2.5 2.5 0 0 1 2.2-2.5z"/>');
+    const rowHtml = (href, icon, title, sub, ext)=>`<a href="${escAttr(href)}" ${ext?'target="_blank" rel="noopener"':''} class="card" style="display:flex;align-items:center;gap:18px;padding:18px 16px;margin-bottom:14px;text-decoration:none;color:inherit;border-radius:12px;">
+        <span style="width:60px;height:60px;border-radius:50%;background:#F4E8E8;color:#12213B;display:flex;align-items:center;justify-content:center;flex-shrink:0;">${icon}</span>
+        <span style="flex:1;min-width:0;"><span style="display:block;font-size:18px;font-weight:700;color:var(--ink-text);">${title}</span><span style="display:block;font-size:14px;color:var(--text-dim);margin-top:3px;">${sub}</span></span>
+        <span style="font-size:26px;line-height:1;color:var(--text-dim);">›</span>
+      </a>`;
+    const rows = [];
+    if(row.email) rows.push(rowHtml('mailto:'+row.email, IC_MAIL, 'Email us', 'Reach us through our email'));
+    if(row.whatsapp) rows.push(rowHtml('https://wa.me/'+String(row.whatsapp).replace(/[^\d]/g,''), IC_WA, 'WhatsApp', 'Available 24/7... For swift response', true));
+    if(row.phone) rows.push(rowHtml('tel:'+String(row.phone).replace(/[^\d+]/g,''), IC_CALL, 'Call us', 'Speak to us directly'));
+    box.innerHTML = rows.length ? rows.join('') : `<div class="card"><p class="subtle">This business hasn't added contact details yet.</p></div>`;
   }).catch(()=>{
     box.innerHTML = `<div class="card"><p class="subtle">Couldn't load this right now. Check your internet connection and try again.</p></div>`;
   });

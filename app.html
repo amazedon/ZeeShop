@@ -5845,6 +5845,46 @@ function drawSecurityTint(ctx, W, H, text){
   }
   ctx.restore();
 }
+// Fine wavy "guilloche" lines — the kind of pattern printed on banknotes and certificates, hard to copy cleanly.
+function drawWaveTint(ctx, W, H){
+  ctx.save(); ctx.lineWidth = 0.6; ctx.lineJoin = 'round';
+  for(let k=0; k<H+40; k+=7){
+    ctx.strokeStyle = '#F1E4CC'; ctx.beginPath();
+    for(let x=0; x<=W+2; x+=3){ const yy = k + 5*Math.sin(x/22 + k/9); if(x===0) ctx.moveTo(x,yy); else ctx.lineTo(x,yy); }
+    ctx.stroke();
+  }
+  for(let k=0; k<H+40; k+=14){
+    ctx.strokeStyle = '#EBDCC2'; ctx.beginPath();
+    for(let x=0; x<=W+2; x+=3){ const yy = k + 7 + 4*Math.sin(x/17 - k/7); if(x===0) ctx.moveTo(x,yy); else ctx.lineTo(x,yy); }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+// Torn-paper zigzag along the bottom edge (grey behind it so it also looks right when saved as a picture).
+function drawReceiptEdges(ctx, W, h){
+  ctx.save(); ctx.fillStyle = '#E9E6DF'; ctx.fillRect(0, h-9, W, 9);
+  ctx.fillStyle = '#FFF7EA'; ctx.beginPath(); ctx.moveTo(0, h-9);
+  for(let x=0; x<=W+12; x+=12){ ctx.lineTo(x, h-9); ctx.lineTo(x+6, h-1); }
+  ctx.lineTo(W+12, h-9); ctx.closePath(); ctx.fill(); ctx.restore();
+}
+// Status stamp: PAID / PART PAID / UNPAID / VOIDED, slightly tilted, like a rubber stamp.
+function saleStamp(s){
+  if(s.status==='voided') return { label:'VOIDED', color:'192,57,43' };
+  const total = Number(s.subtotal||0), paid = Number(s.paidAmount||0);
+  if(s.status==='paid' || (total>0 && paid>=total) || Number(s.balance||0)<=0) return { label:'PAID', color:'46,125,50' };
+  if(paid>0) return { label:'PART PAID', color:'180,83,9' };
+  return { label:'UNPAID', color:'192,57,43' };
+}
+function drawStamp(ctx, st, cx, cy){
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(8*Math.PI/180);
+  const w = 124, h = 42, c = st.color;
+  const rr = (x,y,ww,hh,r)=>{ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.lineTo(x+ww-r,y); ctx.quadraticCurveTo(x+ww,y,x+ww,y+r); ctx.lineTo(x+ww,y+hh-r); ctx.quadraticCurveTo(x+ww,y+hh,x+ww-r,y+hh); ctx.lineTo(x+r,y+hh); ctx.quadraticCurveTo(x,y+hh,x,y+hh-r); ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y); ctx.closePath(); };
+  ctx.strokeStyle = 'rgba('+c+',0.8)'; ctx.lineWidth = 2.6; rr(-w/2,-h/2,w,h,7); ctx.stroke();
+  ctx.strokeStyle = 'rgba('+c+',0.55)'; ctx.lineWidth = 1; rr(-w/2+5,-h/2+5,w-10,h-10,4); ctx.stroke();
+  ctx.fillStyle = 'rgba('+c+',0.85)'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = '800 '+(st.label.length>6?18:22)+'px Arial,Helvetica,sans-serif'; ctx.fillText(st.label, 0, 1);
+  ctx.restore();
+}
 function drawDashedLine(ctx,x1,y1,x2,y2){
   ctx.save(); ctx.strokeStyle='#E4E0D6'; ctx.lineWidth=1; ctx.setLineDash([4,3]);
   ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); ctx.restore();
@@ -5956,8 +5996,8 @@ function layoutAndDrawReceipt(s, shop, cust, seller, ctx, logoImg){
   T('TOTAL', PAD, 'left', '800 15px Arial,Helvetica,sans-serif', '#12213B');
   T(fmtMoneyCanvas(s.subtotal), W-PAD, 'right'); y += 20;
 
-  if(s.status!=='paid'){
-    T('PAID', PAD, 'left', '700 12px Arial,Helvetica,sans-serif', '#2E7D32');
+  if(s.status!=='paid' && s.status!=='voided'){
+    T('Paid so far', PAD, 'left', '700 12px Arial,Helvetica,sans-serif', '#2E7D32');
     T(fmtMoneyCanvas(s.paidAmount), W-PAD, 'right'); y += 18;
     T('BALANCE DUE '+fmtDate(s.dueDate), PAD, 'left', '800 12.5px Arial,Helvetica,sans-serif', '#C0392B');
     T(fmtMoneyCanvas(s.balance), W-PAD, 'right'); y += 18;
@@ -5965,15 +6005,20 @@ function layoutAndDrawReceipt(s, shop, cust, seller, ctx, logoImg){
   y += 8;
   L(PAD, y, W-PAD, y); y += 20;
 
-  T(shop.receiptFooter||'Thank you for your business!', W/2, 'center', '400 11.5px Arial,Helvetica,sans-serif', '#6B7280');
-  y += 16;
+  const footY0 = y;
+  wrapPlainText(canvasSafeText(shop.receiptFooter||'Thank you for your business!'), 30).forEach(line=>{
+    T(line, PAD, 'left', '400 11.5px Arial,Helvetica,sans-serif', '#6B7280'); y += 15;
+  });
+  y += 1;
   const terms = shop.receiptTerms!=null ? shop.receiptTerms : (saleIsAllServices(s) ? 'Please bring this receipt when you come to collect.' : 'Goods sold in good condition. No refund after payment.');
   if(terms){
-    wrapPlainText(canvasSafeText(terms), 56).forEach(line=>{
-      T(line, W/2, 'center', 'italic 400 9.5px Arial,Helvetica,sans-serif', '#9AA0AB'); y += 12;
+    wrapPlainText(canvasSafeText(terms), 34).forEach(line=>{
+      T(line, PAD, 'left', 'italic 400 9.5px Arial,Helvetica,sans-serif', '#9AA0AB'); y += 12;
     });
   }
-  y += 4; y += zvDrawReceiptBox(ctx, zvLink('S', s.id), 'Receipt #'+s.id.slice(-6).toUpperCase(), W, PAD, y);
+  if(y < footY0 + 66) y = footY0 + 66;      // room for the stamp
+  if(ctx) drawStamp(ctx, saleStamp(s), W-PAD-66, footY0 + 28);
+  y += 6; y += zvDrawReceiptBox(ctx, zvLink('S', s.id), 'Receipt #'+s.id.slice(-6).toUpperCase(), W, PAD, y, {seal:true});
   y += 12; // bottom padding
   return y; // total height needed
 }
@@ -5986,8 +6031,10 @@ async function drawReceiptToCanvas(canvas, s, shop, cust, seller){
   const ctx = canvas.getContext('2d');
   ctx.scale(scale,scale);
   ctx.fillStyle = '#FFF7EA'; ctx.fillRect(0,0,W,h);
+  drawWaveTint(ctx, W, h);
   drawSecurityTint(ctx, W, h, shop.name.toUpperCase());
   layoutAndDrawReceipt(s, shop, cust, seller, ctx, logoImg); // real draw pass, now sized correctly
+  drawReceiptEdges(ctx, W, h);
 }
 function receiptText(s,shop,cust){
   let t = `${shop.name}${business().businessType?' ('+business().businessType+')':''}\n${shop.address?shop.address+'\n':''}${business().registrationNumber?'Reg. No: '+business().registrationNumber+'\n':''}Receipt #${s.id.slice(-6).toUpperCase()} — ${fmtDate(s.date)}${s.createdAt && !isNaN(new Date(s.createdAt).getTime()) ? ', '+new Date(s.createdAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true}) : ''}\nTxn ID: ${s.id}\nBuyer: ${cust?cust.fullName:(s.walkInName||'Walk-in customer')}\n`;
@@ -9776,6 +9823,7 @@ function screenSettings(){
         <div class="field"><label>Tax Name</label><input id="set-taxname" value="${escAttr(b.taxName||'VAT')}"></div>
         <div class="field"><label>Tax % <span class="subtle">(applied automatically at checkout)</span></label><input id="set-taxpct" type="number" min="0" step="0.1" value="${b.taxPercent||0}"></div>
       </div>
+      <label style="display:flex;gap:10px;align-items:flex-start;margin:4px 0 12px;font-size:13px;"><input type="checkbox" id="set-pubcontact" style="margin-top:3px;" ${(zxGet('pub','contact')||{}).show===false?'':'checked'}><span>Show my address, phone and email when someone scans a receipt <span class="subtle">(so they know the receipt is from your shop)</span></span></label>
       <button class="btn btn-outline" id="save-shop-settings">Save</button>
     </div>
     <div class="card">
@@ -9946,6 +9994,7 @@ function bindSettingsEvents(){
     business().registrationNumber = document.getElementById('set-regnumber').value.trim();
     business().taxName = document.getElementById('set-taxname').value.trim() || 'VAT';
     business().taxPercent = Number(document.getElementById('set-taxpct').value||0);
+    { const pc = document.getElementById('set-pubcontact'); if(pc){ try{ zxSet('pub','contact',{ show: !!pc.checked }); }catch(_e){} } }
     // Local values are already updated above; this records them as pending, saves them to storage right now,
     // and pushes to the server immediately (see SETTINGS WRITE-THROUGH).
     enqueueSettings('shops', { id: s.id, name: s.name, address: s.address, receipt_footer: s.receiptFooter, receipt_terms: s.receiptTerms });
@@ -15122,14 +15171,28 @@ function zvParse(raw){
   return {q:s};
 }
 // draws the green "scan to verify" box onto a receipt canvas (ctx may be null on the measuring pass); returns the height used
-function zvDrawReceiptBox(ctx, link, label, W, PAD, y){
-  const boxH = 192, qr = 134;
+function zvDrawReceiptBox(ctx, link, label, W, PAD, y, opts){
+  const seal = !!(opts && opts.seal);
+  const boxH = seal ? 200 : 192, qr = seal ? 124 : 134;
   if(ctx){
     ctx.save(); ctx.fillStyle = '#F4FBF6'; ctx.strokeStyle = '#2E7D32'; ctx.lineWidth = 1.2;
     const x = PAD, w = W-2*PAD, r = 10; ctx.beginPath(); ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r); ctx.lineTo(x+w,y+boxH-r); ctx.quadraticCurveTo(x+w,y+boxH,x+w-r,y+boxH); ctx.lineTo(x+r,y+boxH); ctx.quadraticCurveTo(x,y+boxH,x,y+boxH-r); ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore();
     ctx.textAlign = 'center'; ctx.fillStyle = '#2E7D32'; ctx.font = '800 11px Arial,Helvetica,sans-serif'; ctx.fillText('SCAN TO VERIFY', W/2, y+19);
-    const ok = zsDrawQr(ctx, link, (W-qr)/2, y+28, qr, '#12213B');
-    ctx.fillStyle = '#242B38'; ctx.font = '700 10.5px Arial,Helvetica,sans-serif'; ctx.fillText(label, W/2, y+28+qr+14);
+    const qx = seal ? PAD+22 : (W-qr)/2;
+    zsDrawQr(ctx, link, qx, y+28, qr, '#12213B');
+    ctx.textAlign = 'center'; ctx.fillStyle = '#242B38'; ctx.font = '700 10.5px Arial,Helvetica,sans-serif'; ctx.fillText(label, W/2, y+28+qr+14);
+    if(seal){
+      ctx.fillStyle = '#6B7280'; ctx.font = '400 9px Arial,Helvetica,sans-serif'; ctx.fillText('Scan with your phone camera to confirm', W/2, y+28+qr+28);
+      const cx = qx+qr+((W-PAD)-(qx+qr))/2 - 4, cy = y+28+qr/2, rad = 44;
+      ctx.save(); ctx.strokeStyle = '#2E7D32'; ctx.fillStyle = '#2E7D32';
+      ctx.lineWidth = 2.6; ctx.beginPath(); ctx.arc(cx,cy,rad,0,Math.PI*2); ctx.stroke();
+      ctx.lineWidth = 0.9; ctx.beginPath(); ctx.arc(cx,cy,rad-6,0,Math.PI*2); ctx.stroke();
+      for(let i=0;i<24;i++){ const a=i*Math.PI/12; ctx.beginPath(); ctx.moveTo(cx+(rad-3)*Math.cos(a), cy+(rad-3)*Math.sin(a)); ctx.lineTo(cx+(rad+3)*Math.cos(a), cy+(rad+3)*Math.sin(a)); ctx.stroke(); }
+      ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.beginPath(); ctx.moveTo(cx-14,cy-8); ctx.lineTo(cx-4,cy+2); ctx.lineTo(cx+14,cy-16); ctx.stroke();
+      ctx.textAlign = 'center'; ctx.font = '800 9.5px Arial,Helvetica,sans-serif'; ctx.fillText('ORIGINAL', cx, cy+16);
+      ctx.font = '800 8.5px Arial,Helvetica,sans-serif'; ctx.fillText('VERIFIED', cx, cy+28);
+      ctx.restore();
+    }
   }
   return boxH;
 }

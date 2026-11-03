@@ -197,6 +197,29 @@ footer{border-top:1px solid var(--line);padding:28px 0;}
 @media (max-width:340px){
   .hero-ctas .btn{padding:12px 8px;font-size:12.5px;}
 }
+
+/* ---- public receipt check page (opened by a receipt QR) ---- */
+body.vf-on > *:not(script):not(style):not(#vf){display:none !important;}
+#vf{display:none;background:#FAF8F3;padding:28px 16px 48px;min-height:70vh;}
+body.vf-on #vf{display:block;}
+#vf .vf-card{max-width:440px;margin:0 auto;background:#fff;border:2px solid #2E7D32;border-radius:18px;padding:26px 22px 20px;text-align:center;box-shadow:0 6px 24px rgba(18,33,59,.08);}
+#vf .vf-card.amber{border-color:#B45309;} #vf .vf-card.red{border-color:#C0392B;} #vf .vf-card.grey{border-color:#9AA0AB;}
+#vf .vf-ic{width:64px;height:64px;border-radius:50%;margin:0 auto 10px;display:flex;align-items:center;justify-content:center;font-size:34px;font-weight:800;background:#E3F6EC;color:#2E7D32;}
+#vf .amber .vf-ic{background:#FDF0DC;color:#B45309;} #vf .red .vf-ic{background:#FBE4E1;color:#C0392B;} #vf .grey .vf-ic{background:#EEF0F3;color:#6B7280;}
+#vf h2{margin:0 0 4px;font-size:22px;color:#2E7D32;} #vf .amber h2{color:#B45309;} #vf .red h2{color:#C0392B;} #vf .grey h2{color:#374151;}
+#vf .vf-by{color:#6B7280;font-size:13px;margin-top:6px;} #vf .vf-shop{font-size:19px;font-weight:800;color:#12213B;margin:2px 0 14px;}
+#vf .vf-rows{text-align:left;border-top:1px solid #ECE8DF;} #vf .vf-row{display:flex;justify-content:space-between;gap:12px;padding:10px 2px;border-bottom:1px solid #ECE8DF;font-size:14px;color:#6B7280;}
+#vf .vf-row b{color:#12213B;text-align:right;}
+#vf .vf-id{max-width:440px;margin:0 auto 14px;background:#fff;border:1px solid #ECE8DF;border-radius:16px;padding:16px;text-align:center;}
+#vf .vf-logo{width:64px;height:64px;object-fit:contain;border-radius:12px;margin:0 auto 8px;display:block;background:#fff;}
+#vf .vf-idname{font-size:20px;font-weight:800;color:#12213B;} #vf .vf-idtype{font-size:11px;font-weight:700;letter-spacing:.04em;color:#D98A12;text-transform:uppercase;margin-top:2px;}
+#vf .vf-idl{display:block;color:#374151;font-size:14px;margin-top:6px;text-decoration:none;} #vf a.vf-idl{color:#12213B;font-weight:600;}
+#vf .vf-idreg{font-size:12px;color:#9AA0AB;margin-top:6px;}
+#vf .vf-powered{max-width:440px;margin:18px auto 0;text-align:center;color:#6B7280;font-size:12.5px;line-height:1.5;}
+#vf .vf-note{max-width:440px;margin:14px auto 0;background:#FFF6E5;color:#8A5A00;border-radius:12px;padding:12px 14px;font-size:13px;line-height:1.45;text-align:center;}
+#vf .vf-cta{max-width:440px;margin:22px auto 0;text-align:center;}
+#vf .vf-btn{display:block;background:#F2A93B;color:#12213B;font-weight:800;font-size:16px;padding:15px;border-radius:12px;text-decoration:none;}
+#vf .vf-sub{color:#6B7280;font-size:13px;margin:10px 0 18px;} #vf .vf-own{color:#12213B;font-weight:700;font-size:14px;}
 </style>
 </head>
 <body>
@@ -216,6 +239,8 @@ footer{border-top:1px solid var(--line);padding:28px 0;}
     </nav>
   </div>
 </header>
+<section id="vf" aria-live="polite"><div class="vf-card grey"><div class="vf-ic">…</div><h2>Checking receipt…</h2></div></section>
+
 
 <section class="hero">
   <div class="wrap hero-grid">
@@ -367,9 +392,47 @@ footer{border-top:1px solid var(--line);padding:28px 0;}
   })();
 </script>
 <script>
-/* A receipt QR code opens this page. Anyone sees the normal home page; the shop owner just taps Log In and the check carries on. */
-(function(){try{var m=location.search.match(/[?&]v=([^&#]+)/);if(!m)return;
-document.querySelectorAll('a[href="app.html"]').forEach(function(a){a.setAttribute('href','app.html?v='+m[1]);});}catch(e){}})();
+/* A receipt QR code opens this page. It shows the public "is this receipt genuine?" check. The shop owner can still tap "Shop owner? Log in" to see everything. */
+(function(){try{
+var m=location.search.match(/[?&]v=([^&#]+)/); if(!m) return;
+var raw=decodeURIComponent(m[1]); var kind=raw.charAt(1)==='.'?raw.charAt(0):'S'; var id=raw.replace(/^[SB]\./,'');
+document.querySelectorAll('a[href="app.html"]').forEach(function(a){a.setAttribute('href','app.html?v='+m[1]);});
+document.body.classList.add('vf-on');
+var box=document.getElementById('vf');
+function el(t,c,x){var e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e;}
+function idCard(d){var c=el('div','vf-id');
+ if(d.logo&&/^data:image\//.test(d.logo)){var im=el('img','vf-logo');im.alt='';im.src=d.logo;c.appendChild(im);}
+ c.appendChild(el('div','vf-idname',d.shop||'Shop'));if(d.business_type)c.appendChild(el('div','vf-idtype',d.business_type));
+ if(d.address)c.appendChild(el('span','vf-idl',d.address));
+ if(d.phone){var p=el('a','vf-idl','📞 '+d.phone);p.href='tel:'+String(d.phone).replace(/[^+\d]/g,'');c.appendChild(p);}
+ if(d.email){var e=el('a','vf-idl','✉️ '+d.email);e.href='mailto:'+d.email;c.appendChild(e);}
+ if(d.reg_no)c.appendChild(el('div','vf-idreg','Reg. No: '+d.reg_no));return c;}
+function ctaBlock(){var d=el('div','vf-cta');var a=el('a','vf-btn','Create a free account');a.href='app.html';d.appendChild(a);
+ d.appendChild(el('div','vf-sub','Run a shop? Manage sales, stock and bills from your phone.'));
+ var o=el('a','vf-own','Shop owner? Log in');o.href='app.html?v='+m[1];d.appendChild(o);return d;}
+function show(tone,icon,head,sub,rows,note,who){
+ box.textContent='';
+ if(who)box.appendChild(idCard(who));var c=el('div','vf-card '+tone);c.appendChild(el('div','vf-ic',icon));c.appendChild(el('h2',null,head));
+ if(sub){c.appendChild(el('div','vf-by',sub.by||''));if(sub.shop)c.appendChild(el('div','vf-shop',sub.shop));}
+ if(rows&&rows.length){var r=el('div','vf-rows');rows.forEach(function(x){var q=el('div','vf-row');q.appendChild(el('span',null,x[0]));q.appendChild(el('b',null,x[1]));r.appendChild(q);});c.appendChild(r);}
+ box.appendChild(c);if(note)box.appendChild(el('div','vf-note',note));box.appendChild(el('div','vf-powered','Receipts from '+((who&&who.shop)||'this shop')+' are verified by ZeeShop, the app the shop uses to run its business. The receipt belongs to the shop, not to ZeeShop.'));box.appendChild(ctaBlock());}
+if(kind==='B'){show('grey','i','Bill payment receipt',{by:'This kind of receipt can only be checked by the account owner.'},null,'If you were given this receipt, ask the account owner to check it inside their ZeeShop app.');return;}
+fetch('https://beypnkzrgqrkjttsxlju.supabase.co/functions/v1/verify-receipt',{method:'POST',headers:{'Content-Type':'application/json','apikey':'sb_publishable_m_MrYeKVF4HgUG5i5v_THg_LPbvmUK5'},body:JSON.stringify({id:id})})
+.then(function(r){return r.json();}).then(function(d){
+ if(d.error){show('grey','!','Could not check right now',null,null,'Please check your internet and try scanning again.');return;}
+ if(!d.found){show('red','✕','Receipt not found',{by:'We could not find this receipt.'},null,'Do not accept this receipt until the shop confirms it. It may be fake or altered.');return;}
+ var amt;try{amt=new Intl.NumberFormat('en',{style:'currency',currency:d.currency||'NGN',currencyDisplay:'code',minimumFractionDigits:0,maximumFractionDigits:2}).format(d.amount);}catch(e){amt=(d.currency||'NGN')+' '+d.amount;}
+ var when='';try{when=new Date(d.date).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'numeric',minute:'2-digit',hour12:true});}catch(e){}
+ var st={paid:'Paid',part:'Part paid',unpaid:'Not yet paid',voided:'Cancelled'}[d.status]||d.status;
+ var rows=[['Receipt no.','#'+d.receipt_no],['Date',when],['Amount',amt],['Status',st]];
+ var sub={by:'This receipt was issued by '+(d.shop||'the shop')+'.'};
+ if(d.status==='voided'){show('red','✕','Receipt cancelled',sub,rows,'This sale was cancelled by the shop. Do not accept this receipt.',d);return;}
+ var note='Check that these details match the receipt in your hand.'+(d.checks>0?' This receipt has been checked '+d.checks+(d.checks===1?' time.':' times.'):'');
+ if(d.status==='part')note+=' A part-paid receipt is not proof of full payment.';
+ if(d.status==='unpaid')note+=' Nothing has been paid on this receipt yet.';
+ show(d.status==='paid'?'':'amber',d.status==='paid'?'✓':'!','Verified receipt',sub,rows,note,d);
+}).catch(function(){show('grey','!','Could not check right now',null,null,'Please check your internet and try scanning again.');});
+}catch(e){}})();
 </script>
 </body>
 </html>

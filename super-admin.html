@@ -176,6 +176,10 @@
   .tx-id{font-size:12px;color:var(--text-dim);margin-top:6px;word-break:break-all;}
   .tx-actions{margin-top:10px;}
   /* ---- Accordion: compact summary row, tap to expand ---- */
+  .zs-kv{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-top:1px solid var(--line);font-size:14px;}
+  .zs-kv:first-child{border-top:none;}
+  .zs-kv span{color:var(--text-dim);}
+  .acc-item.zs-card > .acc-head .acc-title{font-size:16px;}
   .acc-item{background:#fff;border:1px solid var(--line);border-radius:14px;margin-bottom:10px;overflow:hidden;}
   .acc-head{display:flex;align-items:center;gap:12px;width:100%;padding:14px 16px;background:none;border:none;text-align:left;cursor:pointer;font-family:inherit;color:var(--text);}
   .acc-ico{width:40px;height:40px;border-radius:11px;background:var(--ink);color:var(--marigold);display:flex;align-items:center;justify-content:center;font-size:19px;flex-shrink:0;}
@@ -183,9 +187,9 @@
   .acc-title{font-weight:800;font-size:15px;color:var(--ink);}
   .acc-sub{font-size:12.5px;color:var(--text-dim);margin-top:2px;}
   .acc-chev{font-size:18px;color:var(--text-dim);transition:transform .22s;flex-shrink:0;}
-  .acc-item.open .acc-chev{transform:rotate(180deg);}
+  .acc-item.open > .acc-head .acc-chev{transform:rotate(180deg);}
   .acc-body{display:grid;grid-template-rows:0fr;transition:grid-template-rows .26s ease;}
-  .acc-item.open .acc-body{grid-template-rows:1fr;}
+  .acc-item.open > .acc-body{grid-template-rows:1fr;}
   .acc-inner{overflow:hidden;min-height:0;}
   .acc-pad{padding:4px 16px 16px;border-top:1px solid var(--line);}
   .acc-tag{display:inline-block;font-size:11px;font-weight:800;padding:3px 9px;border-radius:999px;background:#EEF1F6;color:var(--text-dim);white-space:nowrap;}
@@ -409,12 +413,7 @@
       <div class="card">
         <h2>Business Wallets</h2>
         <p class="subtle">Every business that has funded a Bill Wallet or set up a dedicated top-up account.</p>
-        <div class="table-wrap">
-          <table class="stack">
-            <thead><tr><th>Business</th><th>Wallet Balance</th><th>Dedicated Account</th></tr></thead>
-            <tbody id="bp-wallets-tbody"></tbody>
-          </table>
-        </div>
+        <div id="bp-wallets-tbody"></div>
         <div id="bp-wallets-empty" class="empty-note hidden">No business has funded a Bill Wallet yet.</div>
       </div>
 
@@ -991,6 +990,7 @@
       const done = (r.payments||[]).filter(p=>p.status!=='open').slice(0,5);
       if(open.length === 0 && done.length === 0){ box.innerHTML = '<p class="subtle">Nothing needs attention. ✅</p>'; }
       else{
+        if(open.length) setTimeout(()=>zsOpenCardOf(box), 0);
         box.innerHTML = (open.length ? '' : '<p class="subtle">Nothing waiting for review. ✅</p>') + open.map(p=>`
           <div class="acc-item tx-card tx-pending" data-um="${escapeHtml(p.id)}">
             <button class="acc-head" type="button"><span class="acc-main"><span class="acc-title">${fmtNaira(p.amount)} · ${escapeHtml(p.provider)}</span><div class="acc-sub">${escapeHtml(p.reason||'')} · ${new Date(p.created_at).toLocaleString()}</div></span><span class="acc-chev">⌄</span></button>
@@ -1133,14 +1133,8 @@
       if(svcRows.length === 0){
         svcBox.innerHTML = '<p class="subtle">No transactions yet.</p>';
       }else{
-        svcBox.innerHTML = `
-          <div class="table-wrap"><table class="stack">
-            <thead><tr><th>Service</th><th>Successful</th><th>Revenue</th><th>Profit</th></tr></thead>
-            <tbody>
-              ${svcRows.map(x=>`<tr><td data-label="Service">${escapeHtml(x.label)}</td><td data-label="Successful">${x.ok}</td><td data-label="Revenue">${fmtNaira(x.revenue)}</td><td data-label="Profit">${x.profit === null ? '—' : fmtNaira(x.profit)}</td></tr>`).join('')}
-            </tbody>
-          </table></div>
-        `;
+        svcBox.innerHTML = svcRows.map(x=>zsAccRow(escapeHtml(x.label), x.ok+' successful · '+fmtNaira(x.revenue),
+          `<div class="zs-kv"><span>Successful</span><b>${x.ok}</b></div><div class="zs-kv"><span>Revenue</span><b>${fmtNaira(x.revenue)}</b></div><div class="zs-kv"><span>Profit</span><b>${x.profit === null ? '—' : fmtNaira(x.profit)}</b></div>`)).join('');
       }
 
       // Business wallets — only businesses that have actually
@@ -1153,13 +1147,8 @@
         walletsEmpty.classList.remove('hidden');
       }else{
         walletsEmpty.classList.add('hidden');
-        walletsTbody.innerHTML = walletBusinesses.map(b => `
-          <tr>
-            <td data-label="Business">${escapeHtml(b.name || '—')}</td>
-            <td data-label="Wallet Balance">${fmtNaira(b.bill_wallet_balance)}</td>
-            <td data-label="Dedicated Account">${b.psa_account_number ? `${escapeHtml(b.psa_account_number)} <span class="subtle">(${escapeHtml(b.psa_bank_name||'')})</span>` : '<span class="subtle">Not set up</span>'}</td>
-          </tr>
-        `).join('');
+        walletsTbody.innerHTML = walletBusinesses.map(b => zsAccRow(escapeHtml(b.name || '—'), fmtNaira(b.bill_wallet_balance),
+          `<div class="zs-kv"><span>Wallet balance</span><b>${fmtNaira(b.bill_wallet_balance)}</b></div><div class="zs-kv"><span>Dedicated account</span><b>${b.psa_account_number ? escapeHtml(b.psa_account_number)+' <span class="subtle">('+escapeHtml(b.psa_bank_name||'')+')</span>' : '<span class="subtle">Not set up</span>'}</b></div>`)).join('');
       }
 
       // Recent transactions as vertical cards, grouped by day, with filters
@@ -1902,6 +1891,35 @@
     document.getElementById('login-err').innerHTML = '<div class="err">That reset link has expired or was already used. Enter your email and tap Forgot password to get a new one.</div>';
     try{ history.replaceState(null, '', location.pathname + location.search); }catch(_e){}
   }
+
+/* ---------- everything starts folded; tap a heading to open it ---------- */
+function zsAccRow(title, sub, bodyHtml){
+  return `<div class="acc-item"><button class="acc-head" type="button" data-zacc><span class="acc-main"><span class="acc-title">${title}</span><div class="acc-sub">${sub}</div></span><span class="acc-chev">⌄</span></button><div class="acc-body"><div class="acc-inner"><div class="acc-pad">${bodyHtml}</div></div></div></div>`;
+}
+function zsOpenCardOf(el){ const c = el && el.closest('.acc-item'); if(c) c.classList.add('open'); }
+document.addEventListener('click', e=>{
+  const h = e.target.closest('[data-zacc]'); if(!h) return;
+  const item = h.closest('.acc-item'); if(item) item.classList.toggle('open');
+});
+(function foldCards(){
+  document.querySelectorAll('#dashboard-screen main .card').forEach(card=>{
+    if(card.closest('.acc-item')) return;
+    const h2 = card.firstElementChild; if(!h2 || h2.tagName !== 'H2') return;
+    const item = document.createElement('div'); item.className = 'acc-item zs-card';
+    if(card.id) item.id = card.id;
+    const head = document.createElement('button'); head.type = 'button'; head.className = 'acc-head'; head.setAttribute('data-zacc','');
+    head.innerHTML = '<span class="acc-main"><span class="acc-title"></span></span><span class="acc-chev">⌄</span>';
+    head.querySelector('.acc-title').innerHTML = h2.innerHTML;
+    const body = document.createElement('div'); body.className = 'acc-body';
+    const inner = document.createElement('div'); inner.className = 'acc-inner';
+    const pad = document.createElement('div'); pad.className = 'acc-pad';
+    h2.remove();
+    while(card.firstChild) pad.appendChild(card.firstChild);   // the same elements move, so every button and list keeps working
+    inner.appendChild(pad); body.appendChild(inner);
+    item.appendChild(head); item.appendChild(body);
+    card.replaceWith(item);
+  });
+})();
 </script>
 </body>
 </html>

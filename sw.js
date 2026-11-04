@@ -1,7 +1,7 @@
 // ZeeShop — basic service worker for PWA installability and offline shell caching
-// v5 = native push banners with deep link to Messages. v4 = the service worker no longer caches API data (see the fetch handler). v3 = new app icon (icons are cached cache-first, so they only change when this name changes). Earlier, v2: the old worker kept sync-engine.js cache-first FOREVER, so phones never received sync fixes.
+// v6 = chat alerts open the Support Chat (or Super Admin for the support team). v5 = native push banners with deep link to Messages. v4 = the service worker no longer caches API data (see the fetch handler). v3 = new app icon (icons are cached cache-first, so they only change when this name changes). Earlier, v2: the old worker kept sync-engine.js cache-first FOREVER, so phones never received sync fixes.
 // Bump this number again whenever you want every device to drop its cached files.
-const CACHE_NAME = "zeeshop-cache-v5";
+const CACHE_NAME = "zeeshop-cache-v6";
 const CORE_ASSETS = [
   "/app.html",
   "/manifest.json",
@@ -123,10 +123,17 @@ self.addEventListener("notificationclick", (event) => {
   const targetUrl = (event.notification.data && event.notification.data.url) || MESSAGES_URL;
   event.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    // Support chat alerts: the owner's alert opens the chat; the support team's alert opens Super Admin.
+    if (targetUrl.includes("super-admin")) {
+      for (const client of wins) { if (client.url.includes("super-admin") && "focus" in client) { await client.focus(); return; } }
+      if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
+      return;
+    }
+    const isSupport = targetUrl.includes("#support");
     for (const client of wins) {
       if (client.url.includes("app.html") && "focus" in client) {
         await client.focus();
-        client.postMessage({ type: "ZEESHOP_OPEN_MESSAGES" });   // already running: no reload, just navigate in-app
+        client.postMessage({ type: isSupport ? "ZEESHOP_OPEN_SUPPORT" : "ZEESHOP_OPEN_MESSAGES" });   // already running: no reload, just navigate in-app
         return;
       }
     }

@@ -180,6 +180,60 @@ Deno.serve(async (req: Request) => {
       return json({ businesses: businesses || [], staffCounts, owners }, 200);
     }
 
+    // ---------- SUPPORT CHAT ----------
+    if (action === "support_list") {
+      const { data: chats, error } = await admin.from("support_chats").select("*").order("last_message_at", { ascending: false }).limit(300);
+      if (error) return json({ error: error.message }, 500);
+      const unread = (chats || []).reduce((n: number, c: { unread_admin: number }) => n + (c.unread_admin > 0 ? 1 : 0), 0);
+      return json({ chats: chats || [], unread }, 200);
+    }
+    if (action === "support_thread") {
+      const businessId = String(params.business_id || "");
+      if (!businessId) return json({ error: "Missing business." }, 400);
+      let q = admin.from("support_messages").select("*").eq("business_id", businessId);
+      if (params.since) q = q.gt("created_at", String(params.since));
+      const { data: msgs, error } = await q.order("created_at", { ascending: true }).limit(300);
+      if (error) return json({ error: error.message }, 500);
+      await admin.from("support_chats").update({ unread_admin: 0, admin_read_at: new Date().toISOString() }).eq("business_id", businessId);
+      const { data: chat } = await admin.from("support_chats").select("*").eq("business_id", businessId).maybeSingle();
+      let info = null;
+      if (!params.since) {
+        const { data: biz } = await admin.from("businesses").select("name, country, subscription_plan").eq("id", businessId).maybeSingle();
+        const { data: owner } = await admin.from("app_users").select("first_name, last_name, phone, email").eq("business_id", businessId).eq("role", "master").limit(1).maybeSingle();
+        info = { business: biz || null, owner: owner || null };
+      }
+      return json({ messages: msgs || [], chat: chat || null, info }, 200);
+    }
+    if (action === "support_send") {
+      const businessId = String(params.business_id || "");
+      const body = String(params.body || "").slice(0, 2000);
+      const photo = params.photo ? String(params.photo) : null;
+      if (!businessId || (!body.trim() && !photo)) return json({ error: "Type a message first." }, 400);
+      if (photo && photo.length > 600000) return json({ error: "That picture is too large." }, 400);
+      const { data: row, error } = await admin.from("support_messages").insert({
+        business_id: businessId, sender_role: "admin", sender_name: "ZeeShop Support", body, photo,
+      }).select("*").single();
+      if (error) return json({ error: error.message }, 500);
+      return json({ message: row }, 200);
+    }
+    if (action === "support_set_status") {
+      const businessId = String(params.business_id || "");
+      const status = params.status === "closed" ? "closed" : "open";
+      const { error } = await admin.from("support_chats").update({ status }).eq("business_id", businessId);
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true }, 200);
+    }
+    if (action === "support_quick_list") {
+      const { data } = await admin.from("support_quick_replies").select("id, text, sort").order("sort", { ascending: true });
+      return json({ replies: data || [] }, 200);
+    }
+    if (action === "support_quick_save") {
+      const items: string[] = (Array.isArray(params.items) ? params.items : []).map((x: unknown) => String(x || "").trim().slice(0, 300)).filter(Boolean).slice(0, 12);
+      await admin.from("support_quick_replies").delete().not("id", "is", null);
+      if (items.length) await admin.from("support_quick_replies").insert(items.map((text, i) => ({ text, sort: i + 1 })));
+      return json({ ok: true }, 200);
+    }
+
     if (action === "business_detail") {
       const businessId = params.business_id;
       if (!businessId) return json({ error: "Missing business_id" }, 400);

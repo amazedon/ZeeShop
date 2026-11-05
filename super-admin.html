@@ -373,6 +373,28 @@
       </div>
 
       <div class="card">
+        <h2>Daily spending limit</h2>
+        <p class="subtle">Every business can spend up to this amount per day on bill payments (airtime, data, betting, bills). Change the normal amount here, switch the limit off for everyone, or use the "Limit" button on a business row to give one business its own limit (or none).</p>
+        <div class="toolbar">
+          <label class="subtle"><input type="checkbox" id="lim-on" checked> Limit is on</label>
+          <label class="subtle">Normal limit per day (₦) <input type="number" id="lim-daily" min="0" style="width:110px"></label>
+          <button class="btn" id="lim-save" type="button">Save</button>
+        </div>
+        <div id="lim-status" class="subtle"></div>
+      </div>
+
+      <div class="card">
+        <h2>Ban or unban a login</h2>
+        <p class="subtle">A banned person cannot log in. Nothing is deleted, so you can lift the ban if they turn out to be genuine. (You can also use Ban owner / Unban owner on a business row.)</p>
+        <div class="toolbar">
+          <input type="email" id="ban-email" placeholder="Email of the account">
+          <button class="btn-danger-sm" id="ban-go" type="button">Ban</button>
+          <button class="btn-outline-sm" id="unban-go" type="button">Unban</button>
+        </div>
+        <div id="ban-status" class="subtle"></div>
+      </div>
+
+      <div class="card">
         <h2>Delete an account</h2>
         <p class="subtle">Permanently removes a login by email, plus every business it owns. Money records are archived first. No undo.</p>
         <div class="toolbar">
@@ -1625,6 +1647,16 @@
   }
 
   const openBizIds = new Set();   // which shops are expanded; survives list refreshes
+  var capOverrides = {}, bannedBiz = new Set(), capDefault = 5000, capEnabled = true;
+  function capLabel(id){
+    const fmt = n => '₦' + Number(n).toLocaleString();
+    if(Object.prototype.hasOwnProperty.call(capOverrides, id)) return 'Limit: ' + (capOverrides[id] === null ? 'none' : fmt(capOverrides[id]));
+    return capEnabled ? 'Limit: ' + fmt(capDefault) + ' (default)' : 'Limit: none (off)';
+  }
+  function setLimitInputs(l){
+    if(l.default_daily != null){ capDefault = l.default_daily; document.getElementById('lim-daily').value = l.default_daily; }
+    if(l.cap_enabled != null){ capEnabled = l.cap_enabled === 1; document.getElementById('lim-on').checked = capEnabled; }
+  }
   async function loadBusinesses(){
     const statusBox = document.getElementById('biz-status');
     statusBox.innerHTML = '<div class="subtle">Loading…</div>';
@@ -1633,6 +1665,8 @@
       allBusinesses = result.businesses || [];
       staffCountsById = result.staffCounts || {};
       ownersById = result.owners || {};
+      capOverrides = result.overrides || {}; bannedBiz = new Set(result.bannedOwners || []);
+      setLimitInputs(result.limits || {});
       statusBox.innerHTML = '';
     }catch(e){
       showError(statusBox, 'Could not load businesses: ' + e.message);
@@ -1704,6 +1738,8 @@
             <input type="date" data-expiry-input="${b.id}" value="${b.subscription_expires_at ? b.subscription_expires_at.slice(0,10) : ''}" title="Expiry date (optional — leave blank for no expiry)" style="padding:5px 6px;border:1.5px solid var(--line);border-radius:8px;font-size:11.5px;">
             <button data-grant-btn="${b.id}" style="padding:6px 10px;border-radius:8px;border:none;background:var(--marigold);color:var(--ink);font-weight:800;font-size:12px;cursor:pointer;">Set</button>
             <button class="${suspended?'btn-outline-sm':'btn-danger-sm'}" data-suspend-btn="${b.id}" data-suspend-to="${suspended?'true':'false'}">${suspended?'Reactivate':'Suspend'}</button>
+            <button class="btn-outline-sm" data-cap-btn="${b.id}" data-biz-name="${escapeHtml(b.name||'')}" title="Daily limit on bill payments (airtime, data, betting, bills). Click to change it for this business.">${capLabel(b.id)}</button>
+            <button class="${bannedBiz.has(b.id)?'btn-outline-sm':'btn-danger-sm'}" data-ban-btn="${b.id}" data-ban-to="${bannedBiz.has(b.id)?'false':'true'}" data-biz-name="${escapeHtml(b.name||'')}">${bannedBiz.has(b.id)?'Unban owner':'Ban owner'}</button>
             <button class="btn-danger-sm" data-force-delete-btn="${b.id}" data-biz-name="${escapeHtml(b.name||'')}" title="Permanently delete now — skips the 30-day GDPR grace period. For test accounts only.">Force Delete</button>
           </div>
           <div style="font-size:10.5px;color:var(--text-dim);margin-top:3px;" id="grant-status-${b.id}"></div>
@@ -1770,6 +1806,33 @@
       });
     });
 
+    document.querySelectorAll('[data-cap-btn]').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const bizId = btn.dataset.capBtn;
+        const ans = prompt(`Daily bill-payment limit for "${btn.dataset.bizName}".\n\nType an amount in naira (e.g. 20000),\n"none" for no limit,\nor "default" to use the normal limit (${capEnabled?('₦'+Number(capDefault).toLocaleString()):'currently off for everyone'}).`);
+        if(ans === null) return;
+        const t = ans.trim().toLowerCase(); let daily;
+        if(t === 'none' || t === 'off') daily = null;
+        else if(t === 'default' || t === '') daily = 'default';
+        else { daily = Number(t.replace(/[,₦\s]/g,'')); if(!(daily >= 0)){ alert('Please type a number, "none" or "default".'); return; } }
+        btn.disabled = true;
+        try{
+          await callAdminApi('cap_set', { business_id: bizId, daily });
+          if(daily === 'default') delete capOverrides[bizId]; else capOverrides[bizId] = daily;
+          applySearchFilter();
+        }catch(e){ btn.disabled = false; alert('Could not change the limit: ' + e.message); }
+      });
+    });
+    document.querySelectorAll('[data-ban-btn]').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const bizId = btn.dataset.banBtn; const ban = btn.dataset.banTo === 'true';
+        if(ban && !confirm(`Ban the owner of "${btn.dataset.bizName}"? They will not be able to log in. You can unban them any time.`)) return;
+        btn.disabled = true;
+        try{ await callAdminApi('ban_user', { business_id: bizId, ban }); if(ban) bannedBiz.add(bizId); else bannedBiz.delete(bizId); applySearchFilter(); }
+        catch(e){ btn.disabled = false; alert('Could not change the ban: ' + e.message); }
+      });
+    });
+
     // FORCE DELETE — permanent, immediate, skips the normal 30-day GDPR
     // grace period. Meant for wiping test/junk accounts during development,
     // not for real customer deletion requests (those should go through the
@@ -1830,6 +1893,30 @@
       document.getElementById('del-acct-email').value='';
     }catch(e){ st.style.color='var(--red)'; st.textContent='Error: '+e.message; }
   });
+
+
+  document.getElementById('lim-save').addEventListener('click', async ()=>{
+    const st = document.getElementById('lim-status');
+    st.style.color='var(--text-dim)'; st.textContent='Saving…';
+    try{
+      await callAdminApi('limits_set', { enabled: document.getElementById('lim-on').checked, daily: document.getElementById('lim-daily').value });
+      capEnabled = document.getElementById('lim-on').checked; capDefault = Number(document.getElementById('lim-daily').value); applySearchFilter();
+      st.style.color='var(--green, #2E7D32)'; st.textContent='Saved. It applies to the next purchase.';
+    }catch(e){ st.style.color='var(--red)'; st.textContent='Error: '+e.message; }
+  });
+  async function banByEmail(ban){
+    const email = (document.getElementById('ban-email').value||'').trim();
+    const st = document.getElementById('ban-status');
+    if(!email){ st.textContent='Type the email first.'; return; }
+    st.style.color='var(--text-dim)'; st.textContent='Working…';
+    try{
+      await callAdminApi('ban_user', { email, ban });
+      st.style.color='var(--green, #2E7D32)'; st.textContent=(ban?'Banned ':'Unbanned ')+email+'.';
+      loadBusinesses();
+    }catch(e){ st.style.color='var(--red)'; st.textContent='Error: '+e.message; }
+  }
+  document.getElementById('ban-go').addEventListener('click', ()=>{ if(confirm('Ban this login? They will not be able to sign in.')) banByEmail(true); });
+  document.getElementById('unban-go').addEventListener('click', ()=>banByEmail(false));
 
   async function renderBizDetail(bizId){
     const cell = document.getElementById(`detail-${bizId}`);

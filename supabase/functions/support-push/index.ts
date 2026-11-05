@@ -69,14 +69,18 @@ Deno.serve(async (req: Request) => {
         const { data: me0 } = await admin.from("app_users").select("business_id").eq("auth_user_id", who.user.id).maybeSingle();
         if (me0) {
           const since = new Date(Date.now() - 30 * 60000).toISOString();
-          const { data: recent } = await admin.from("support_messages").select("id").eq("business_id", me0.business_id).in("sender_role", ["admin", "auto"]).gt("created_at", since).limit(1);
+          const { data: lastU } = await admin.from("support_messages").select("convo_id").eq("business_id", me0.business_id).eq("sender_role", "user").order("created_at", { ascending: false }).limit(1).maybeSingle();
+          const convoId = lastU?.convo_id || null;
+          let rq = admin.from("support_messages").select("id").eq("business_id", me0.business_id).in("sender_role", ["admin", "auto"]).gt("created_at", since);
+          rq = convoId ? rq.eq("convo_id", convoId) : rq.is("convo_id", null);
+          const { data: recent } = await rq.limit(1);
           if (!recent || !recent.length) {
             const { data: pres } = await admin.from("support_presence").select("last_seen").eq("id", 1).maybeSingle();
             const online = !!pres && Date.now() - new Date(pres.last_seen).getTime() < 3 * 60000;
             const body = online
               ? "Thanks for your message 🙏 Hold on a moment, someone from support will be with you shortly."
               : "Thanks for your message 🙏 You're in the queue. We've been notified and will reply here as soon as we can. You'll get a notification on your phone when we do.";
-            await admin.from("support_messages").insert({ business_id: me0.business_id, sender_role: "auto", sender_name: "ZeeShop Support (auto)", body });
+            await admin.from("support_messages").insert({ business_id: me0.business_id, sender_role: "auto", sender_name: "ZeeShop Support (auto)", body, convo_id: convoId });
           }
         }
       } catch (e) { console.error("auto reply failed", e); }

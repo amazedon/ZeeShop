@@ -285,6 +285,10 @@ Deno.serve(async (req: Request) => {
       if (error) return json({ error: error.message }, 500);
       return json({ ok: true }, 200);
     }
+    if (action === "support_ping") {
+      await admin.from("support_presence").upsert({ id: 1, last_seen: new Date().toISOString() });
+      return json({ ok: true }, 200);
+    }
     if (action === "support_quick_list") {
       const { data } = await admin.from("support_quick_replies").select("id, text, sort").order("sort", { ascending: true });
       return json({ replies: data || [] }, 200);

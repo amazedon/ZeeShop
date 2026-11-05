@@ -373,6 +373,16 @@
       </div>
 
       <div class="card">
+        <h2>Delete an account</h2>
+        <p class="subtle">Permanently removes a login by email, plus every business it owns. Money records are archived first. No undo.</p>
+        <div class="toolbar">
+          <input type="email" id="del-acct-email" placeholder="Email of the account to delete">
+          <button class="btn-danger-sm" id="del-acct-btn" type="button">Delete account</button>
+        </div>
+        <div id="del-acct-status" class="subtle"></div>
+      </div>
+
+      <div class="card">
         <h2>All Registered Businesses</h2>
         <p class="subtle">Synced from businesses that have signed up and connected online at least once — offline-only signups appear here once their device reconnects.</p>
         <div id="biz-status"></div>
@@ -1776,7 +1786,12 @@
         statusEl.style.color = 'var(--text-dim)';
         statusEl.textContent = 'Deleting…';
         try{
-          await callAdminApi('force_delete_business', { business_id: bizId });
+          try{ await callAdminApi('force_delete_business', { business_id: bizId }); }
+          catch(e1){
+            if(/wallet balance/i.test(e1.message) && confirm(e1.message)){
+              await callAdminApi('force_delete_business', { business_id: bizId, allow_balance: true });
+            } else throw e1;
+          }
           allBusinesses = allBusinesses.filter(x=>x.id!==bizId);
           applySearchFilter();
         }catch(e){
@@ -1794,6 +1809,27 @@
       });
     });
   }
+
+
+  document.getElementById('del-acct-btn').addEventListener('click', async ()=>{
+    const email = (document.getElementById('del-acct-email').value||'').trim();
+    const st = document.getElementById('del-acct-status');
+    if(!email){ st.textContent='Type the email first.'; return; }
+    const typed = prompt(`This PERMANENTLY deletes the account ${email} and every business it owns. No undo.\n\nType the email again to confirm:`);
+    if(typed===null) return;
+    if(typed.trim().toLowerCase()!==email.toLowerCase()){ alert("That didn't match — nothing was deleted."); return; }
+    st.style.color='var(--text-dim)'; st.textContent='Deleting…';
+    try{
+      let r;
+      try{ r = await callAdminApi('delete_account', { email }); }
+      catch(e1){
+        if(/wallet balance/i.test(e1.message) && confirm(e1.message)) r = await callAdminApi('delete_account', { email, allow_balance:true });
+        else throw e1;
+      }
+      st.style.color='var(--green, #2E7D32)'; st.textContent='Deleted '+email+'.';
+      document.getElementById('del-acct-email').value='';
+    }catch(e){ st.style.color='var(--red)'; st.textContent='Error: '+e.message; }
+  });
 
   async function renderBizDetail(bizId){
     const cell = document.getElementById(`detail-${bizId}`);

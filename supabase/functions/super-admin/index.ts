@@ -807,69 +807,51 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true }, 200);
     }
 
-    // FORCE DELETE — permanent, immediate, skips the normal 30-day GDPR
-    // grace period that the in-app Settings → Delete Business flow gives
-    // real customers. Meant for wiping test/junk accounts created during
-    // development. Best-effort across every table this app writes to
-    // (see the enqueueSync table list in app.html/admin.html) — a missing
-    // or renamed table is logged and skipped rather than aborting the
-    // whole cleanup, since partial cleanup is still better than none.
+    // FORCE DELETE — permanent, immediate. Calls the purge_business SQL
+    // function (see purge-and-delete.sql), which archives money records,
+    // then deletes the business and everything under it in the right order.
     if (action === "force_delete_business") {
       const businessId = params.business_id;
       if (!businessId) return json({ error: "Missing business_id" }, 400);
-
       const { data: bizRow } = await admin.from("businesses").select("name").eq("id", businessId).maybeSingle();
       const bizName = bizRow?.name || "(unknown)";
-
-      const { data: shopRows } = await admin.from("shops").select("id").eq("business_id", businessId);
-      const shopIds = (shopRows || []).map((s: { id: string }) => s.id);
-
-      const { data: userRows } = await admin.from("app_users").select("id, auth_user_id").eq("business_id", businessId);
+      const { data: userRows } = await admin.from("app_users").select("auth_user_id").eq("business_id", businessId);
       const authUserIds = (userRows || []).map((u: { auth_user_id: string | null }) => u.auth_user_id).filter(Boolean) as string[];
 
-      const skipped: string[] = [];
-      const tryDelete = async (table: string, column: string, value: unknown) => {
-        const { error } = await admin.from(table).delete().eq(column, value);
-        if (error) skipped.push(`${table}: ${error.message}`);
-      };
+      const { data: counts, error: pErr } = await admin.rpc("purge_business", { p_business_id: businessId, p_allow_balance: params.allow_balance === true });
+      if (pErr) return json({ error: pErr.message }, 500);
 
-      // Log BEFORE deleting, while target_business_id still points to a
-      // real row (avoids a dangling-reference audit entry afterward).
       await admin.from("audit_log_platform").insert({
         actor_auth_user_id: callerData.user.id,
         action: "force_delete_business",
-        target_business_id: businessId,
-        detail: `Permanently deleted "${bizName}" and all its data (test-account cleanup, no grace period).`,
+        target_business_id: null,
+        detail: `Permanently deleted "${bizName}" (${businessId}). Money records archived.`,
       }).then((r) => { if (r.error) console.log("audit_log_platform insert skipped:", r.error.message); });
 
-      // Shop-scoped tables first.
-      for (const shopId of shopIds) {
-        for (const table of ["sale_items", "sales", "stock_adjustments", "good_variants", "good_batches", "goods",
-                              "lodging_bookings", "rooms", "shop_notes", "audit_log"]) {
-          await tryDelete(table, "shop_id", shopId);
-        }
-      }
-      // Business-scoped tables.
-      // Bill Payments / wallet / notification records come first — they point
-      // at the business, so leaving them would block the final delete.
-      for (const table of ["bill_transactions", "wallet_topups", "wallet_fee_log", "push_subscriptions",
-                            "customers", "expenses", "supplier_purchases", "suppliers", "salary_payments",
-                            "employment_record_history", "employment_records", "record_only_staff",
-                            "communication_log", "app_users"]) {
-        await tryDelete(table, "business_id", businessId);
-      }
-      await tryDelete("shops", "business_id", businessId);
-
-      // Auth users — must happen via the admin API, not a table delete.
+      const skipped: string[] = [];
       for (const authId of authUserIds) {
+        // Only remove the login if it owns no other business.
+        const { data: other } = await admin.from("businesses").select("id").eq("owner_auth_user_id", authId).limit(1);
+        if (other && other.length) continue;
         const { error } = await admin.auth.admin.deleteUser(authId);
         if (error) skipped.push(`auth user ${authId}: ${error.message}`);
       }
+      return json({ ok: true, counts, skipped }, 200);
+    }
 
-      const { error: bizDelErr } = await admin.from("businesses").delete().eq("id", businessId);
-      if (bizDelErr) return json({ error: "Deleted related data, but could not delete the business row itself: " + bizDelErr.message, skipped }, 500);
-
-      return json({ ok: true, skipped }, 200);
+    // DELETE ACCOUNT BY EMAIL — removes the login and every business it owns.
+    if (action === "delete_account") {
+      const email = String(params.email || "").trim();
+      if (!email) return json({ error: "Missing email" }, 400);
+      const { data, error } = await admin.rpc("purge_account", { p_email: email, p_allow_balance: params.allow_balance === true });
+      if (error) return json({ error: error.message }, 500);
+      await admin.from("audit_log_platform").insert({
+        actor_auth_user_id: callerData.user.id,
+        action: "delete_account",
+        target_business_id: null,
+        detail: `Permanently deleted account ${email}.`,
+      }).then((r) => { if (r.error) console.log("audit_log_platform insert skipped:", r.error.message); });
+      return json({ ok: true, result: data }, 200);
     }
 
     // RECOVER ACCOUNT — the human escalation path for when a real owner

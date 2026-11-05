@@ -1052,10 +1052,33 @@ async function handlePurchase(
     }
   }
 
+  // ---- TAKE THE MONEY FIRST (atomic). Before, the wallet was only read here and debited AFTER Bigisub had already
+  // delivered, so two purchases fired at the same instant both passed the balance check and both went through
+  // (the attacker got ~2x what they deposited). Now the database itself removes the amount in one step and refuses
+  // if the balance is not enough, so a second simultaneous request is refused. If the purchase then fails, we give it back.
+  const { data: reservedBal, error: reserveBalErr } = await admin.rpc("reserve_bill_wallet", { p_business_id: String(businessId), p_amount: estimatedSale });
+  if (reserveBalErr) {
+    const f = { status: "failed", cost_price: 0, sale_price: 0, bigisub_response: { error: "Could not check the wallet." } };
+    if (clientRef) await admin.from("bill_transactions").update(f).eq("id", txId);
+    return json({ error: "Could not check your Bill Wallet right now. Please try again in a moment." }, 503);
+  }
+  if (reservedBal === null || reservedBal === undefined) {
+    const f = { status: "failed", cost_price: 0, sale_price: 0, bigisub_response: { error: "Insufficient Bill Wallet balance" } };
+    if (clientRef) await admin.from("bill_transactions").update(f).eq("id", txId);
+    return json({ error: "Insufficient Bill Wallet balance. Please top up." }, 400);
+  }
+  let walletHeld = true;
+  const giveBack = async () => {
+    if (!walletHeld) return; walletHeld = false;
+    const { error: gbErr } = await admin.rpc("increment_bill_wallet", { p_business_id: String(businessId), p_amount: estimatedSale });
+    if (gbErr) console.error("WALLET GIVE-BACK FAILED for business", businessId, "amount", estimatedSale, gbErr.message);
+  };
+
   let bigisubResponse: any;
   try {
     bigisubResponse = await bigisubCall();
   } catch (e) {
+    await giveBack();
     const failedUpdate = { status: "failed", cost_price: estimatedCost, sale_price: 0, bigisub_response: { error: e instanceof Error ? e.message : String(e) } };
     if (clientRef) await admin.from("bill_transactions").update(failedUpdate).eq("id", txId);
     else await admin.from("bill_transactions").insert({ id: txId, business_id: businessId, user_id: userId, service: serviceKey, service_label: serviceLabel, recipient, ...failedUpdate });
@@ -1070,6 +1093,7 @@ async function handlePurchase(
   // Bigisub refunds its own wallet when a purchase fails, so the business
   // is NOT charged either — record the failure and say why.
   if (status === "failed") {
+    await giveBack();
     const failFields = { cost_price: 0, sale_price: 0, status: "failed", bigisub_tranx_id: bigisubTranxId, bigisub_response: bigisubResponse };
     if (clientRef) await admin.from("bill_transactions").update(failFields).eq("id", txId);
     else await admin.from("bill_transactions").insert({ id: txId, business_id: businessId, user_id: userId, service: serviceKey, service_label: serviceLabel, recipient, ...failFields });
@@ -1081,16 +1105,10 @@ async function handlePurchase(
   // pre-check price); the real cost is recorded separately for the admin.
   const salePrice = estimatedSale;
 
-  // Atomic debit (never overwrites a wallet credit that landed meanwhile).
-  // The purchase already happened, so this must never refuse: it floors at 0.
-  let newBalance = Math.max(0, preCheckBalance - salePrice);
-  const { data: debited, error: debitErr } = await admin.rpc("debit_bill_wallet_floor", { p_business_id: String(businessId), p_amount: salePrice });
-  if (!debitErr && debited !== null && debited !== undefined) {
-    newBalance = Number(debited);
-  } else {
-    console.warn("debit_bill_wallet_floor unavailable, using fallback:", debitErr?.message);
-    await admin.from("businesses").update({ bill_wallet_balance: newBalance }).eq("id", businessId);
-  }
+  // The money was already taken before the purchase (see above). Just read the balance to show the person.
+  let newBalance = Number(reservedBal);
+  { const { data: fb } = await admin.from("businesses").select("bill_wallet_balance").eq("id", businessId).maybeSingle();
+    if (fb && fb.bill_wallet_balance !== null && fb.bill_wallet_balance !== undefined) newBalance = Number(fb.bill_wallet_balance); }
 
   const finalFields = { cost_price: costPrice, sale_price: salePrice, status, bigisub_tranx_id: bigisubTranxId, bigisub_response: bigisubResponse };
   if (clientRef) await admin.from("bill_transactions").update(finalFields).eq("id", txId);

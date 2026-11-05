@@ -2093,6 +2093,10 @@ function scTime(iso){ try{ const d=new Date(iso), n=new Date(); const t=d.toLoca
 function scBadge(n){ const b=document.getElementById('sc-menu-badge'); if(!b) return; b.textContent=n; b.classList.toggle('hidden', !n); }
 async function scRefreshBadge(){ try{ const r = await callAdminApi('support_list', {}); scBadge(r.unread||0); return r; }catch(e){ return null; } }
 setInterval(scRefreshBadge, 30000); setTimeout(scRefreshBadge, 2500);
+// "Someone is here": while you are using this page, tell the server every minute so customers get "hold on" instead of "you're in the queue".
+var scLastActive = Date.now();
+['mousemove','keydown','click','touchstart','scroll'].forEach(ev=>document.addEventListener(ev, ()=>{ scLastActive = Date.now(); }, { passive:true }));
+setInterval(()=>{ if(document.visibilityState==='visible' && Date.now()-scLastActive < 120000) callAdminApi('support_ping', {}).catch(()=>{}); }, 60000);
 function scStopThreadPoll(){ if(scPoll){ clearInterval(scPoll); scPoll=null; } }
 async function scOpenInbox(){
   scStopThreadPoll(); scCur=null;
@@ -2126,10 +2130,11 @@ document.getElementById('sc-quick-save').addEventListener('click', async ()=>{
   try{ await callAdminApi('support_quick_save', { items }); window.scQuick = items.slice(0,12); m.textContent='Saved ✓'; }catch(e){ m.textContent='Could not save: '+e.message; }
 });
 function scBubble(m, chat){
-  const mine = m.sender_role==='admin';
+  const isAuto = m.sender_role==='auto';
+  const mine = m.sender_role==='admin' || isAuto;
   const read = mine && false;
   const body = (m.photo && /^data:image\//.test(m.photo) ? `<img src="${m.photo}" style="max-width:100%;border-radius:10px;display:block;margin-bottom:${m.body?'6px':'0'};">` : '') + (m.body?scEsc(m.body).replace(/\n/g,'<br>'):'');
-  return `<div style="align-self:${mine?'flex-end':'flex-start'};max-width:82%;"><div style="background:${mine?'var(--ink)':'#fff'};color:${mine?'#fff':'var(--text)'};border:${mine?'none':'1px solid var(--line)'};border-radius:14px;padding:9px 12px;font-size:14px;line-height:1.4;word-break:break-word;">${body}</div><div class="subtle" style="font-size:11px;margin:2px 6px;text-align:${mine?'right':'left'};">${scTime(m.created_at)}</div></div>`;
+  return `<div style="align-self:${mine?'flex-end':'flex-start'};max-width:82%;"><div style="background:${mine?'var(--ink)':'#fff'};color:${mine?'#fff':'var(--text)'};border:${mine?'none':'1px solid var(--line)'};${isAuto?'opacity:.72;font-style:italic;':''}border-radius:14px;padding:9px 12px;font-size:14px;line-height:1.4;word-break:break-word;">${body}</div><div class="subtle" style="font-size:11px;margin:2px 6px;text-align:${mine?'right':'left'};">${isAuto?'automatic reply · ':''}${scTime(m.created_at)}</div></div>`;
 }
 function scPaintMsgs(stick){
   const box = document.getElementById('sc-msgs'); const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;

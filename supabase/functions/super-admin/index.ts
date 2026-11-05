@@ -272,8 +272,14 @@ Deno.serve(async (req: Request) => {
       const photo = params.photo ? String(params.photo) : null;
       if (!businessId || (!body.trim() && !photo)) return json({ error: "Type a message first." }, 400);
       if (photo && photo.length > 600000) return json({ error: "That picture is too large." }, 400);
+      // The reply goes into the conversation the customer last wrote in (or the one you name).
+      let convoId: string | null = params.convo_id ? String(params.convo_id) : null;
+      if (!convoId) {
+        const { data: lastU } = await admin.from("support_messages").select("convo_id").eq("business_id", businessId).eq("sender_role", "user").order("created_at", { ascending: false }).limit(1).maybeSingle();
+        convoId = lastU?.convo_id || null;
+      }
       const { data: row, error } = await admin.from("support_messages").insert({
-        business_id: businessId, sender_role: "admin", sender_name: "ZeeShop Support", body, photo,
+        business_id: businessId, sender_role: "admin", sender_name: "ZeeShop Support", body, photo, convo_id: convoId,
       }).select("*").single();
       if (error) return json({ error: error.message }, 500);
       return json({ message: row }, 200);

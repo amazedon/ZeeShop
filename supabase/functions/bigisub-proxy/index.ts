@@ -232,7 +232,13 @@ async function bigisub(method: "GET" | "POST", path: string, body?: Record<strin
   let data: any = null;
   try { data = await res.json(); } catch (_e) { /* non-JSON response */ }
   if (!res.ok) {
-    const msg = (data && (data.message || data.detail || data.error)) || `Bigisub request failed (${res.status})`;
+    let msg = (data && (data.message || data.detail || data.error)) || `Bigisub request failed (${res.status})`;
+    // Bigisub often says only "Validation failed" and puts the real reason in another field — keep it so we can see it.
+    try {
+      const extra = data && (data.errors || data.error_details || (typeof data.data === "object" ? data.data : null) || (typeof data.error === "object" ? data.error : null));
+      if (extra && typeof extra === "object" && Object.keys(extra).length) msg += " — " + JSON.stringify(extra).slice(0, 300);
+    } catch (_e) { /* keep the plain message */ }
+    console.error("Bigisub rejected", method, path, res.status, JSON.stringify(data).slice(0, 600));
     throw new Error(msg);
   }
   return data;
@@ -1057,6 +1063,12 @@ async function handlePurchase(
   // (the attacker got ~2x what they deposited). Now the database itself removes the amount in one step and refuses
   // if the balance is not enough, so a second simultaneous request is refused. If the purchase then fails, we give it back.
   const { data: reservedBal, error: reserveBalErr } = await admin.rpc("reserve_bill_wallet", { p_business_id: String(businessId), p_amount: estimatedSale });
+  if (reserveBalErr && /SPEND_LIMIT/.test(reserveBalErr.message || "")) {
+    const msg = String(reserveBalErr.message).replace(/^.*SPEND_LIMIT:\s*/s, "") + " Please try again tomorrow, or contact support to raise your limit.";
+    const f = { status: "failed", cost_price: 0, sale_price: 0, bigisub_response: { error: msg } };
+    if (clientRef) await admin.from("bill_transactions").update(f).eq("id", txId);
+    return json({ error: msg }, 400);
+  }
   if (reserveBalErr) {
     const f = { status: "failed", cost_price: 0, sale_price: 0, bigisub_response: { error: "Could not check the wallet." } };
     if (clientRef) await admin.from("bill_transactions").update(f).eq("id", txId);
@@ -1071,6 +1083,7 @@ async function handlePurchase(
   const giveBack = async () => {
     if (!walletHeld) return; walletHeld = false;
     const { error: gbErr } = await admin.rpc("increment_bill_wallet", { p_business_id: String(businessId), p_amount: estimatedSale });
+    await admin.rpc("release_wallet_spend", { p_business_id: String(businessId), p_amount: estimatedSale });
     if (gbErr) console.error("WALLET GIVE-BACK FAILED for business", businessId, "amount", estimatedSale, gbErr.message);
   };
 

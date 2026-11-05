@@ -62,6 +62,26 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true });
     }
 
+    // AUTOMATIC REPLY: when nobody has answered yet, tell the customer they are in the queue (once per 30 minutes per business).
+    // Runs before the push check so it works even if phone alerts are not set up.
+    if (action === "user_message") {
+      try {
+        const { data: me0 } = await admin.from("app_users").select("business_id").eq("auth_user_id", who.user.id).maybeSingle();
+        if (me0) {
+          const since = new Date(Date.now() - 30 * 60000).toISOString();
+          const { data: recent } = await admin.from("support_messages").select("id").eq("business_id", me0.business_id).in("sender_role", ["admin", "auto"]).gt("created_at", since).limit(1);
+          if (!recent || !recent.length) {
+            const { data: pres } = await admin.from("support_presence").select("last_seen").eq("id", 1).maybeSingle();
+            const online = !!pres && Date.now() - new Date(pres.last_seen).getTime() < 3 * 60000;
+            const body = online
+              ? "Thanks for your message 🙏 Hold on a moment, someone from support will be with you shortly."
+              : "Thanks for your message 🙏 You're in the queue. We've been notified and will reply here as soon as we can. You'll get a notification on your phone when we do.";
+            await admin.from("support_messages").insert({ business_id: me0.business_id, sender_role: "auto", sender_name: "ZeeShop Support (auto)", body });
+          }
+        }
+      } catch (e) { console.error("auto reply failed", e); }
+    }
+
     const cfg = vapidReady(); if (cfg) return json({ error: cfg, sent: 0 }, 200);   // chat still works; only the phone alert is skipped
 
     if (action === "admin_reply") {

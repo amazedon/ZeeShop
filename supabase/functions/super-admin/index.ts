@@ -177,7 +177,69 @@ Deno.serve(async (req: Request) => {
         }
       });
 
-      return json({ businesses: businesses || [], staffCounts, owners }, 200);
+      // Spending-cap + ban state for the dashboard (each part is optional: a missing table just means "not set up yet").
+      const overrides: Record<string, number | null> = {}; const limits: Record<string, number> = {};
+      try { const { data } = await admin.from("spend_cap_override").select("business_id, daily"); (data || []).forEach((r: { business_id: string; daily: number | null }) => { overrides[r.business_id] = r.daily === null ? null : Number(r.daily); }); } catch (_) { /* ignore */ }
+      try { const { data } = await admin.from("platform_limits").select("key, value"); (data || []).forEach((r: { key: string; value: number }) => { limits[r.key] = Number(r.value); }); } catch (_) { /* ignore */ }
+      const bannedOwners: string[] = [];
+      try {
+        const banned = new Set<string>();
+        for (let page = 1; page <= 10; page++) {
+          const { data: lu } = await admin.auth.admin.listUsers({ page, perPage: 1000 });
+          const us = lu?.users || [];
+          us.forEach((u: { id: string; banned_until?: string | null }) => { if (u.banned_until && new Date(u.banned_until).getTime() > Date.now()) banned.add(u.id); });
+          if (us.length < 1000) break;
+        }
+        (businesses || []).forEach((b: { id: string; owner_auth_user_id: string | null }) => { if (b.owner_auth_user_id && banned.has(b.owner_auth_user_id)) bannedOwners.push(b.id); });
+      } catch (_) { /* ignore */ }
+
+      return json({ businesses: businesses || [], staffCounts, owners, overrides, limits, bannedOwners }, 200);
+    }
+
+    // ---------- SPENDING LIMITS + BANS ----------
+    if (action === "limits_set") {
+      const daily = Math.round(Number(params.daily)); const enabled = params.enabled === false ? 0 : 1;
+      if (!(daily >= 0 && daily <= 100000000)) return json({ error: "Enter a daily amount in naira." }, 400);
+      const { error } = await admin.from("platform_limits").upsert([{ key: "default_daily", value: daily }, { key: "cap_enabled", value: enabled }]);
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true }, 200);
+    }
+    // One business's own limit. daily: a number = that limit, null = no limit, "default" = back to the default.
+    if (action === "cap_set") {
+      if (!params.business_id) return json({ error: "Missing business_id" }, 400);
+      let q;
+      if (params.daily === "default") q = await admin.from("spend_cap_override").delete().eq("business_id", params.business_id);
+      else {
+        const daily = params.daily === null ? null : Math.round(Number(params.daily));
+        if (daily !== null && !(daily >= 0 && daily <= 100000000)) return json({ error: "Enter a daily amount in naira." }, 400);
+        q = await admin.from("spend_cap_override").upsert({ business_id: params.business_id, daily, note: "set by super admin", updated_at: new Date().toISOString() });
+      }
+      if (q.error) return json({ error: q.error.message }, 500);
+      return json({ ok: true }, 200);
+    }
+    if (action === "ban_user") {
+      let authId: string | null = null;
+      if (params.business_id) {
+        const { data } = await admin.from("businesses").select("owner_auth_user_id").eq("id", params.business_id).maybeSingle();
+        authId = data?.owner_auth_user_id || null;
+      } else if (params.email) {
+        for (let page = 1; page <= 10 && !authId; page++) {
+          const { data: lu } = await admin.auth.admin.listUsers({ page, perPage: 1000 });
+          const us = lu?.users || [];
+          const hit = us.find((u: { email?: string }) => (u.email || "").toLowerCase() === String(params.email).trim().toLowerCase());
+          if (hit) authId = hit.id;
+          if (us.length < 1000) break;
+        }
+      }
+      if (!authId) return json({ error: "Could not find that account." }, 404);
+      if (authId === callerData.user.id) return json({ error: "You cannot ban your own admin login." }, 400);
+      const { error } = await admin.auth.admin.updateUserById(authId, { ban_duration: params.ban === false ? "none" : "876000h" });
+      if (error) return json({ error: error.message }, 500);
+      await admin.from("audit_log_platform").insert({
+        actor_auth_user_id: callerData.user.id, action: params.ban === false ? "unban_user" : "ban_user",
+        target_business_id: params.business_id || null, detail: params.email || null,
+      }).then((r) => { if (r.error) console.log("audit_log_platform insert skipped:", r.error.message); });
+      return json({ ok: true }, 200);
     }
 
     // ---------- SUPPORT CHAT ----------

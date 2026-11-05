@@ -14398,7 +14398,7 @@ function scPaintChatRow(){
     <span style="flex:1;min-width:0;"><span style="display:block;font-size:18px;font-weight:700;color:var(--ink-text);">Live chat</span><span style="display:block;font-size:14px;color:var(--text-dim);margin-top:3px;">Chat with us inside the app. We usually reply within a few hours.</span></span>
     ${scUnread?`<span style="background:#C0392B;color:#fff;border-radius:12px;padding:2px 9px;font-size:13px;font-weight:700;">${scUnread}</span>`:''}
     <span style="font-size:26px;line-height:1;color:var(--text-dim);">›</span></div>`;
-  const go = ()=>{ route='support-chat'; render(); };
+  const go = ()=>{ scConvoU = null; route='support-chat'; render(); };
   const b = document.getElementById('sc-open-chat'); b.addEventListener('click', go); b.addEventListener('keydown', e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); go(); } });
 }
 function scOnIncoming(m){
@@ -14434,12 +14434,23 @@ async function scAlertSupport(){
     fetch(`${SITE_CONTENT_URL}/functions/v1/support-push`, { method:'POST', headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+tok, 'apikey': SITE_CONTENT_ANON_KEY }, body: JSON.stringify({ action:'user_message' }) }).catch(()=>{});
   }catch(_e){}
 }
+var scNewConvoU = false;
+var scConvoU = null;   // null = list of conversations; 'legacy' = messages from before conversations existed; otherwise a conversation id
+function scKeyU(m){ return m.convo_id || 'legacy'; }
+function scSeenMapU(){ try{ return JSON.parse(localStorage.getItem('zs_sc_seen')||'{}')||{}; }catch(_e){ return {}; } }
+function scSetSeenU(key){ try{ const m = scSeenMapU(); m[key] = new Date().toISOString(); localStorage.setItem('zs_sc_seen', JSON.stringify(m)); }catch(_e){} }
 function screenSupportChat(){
+  if(scConvoU===null) return `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+      <button id="scu-back-list" type="button" style="background:var(--paper-dim);border:none;width:44px;height:44px;border-radius:12px;font-size:22px;color:var(--ink-text);flex-shrink:0;">←</button>
+      <h2 class="screen-title" style="margin:0;flex:1;">Support Chat</h2>
+    </div>
+    <button id="scu-new-convo" type="button" style="width:100%;border:none;background:#F2A93B;color:#12213B;border-radius:14px;padding:14px;font:inherit;font-size:16px;font-weight:800;cursor:pointer;margin-bottom:12px;">＋ New conversation</button>
+    <div id="scu-list"><p class="subtle">Loading…</p></div>`;
   return `
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
-      <button data-goto="contact-us" style="background:var(--paper-dim);border:none;width:44px;height:44px;border-radius:12px;font-size:22px;color:var(--ink-text);flex-shrink:0;">←</button>
+      <button id="scu-back" type="button" style="background:var(--paper-dim);border:none;width:44px;height:44px;border-radius:12px;font-size:22px;color:var(--ink-text);flex-shrink:0;">←</button>
       <h2 class="screen-title" style="margin:0;flex:1;">Support Chat</h2>
-      <button id="scu-new" type="button" style="display:none;border:1.5px solid #F2A93B;background:#FFF1D6;color:#12213B;border-radius:18px;padding:8px 13px;font:inherit;font-size:13px;font-weight:700;cursor:pointer;flex:none;">＋ New question</button>
     </div>
     <div style="display:flex;flex-direction:column;height:calc(100vh - 235px);height:calc(100dvh - 235px);min-height:300px;">
       <div style="background:#FFF6E5;color:#8A5A00;border-radius:10px;padding:7px 12px;font-size:12.5px;text-align:center;margin-bottom:8px;flex:none;">Our team usually replies within a few hours.</div>
@@ -14452,6 +14463,24 @@ function screenSupportChat(){
       </div>
     </div>`;
 }
+function scPaintListU(){
+  const box = document.getElementById('scu-list'); if(!box) return;
+  const groups = {};
+  scMsgsU.forEach(m=>{ const k = scKeyU(m); (groups[k] = groups[k] || []).push(m); });
+  const seen = scSeenMapU();
+  const rows = Object.keys(groups).map(k=>{
+    const ms = groups[k]; const last = ms[ms.length-1];
+    const firstU = ms.find(m=>m.sender_role==='user' && m.body);
+    const title = k==='legacy' ? 'Earlier chat' : String((firstU && firstU.body) || 'Conversation').replace(/^\(Help guide did not solve it\)\s*/,'').replace(/^🆕 New question:\s*/,'').slice(0,60);
+    const prev = (last.body ? last.body : 'Photo').replace(/\s+/g,' ').slice(0,70);
+    const unread = last.sender_role!=='user' && (!seen[k] || new Date(last.created_at) > new Date(seen[k]));
+    return { k, title, prev, last, unread };
+  }).sort((a,b)=> new Date(b.last.created_at)-new Date(a.last.created_at));
+  box.innerHTML = rows.length ? rows.map(r=>`<div data-scopen="${scEscU(r.k)}" class="card" style="cursor:pointer;margin-bottom:10px;padding:12px 14px;${r.unread?'border:2px solid #2E7D32;':''}">
+      <div style="display:flex;justify-content:space-between;gap:8px;"><b style="color:var(--ink-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${scEscU(r.title)}</b><span class="subtle" style="font-size:12px;flex:none;">${scTimeU(r.last.created_at)}</span></div>
+      <div style="display:flex;justify-content:space-between;gap:8px;margin-top:4px;align-items:center;"><span class="subtle" style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${r.last.sender_role==='user'?'You: ':''}${scEscU(r.prev)}</span>${r.unread?'<span style="background:#C0392B;color:#fff;border-radius:10px;padding:1px 8px;font-size:12px;font-weight:700;flex:none;">new</span>':''}</div>
+    </div>`).join('') : '<p class="subtle" style="text-align:center;margin-top:24px;">No conversations yet. Tap New conversation to ask a question.</p>';
+}
 function scBubbleU(m){
   const mine = m.sender_role==='user';
   const isAutoU = m.sender_role==='auto';
@@ -14461,9 +14490,10 @@ function scBubbleU(m){
   return `<div style="align-self:${mine?'flex-end':'flex-start'};max-width:82%;"><div style="background:${mine?'#1F3A68':'var(--paper-dim)'};color:${mine?'#fff':'var(--ink-text)'};border-radius:16px;padding:9px 13px;font-size:15px;line-height:1.4;word-break:break-word;">${who}${pic}${m.body?scEscU(m.body).replace(/\n/g,'<br>'):''}</div><div class="subtle" style="font-size:11px;margin:2px 6px;text-align:${mine?'right':'left'};">${scTimeU(m.created_at)}${mine?(seen?' ✓✓':' ✓'):''}</div></div>`;
 }
 function scPaintMsgsU(stick){
+  if(scConvoU===null){ scPaintListU(); return; }
   const box = document.getElementById('scu-msgs'); if(!box) return;
   const near = box.scrollHeight - box.scrollTop - box.clientHeight < 90;
-  const all = scMsgsU.concat(scLocalU).sort((a,b)=> new Date(a.created_at)-new Date(b.created_at));
+  const all = scMsgsU.filter(m=>scKeyU(m)===scConvoU).concat(scLocalU).sort((a,b)=> new Date(a.created_at)-new Date(b.created_at));
   box.innerHTML = all.length ? all.map(m=>m.local?scBubbleLocalU(m):scBubbleU(m)).join('') : '<p class="subtle" style="text-align:center;margin-top:30px;">Say hello 👋 Tell us how we can help.</p>';
   if(stick || near) box.scrollTop = box.scrollHeight;
 }
@@ -14473,7 +14503,7 @@ async function scFetchNew(){
   const last = scMsgsU.length ? scMsgsU[scMsgsU.length-1].created_at : null;
   let q = window.sb.from('support_messages').select('*').eq('business_id', biz);
   if(last) q = q.gt('created_at', last);
-  const { data, error } = await q.order('created_at', { ascending:true }).limit(150);
+  const { data, error } = await q.order('created_at', { ascending:true }).limit(500);
   if(error) throw error;
   let added = false, gotAdmin = false;
   (data||[]).forEach(m=>{ if(scOnIncoming(m)){ added = true; if(m.sender_role==='admin') gotAdmin = true; } });
@@ -14485,14 +14515,13 @@ async function scFetchNew(){
 
 async function scPostU(body, photo){
   const u = (typeof currentUser==='function' && currentUser()) || {};
-  if(scNewTopicU && body){ body = '🆕 New question: ' + body; scNewTopicU = false; }
-  const { data, error } = await window.sb.from('support_messages').insert({ business_id: scBizId(), sender_role:'user', sender_name: ((u.firstName||'')+' '+(u.lastName||'')).trim() || null, body, photo: photo||null }).select('*').single();
+  const { data, error } = await window.sb.from('support_messages').insert({ business_id: scBizId(), sender_role:'user', sender_name: ((u.firstName||'')+' '+(u.lastName||'')).trim() || null, body, photo: photo||null, convo_id: (scConvoU && scConvoU!=='legacy') ? scConvoU : null }).select('*').single();
   if(error) throw error;
   scOnIncoming(data); scPaintMsgsU(true); scAlertSupport();
   return data;
 }
 /* ---- Self-help assistant: answers from the in-app FAQ (no outside AI service, works offline) ---- */
-var scNewTopicU = false, scLocalU = [], scModeU = 'human', scAskedU = [], scIdxU = null;
+var scLocalU = [], scModeU = 'human', scAskedU = [], scIdxU = null;
 const SC_STOP = new Set('a an the i me my we our you your is are am was were be do does did can could would should will to of in on at for with and or but if so it its this that these those how what why when where which who whom there here please pls help need want like get just about from by as not no yes any some have has had really very also then than too into out up down over more most much many'.split(' '));
 const SC_SYN = { recharge:'airtime', topup:'fund', deposit:'fund', credit:'credit', debt:'credit', debtor:'credit', owe:'credit', owing:'credit', cancel:'void', undo:'void', passcode:'password', staffs:'staff', worker:'staff', employee:'staff', attendant:'staff', invoice:'receipt', slip:'receipt', printer:'print', printing:'print', stock:'stock', inventory:'stock', products:'goods', product:'goods', item:'goods', items:'goods' };
 function scStemU(w){ if(SC_SYN[w]) return SC_SYN[w]; if(w.length>5 && /ing$/.test(w)) w = w.slice(0,-3); else if(w.length>4 && /ed$/.test(w)) w = w.slice(0,-2); else if(w.length>4 && /es$/.test(w)) w = w.slice(0,-2); else if(w.length>3 && /s$/.test(w) && !/ss$/.test(w)) w = w.slice(0,-1); return SC_SYN[w] || w; }
@@ -14528,7 +14557,6 @@ function scSetModeU(m){
   scModeU = m;
   const inp = document.getElementById('scu-input'); if(inp) inp.placeholder = m==='bot' ? 'Type your question…' : 'Type a message…';
   const ph = document.getElementById('scu-photo'); if(ph && ph.parentElement) ph.parentElement.style.display = m==='bot' ? 'none' : 'flex';
-  const nb = document.getElementById('scu-new'); if(nb) nb.style.display = m==='bot' ? 'none' : 'block';
 }
 const SC_GREET = /^\s*(hi+|hello+|hey+|hola|howdy|good\s*(morning|afternoon|evening|day)|morning|afternoon|evening|sup|yo|hi there|hello there|are you there|anybody( there)?|anyone( there)?)\W*$/i;
 const SC_SENSITIVE = /\b(refund|missing|lost|stolen|hack\w*|fraud|scam\w*|debited|deducted|charged|not received|didn'?t receive|reverse|reversal|disappear\w*)\b/i;
@@ -14570,33 +14598,53 @@ function scBotActU(act, arg){
   scPaintMsgsU(true);
 }
 function bindSupportChatEvents(){
-  scMsgsU = []; scPhotoU = null; scChatRowU = null; scLocalU = []; scAskedU = []; scSetModeU('human');
+  scMsgsU = []; scPhotoU = null; scChatRowU = null; scLocalU = []; scAskedU = [];
   if(scPollU){ clearInterval(scPollU); scPollU = null; }
+  const startPoll = (repaintAlways)=>{
+    scPollU = setInterval(async ()=>{
+      if(route!=='support-chat'){ clearInterval(scPollU); scPollU = null; return; }
+      if(!navigator.onLine) return;
+      try{ if(await scFetchNew() || repaintAlways) scPaintMsgsU(false); }catch(_e){}
+    }, 6000);
+  };
+
+  // ---------- list of conversations ----------
+  if(scConvoU===null){
+    document.getElementById('scu-back-list').addEventListener('click', ()=>{ route='contact-us'; render(); });
+    document.getElementById('scu-new-convo').addEventListener('click', ()=>{
+      scConvoU = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ('c'+Date.now()+Math.random().toString(16).slice(2)).replace(/[^a-f0-9-]/g,'0').padEnd(36,'0').slice(0,36);
+      scNewConvoU = true; render();
+    });
+    document.getElementById('scu-list').addEventListener('click', e=>{ const c = e.target.closest('[data-scopen]'); if(c){ scConvoU = c.dataset.scopen; scNewConvoU = false; render(); } });
+    (async ()=>{
+      if(!navigator.onLine || !window.sb){ document.getElementById('scu-list').innerHTML = '<p class="subtle">You are offline. Connect to the internet to see your conversations.</p>'; return; }
+      try{ await scFetchNew(); scPaintListU(); await scMarkRead(); scEnsureChannel(); }
+      catch(e){ document.getElementById('scu-list').innerHTML = '<p class="subtle">Could not open the chat right now. Check that the support chat has been set up, then try again.</p>'; }
+    })();
+    startPoll(true);
+    return;
+  }
+
+  // ---------- one conversation ----------
   const note = document.getElementById('scu-note');
-  const load = async ()=>{
-    if(!navigator.onLine || !window.sb){ scSetModeU('bot'); scLocalPush('bot', 'You are offline, but I can still look in our help guide. Type your question below.'); scPaintMsgsU(true); return; }
+  document.getElementById('scu-back').addEventListener('click', ()=>{ scSetSeenU(scConvoU); scConvoU = null; render(); });
+  const isNew = scNewConvoU; scNewConvoU = false;
+  scSetModeU(isNew ? 'bot' : 'human');
+  (async ()=>{
+    if(!isNew && (!navigator.onLine || !window.sb)){ document.getElementById('scu-msgs').innerHTML = '<p class="subtle">You are offline. Connect to the internet to open this conversation.</p>'; return; }
+    if(isNew && (!navigator.onLine || !window.sb)){ scLocalPush('bot', 'You are offline, but I can still look in our help guide. Type your question below.'); scPaintMsgsU(true); return; }
     try{
       await scFetchNew();
-      const lastM = scMsgsU.length ? scMsgsU[scMsgsU.length-1] : null;
-      if(!lastM || Date.now() - new Date(lastM.created_at).getTime() > 30*60*1000){ scSetModeU('bot'); scBotWelcomeU(); }   // a chat still being handled (last 30 min) stays with the team; otherwise the assistant greets
-      scPaintMsgsU(true); await scMarkRead(); scEnsureChannel();
+      if(isNew) scBotWelcomeU();
+      scSetSeenU(scConvoU); scPaintMsgsU(true); await scMarkRead(); scEnsureChannel();
     }
     catch(e){ document.getElementById('scu-msgs').innerHTML = '<p class="subtle">Could not open the chat right now. Check that the support chat has been set up, then try again.</p>'; }
-  };
-  load();
-  scPollU = setInterval(async ()=>{
-    if(route!=='support-chat'){ clearInterval(scPollU); scPollU = null; return; }
-    if(!navigator.onLine) return;
-    try{ if(await scFetchNew()) scPaintMsgsU(false); }catch(_e){}
-  }, 6000);
+  })();
+  startPoll(false);
   const input = document.getElementById('scu-input');
   document.getElementById('scu-photo').addEventListener('change', async e=>{
     const f = e.target.files && e.target.files[0]; e.target.value=''; if(!f) return;
     try{ scPhotoU = await scShrinkPhotoU(f); note.textContent = '📷 Picture ready. It will go with your next message.'; }catch(err){ note.textContent = err.message; }
-  });
-  document.getElementById('scu-new').addEventListener('click', ()=>{
-    scAskedU = []; scNewTopicU = true; scSetModeU('bot'); scLocalPush('bot', 'Sure 👍 What is your new question? Type it and I will look for an answer.'); scPaintMsgsU(true);
-    const i = document.getElementById('scu-input'); if(i) i.focus();
   });
   document.getElementById('scu-msgs').addEventListener('click', e=>{ const b = e.target.closest('[data-scact]'); if(b) scBotActU(b.dataset.scact, b.dataset.scarg); });
   const send = async ()=>{

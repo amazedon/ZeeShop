@@ -14440,13 +14440,15 @@ function screenSupportChat(){
       <button data-goto="contact-us" style="background:var(--paper-dim);border:none;width:44px;height:44px;border-radius:12px;font-size:22px;color:var(--ink-text);flex-shrink:0;">←</button>
       <h2 class="screen-title" style="margin:0;">Support Chat</h2>
     </div>
-    <div style="background:#FFF6E5;color:#8A5A00;border-radius:10px;padding:9px 12px;font-size:13px;text-align:center;margin-bottom:10px;">We usually reply within a few hours.</div>
-    <div id="scu-msgs" style="display:flex;flex-direction:column;gap:6px;min-height:240px;max-height:calc(100vh - 360px);overflow-y:auto;padding:4px 2px;"><p class="subtle">Loading…</p></div>
-    <div id="scu-note" class="subtle" style="min-height:18px;margin:4px 2px;"></div>
-    <div style="display:flex;gap:8px;align-items:flex-end;">
-      <textarea id="scu-input" rows="1" maxlength="2000" placeholder="Type a message…" style="flex:1;border:1px solid var(--line);border-radius:22px;padding:12px 16px;font:inherit;font-size:15px;resize:none;background:var(--paper);color:var(--ink-text);"></textarea>
-      <label style="width:46px;height:46px;border-radius:50%;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;font-size:20px;">📷<input type="file" id="scu-photo" accept="image/*" style="display:none;"></label>
-      <button id="scu-send" style="width:46px;height:46px;border-radius:50%;border:none;background:#F2A93B;color:#12213B;font-size:20px;font-weight:800;flex-shrink:0;">➤</button>
+    <div style="display:flex;flex-direction:column;height:calc(100vh - 235px);height:calc(100dvh - 235px);min-height:300px;">
+      <div style="background:#FFF6E5;color:#8A5A00;border-radius:10px;padding:7px 12px;font-size:12.5px;text-align:center;margin-bottom:8px;flex:none;">Our team usually replies within a few hours.</div>
+      <div id="scu-msgs" style="flex:1 1 0;min-height:0;display:flex;flex-direction:column;gap:8px;overflow-y:auto;padding:4px 2px 8px;"><p class="subtle">Loading…</p></div>
+      <div id="scu-note" class="subtle" style="flex:none;min-height:16px;margin:2px 2px;font-size:12.5px;"></div>
+      <div style="flex:none;display:flex;gap:8px;align-items:flex-end;padding-top:6px;border-top:1px solid var(--line);">
+        <textarea id="scu-input" rows="1" maxlength="2000" placeholder="Type your question…" style="flex:1;border:1px solid var(--line);border-radius:22px;padding:12px 16px;font:inherit;font-size:15px;resize:none;background:var(--paper);color:var(--ink-text);"></textarea>
+        <label style="width:46px;height:46px;border-radius:50%;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;font-size:20px;">📷<input type="file" id="scu-photo" accept="image/*" style="display:none;"></label>
+        <button id="scu-send" style="width:46px;height:46px;border-radius:50%;border:none;background:#F2A93B;color:#12213B;font-size:20px;font-weight:800;flex-shrink:0;">➤</button>
+      </div>
     </div>`;
 }
 function scBubbleU(m){
@@ -14488,7 +14490,7 @@ async function scPostU(body, photo){
   return data;
 }
 /* ---- Self-help assistant: answers from the in-app FAQ (no outside AI service, works offline) ---- */
-var scLocalU = [], scModeU = 'start', scAskedU = [], scIdxU = null;
+var scLocalU = [], scModeU = 'human', scAskedU = [], scIdxU = null;
 const SC_STOP = new Set('a an the i me my we our you your is are am was were be do does did can could would should will to of in on at for with and or but if so it its this that these those how what why when where which who whom there here please pls help need want like get just about from by as not no yes any some have has had really very also then than too into out up down over more most much many'.split(' '));
 const SC_SYN = { recharge:'airtime', topup:'fund', deposit:'fund', credit:'credit', debt:'credit', debtor:'credit', owe:'credit', owing:'credit', cancel:'void', undo:'void', passcode:'password', staffs:'staff', worker:'staff', employee:'staff', attendant:'staff', invoice:'receipt', slip:'receipt', printer:'print', printing:'print', stock:'stock', inventory:'stock', products:'goods', product:'goods', item:'goods', items:'goods' };
 function scStemU(w){ if(SC_SYN[w]) return SC_SYN[w]; if(w.length>5 && /ing$/.test(w)) w = w.slice(0,-3); else if(w.length>4 && /ed$/.test(w)) w = w.slice(0,-2); else if(w.length>4 && /es$/.test(w)) w = w.slice(0,-2); else if(w.length>3 && /s$/.test(w) && !/ss$/.test(w)) w = w.slice(0,-1); return SC_SYN[w] || w; }
@@ -14516,41 +14518,51 @@ function scMatchU(question){
 function scLocalPush(role, text, buttons){ scLocalU.push({ id:'L'+Date.now()+Math.random(), local:true, role, body:text, buttons:buttons||[], created_at:new Date().toISOString() }); }
 function scBubbleLocalU(m){
   if(m.role==='me') return `<div style="align-self:flex-end;max-width:82%;"><div style="background:#1F3A68;color:#fff;border-radius:16px;padding:9px 13px;font-size:15px;line-height:1.4;word-break:break-word;">${scEscU(m.body).replace(/\n/g,'<br>')}</div></div>`;
-  const btns = (m.buttons||[]).map(b=>`<button type="button" data-scact="${scEscU(b.act)}" data-scarg="${scEscU(b.arg||'')}" style="border:1.5px solid ${b.primary?'#F2A93B':'var(--line)'};background:${b.primary?'#F2A93B':'var(--paper)'};color:#12213B;border-radius:18px;padding:8px 14px;font:inherit;font-size:14px;font-weight:700;cursor:pointer;">${scEscU(b.label)}</button>`).join('');
-  return `<div style="align-self:flex-start;max-width:88%;"><div style="background:#EEF5FF;color:var(--ink-text);border-radius:16px;padding:9px 13px;font-size:15px;line-height:1.45;word-break:break-word;"><div style="font-size:11px;font-weight:700;opacity:.65;margin-bottom:2px;">ZeeShop Assistant</div>${scEscU(m.body).replace(/\n/g,'<br>')}</div>${btns?`<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 2px 2px;">${btns}</div>`:''}</div>`;
+  const btns = (m.buttons||[]).map(b=>`<button type="button" data-scact="${scEscU(b.act)}" data-scarg="${scEscU(b.arg||'')}" style="border:1px solid ${b.primary?'#F2A93B':'var(--line)'};background:${b.primary?'#FFF1D6':'var(--paper)'};color:#12213B;border-radius:14px;padding:6px 11px;font:inherit;font-size:13px;font-weight:600;cursor:pointer;text-align:left;">${scEscU(b.label)}</button>`).join('');
+  return `<div style="align-self:flex-start;max-width:88%;"><div style="background:#EEF5FF;color:var(--ink-text);border-radius:16px;padding:9px 13px;font-size:15px;line-height:1.45;word-break:break-word;"><div style="font-size:11px;font-weight:700;opacity:.65;margin-bottom:2px;">ZeeShop Assistant</div>${scEscU(m.body).replace(/\n/g,'<br>')}</div>${btns?`<div style="display:flex;flex-direction:column;align-items:flex-start;gap:5px;margin:6px 2px 2px;">${btns}</div>`:''}</div>`;
 }
+// 'bot' = the assistant answers from the FAQ.  'human' = messages go to the support team.
 function scSetModeU(m){
   scModeU = m;
-  const inp = document.getElementById('scu-input'); if(inp) inp.placeholder = m==='help' ? 'Type your question…' : 'Type a message…';
-  const ph = document.getElementById('scu-photo'); if(ph && ph.parentElement) ph.parentElement.style.display = m==='help' ? 'none' : 'flex';
+  const inp = document.getElementById('scu-input'); if(inp) inp.placeholder = m==='bot' ? 'Type your question…' : 'Type a message…';
+  const ph = document.getElementById('scu-photo'); if(ph && ph.parentElement) ph.parentElement.style.display = m==='bot' ? 'none' : 'flex';
 }
-function scBotStartU(){
-  scLocalPush('bot', 'Hi 👋 How can we help you today?', [{ label:'💡 Get help now', act:'help', primary:true }, { label:'💬 Talk to a person', act:'human' }]);
-}
+const SC_GREET = /^\s*(hi+|hello+|hey+|hola|howdy|good\s*(morning|afternoon|evening|day)|morning|afternoon|evening|sup|yo|hi there|hello there|are you there|anybody( there)?|anyone( there)?)\W*$/i;
+const SC_SENSITIVE = /\b(refund|missing|lost|stolen|hack\w*|fraud|scam\w*|debited|deducted|charged|not received|didn'?t receive|reverse|reversal|disappear\w*)\b/i;
+const SC_HUMAN_BTN = { label:'💬 Talk to a human', act:'human' };
+function scBotWelcomeU(){ scLocalPush('bot', 'Hi 👋 How can I help you today? Type your question and I will look for an answer.'); }
 function scBotAskU(q){
-  scLocalPush('me', q); scAskedU.push(q); if(scAskedU.length>3) scAskedU.shift();
-  const person = { label:'💬 Talk to a person', act:'human', primary:true };
-  if(/\b(refund|missing|lost|stolen|hack\w*|fraud|scam\w*|debited|deducted|charged|not received|didn'?t receive|reverse|reversal|disappear\w*)\b/i.test(q)){ scLocalPush('bot', 'This sounds like something our team should look at directly, so I will not guess. Tap below and we will take it from here.', [person]); return; }
+  scLocalPush('me', q);
+  if(SC_GREET.test(q)){ scLocalPush('bot', 'How can I help you today? Type your question and I will look for an answer.'); return; }
+  scAskedU.push(q); if(scAskedU.length>3) scAskedU.shift();
+  if(SC_SENSITIVE.test(q)){ scTransferU('This needs our team to look at it directly, so I am passing you to them now.', false); return; }
   const r = scMatchU(q);
   if(r.kind==='answer'){
-    scLocalPush('bot', r.item.a, [{ label:'👍 That helped', act:'solved', primary:true }, { label:'👎 Not really', act:'notyet' }]);
+    scLocalPush('bot', r.item.a, [{ label:'👍 That helped', act:'solved' }, Object.assign({ primary:true }, SC_HUMAN_BTN)]);
   } else if(r.kind==='suggest'){
-    scLocalPush('bot', 'I found these. Tap the one that matches your question:', r.items.map(it=>({ label:it.q.length>60?it.q.slice(0,57)+'…':it.q, act:'faq', arg:it.gi+'.'+it.ii })).concat([person]));
+    scLocalPush('bot', 'I found these. Tap the one that matches your question:', r.items.map(it=>({ label:it.q.length>70?it.q.slice(0,67)+'…':it.q, act:'faq', arg:it.gi+'.'+it.ii })).concat([SC_HUMAN_BTN]));
   } else {
-    scLocalPush('bot', "I couldn't find an answer to that in our help guide. Try asking in different words, or talk to a person.", [person]);
+    scTransferU('I could not find an answer to that in our help guide, so I am passing you to our team.', false);
   }
 }
+// hand the conversation to the support team (the question goes to your inbox; the server adds the "you're in the queue" reply)
+function scTransferU(botText, fromButton){
+  if(!navigator.onLine || !window.sb){ scLocalPush('bot', 'You are offline. Connect to the internet and ask again, and I will pass it to our team.'); return; }
+  const last = scAskedU.length ? scAskedU[scAskedU.length-1] : '';
+  scSetModeU('human');
+  if(!fromButton){ for(let i=scLocalU.length-1;i>=0;i--){ if(scLocalU[i].role==='me' && scLocalU[i].body===last){ scLocalU.splice(i,1); break; } } }   // the real message appears from the server, so drop the local copy
+  scPaintMsgsU(true);
+  const say = ()=>{ scLocalPush('bot', botText); scPaintMsgsU(true); };
+  if(last) scPostU((fromButton ? '(Help guide did not solve it) ' : '') + last, null).then(say).catch(err=>{ toast((err && err.message) ? String(err.message).slice(0,120) : 'Could not send. Please try again.'); scSetModeU('bot'); });
+  else say();
+  scAskedU = [];
+}
 function scBotActU(act, arg){
-  if(act==='help'){ scSetModeU('help'); scLocalPush('bot', 'Great. Type your question below, for example "how do I fund my wallet" or "I forgot my password".'); }
-  else if(act==='solved'){ scLocalPush('bot', 'Glad that helped 🙂 Ask another question any time, or tap below if you need a person.', [{ label:'💬 Talk to a person', act:'human' }]); }
-  else if(act==='notyet'){ scLocalPush('bot', 'Sorry about that. Try asking in different words, or talk to a person.', [{ label:'💬 Talk to a person', act:'human' }]); }
-  else if(act==='faq'){ const [gi,ii] = String(arg).split('.').map(Number); const it = FAQ_GROUPS[gi] && FAQ_GROUPS[gi].items[ii]; if(it){ scLocalPush('me', it.q); scLocalPush('bot', it.a, [{ label:'👍 That helped', act:'solved', primary:true }, { label:'👎 Not really', act:'notyet' }]); } }
+  if(act==='solved'){ scLocalPush('bot', 'Glad that helped 🙂 Ask me anything else any time.'); }
+  else if(act==='faq'){ const [gi,ii] = String(arg).split('.').map(Number); const it = FAQ_GROUPS[gi] && FAQ_GROUPS[gi].items[ii]; if(it){ scAskedU.push(it.q); scLocalPush('me', it.q); scLocalPush('bot', it.a, [{ label:'👍 That helped', act:'solved' }, Object.assign({ primary:true }, SC_HUMAN_BTN)]); } }
   else if(act==='human'){
-    if(!navigator.onLine || !window.sb){ toast('You are offline. Connect to the internet to reach a person.'); return; }
-    const asked = scAskedU.slice(); scAskedU = [];
-    scSetModeU('human');
-    scLocalPush('bot', asked.length ? 'No problem. I am passing your question to our team.' : 'No problem. Type your message below and our team will get it.');
-    if(asked.length) scPostU('Help guide did not solve it. My question: ' + asked.join(' / '), null).catch(()=>{});
+    if(scAskedU.length) scTransferU('No problem. I am passing you to our team now.', true);
+    else { scSetModeU('human'); scLocalPush('bot', 'No problem. Type your message below and our team will get it.'); }
   }
   scPaintMsgsU(true);
 }
@@ -14559,11 +14571,11 @@ function bindSupportChatEvents(){
   if(scPollU){ clearInterval(scPollU); scPollU = null; }
   const note = document.getElementById('scu-note');
   const load = async ()=>{
-    if(!navigator.onLine || !window.sb){ scSetModeU('help'); scLocalPush('bot', 'You are offline, but I can still look in our help guide. Type your question below. To talk to a person, connect to the internet.'); scPaintMsgsU(true); return; }
+    if(!navigator.onLine || !window.sb){ scSetModeU('bot'); scLocalPush('bot', 'You are offline, but I can still look in our help guide. Type your question below.'); scPaintMsgsU(true); return; }
     try{
       await scFetchNew();
       const lastM = scMsgsU.length ? scMsgsU[scMsgsU.length-1] : null;
-      if(!lastM || Date.now() - new Date(lastM.created_at).getTime() > 6*3600*1000){ scSetModeU('start'); scBotStartU(); }   // fresh visit: offer self-help or a person
+      if(!lastM || Date.now() - new Date(lastM.created_at).getTime() > 6*3600*1000){ scSetModeU('bot'); scBotWelcomeU(); }   // new visit: the assistant greets; a conversation from the last 6 hours goes straight to the team
       scPaintMsgsU(true); await scMarkRead(); scEnsureChannel();
     }
     catch(e){ document.getElementById('scu-msgs').innerHTML = '<p class="subtle">Could not open the chat right now. Check that the support chat has been set up, then try again.</p>'; }
@@ -14582,7 +14594,7 @@ function bindSupportChatEvents(){
   document.getElementById('scu-msgs').addEventListener('click', e=>{ const b = e.target.closest('[data-scact]'); if(b) scBotActU(b.dataset.scact, b.dataset.scarg); });
   const send = async ()=>{
     const body = input.value.trim(); if(!body && !scPhotoU) return;
-    if(scModeU==='start' || scModeU==='help'){ if(!body) return; if(scModeU==='start') scSetModeU('help'); input.value=''; scBotAskU(body); scPaintMsgsU(true); return; }
+    if(scModeU==='bot'){ if(!body) return; input.value=''; scBotAskU(body); scPaintMsgsU(true); return; }
     if(!navigator.onLine || !window.sb){ toast('You are offline. Try again when you have internet.'); return; }
     const btn = document.getElementById('scu-send'); btn.disabled = true;
     try{ await scPostU(body, scPhotoU); input.value=''; scPhotoU=null; note.textContent=''; scPaintMsgsU(true); }

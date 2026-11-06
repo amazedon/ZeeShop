@@ -714,6 +714,7 @@
   });
 
   document.getElementById('logout-btn').addEventListener('click', async ()=>{
+    adminSignedOutOnPurpose = true; adminLastReason = '';
     await sb.auth.signOut({ scope: 'local' });   // this browser's admin session only
     checkSession();
   });
@@ -725,10 +726,16 @@
   const retryBtn = document.getElementById('check-retry-btn');
   if(retryBtn) retryBtn.addEventListener('click', ()=>checkSession());
   // If this admin session ends in another tab, show the login screen here too.
+  var adminSignedOutOnPurpose = false, adminLastReason = '';
+  function showSignOutReason(){
+    const box = document.getElementById('login-err'); if(!box || !adminLastReason) return;
+    box.innerHTML = `<div class="err">${adminLastReason}</div>`;
+  }
   sb.auth.onAuthStateChange((evt)=>{
     if(evt === 'PASSWORD_RECOVERY'){ recoveryMode = true; showOnly('recovery'); return; }
-    if(evt === 'SIGNED_OUT') checkSession();
+    if(evt === 'SIGNED_OUT'){ if(!adminSignedOutOnPurpose && !adminLastReason) adminLastReason = 'You were signed out (the session ended or was cleared by the browser). Please log in again.'; checkSession(); }
   });
+  try{ if(navigator.storage && navigator.storage.persist) navigator.storage.persist(); }catch(_e){}   // ask the browser not to clear the saved login
 
   // ---------- Forgot password (Supabase sends a one-time reset link to the email) ----------
   const forgotBtn = document.getElementById('forgot-btn');
@@ -789,8 +796,10 @@
   }
   async function checkSession(){
     if(recoveryMode){ showOnly('recovery'); return; }     // finish choosing a new password before anything else
-    const { data } = await sb.auth.getSession();
-    if(!data.session){ showOnly('login'); return; }
+    let { data } = await sb.auth.getSession();
+    // On a refresh the stored session can take a moment to be read back; look a few times before deciding nobody is signed in.
+    for(let i=0; i<3 && !data.session && !adminSignedOutOnPurpose; i++){ await new Promise(r=>setTimeout(r, 350)); ({ data } = await sb.auth.getSession()); }
+    if(!data.session){ showOnly('login'); showSignOutReason(); return; }
     // Signing in only proves this is A valid ZeeShop account — it does NOT prove
     // super-admin access. That is verified server-side before anything privileged
     // is shown. Only a real "no" (403) shows the unauthorised screen; a slow
@@ -800,7 +809,7 @@
       catch(e){
         if(e.status === 401){                      // token expired/rejected: refresh once and retry
           const { error: rErr } = await sb.auth.refreshSession();
-          if(rErr){ await sb.auth.signOut({ scope: 'local' }); showOnly('login'); return; }
+          if(rErr){ adminLastReason = 'Your admin session could not be renewed (' + (rErr.message||'unknown reason') + '). Please log in again.'; await sb.auth.signOut({ scope: 'local' }); showOnly('login'); showSignOutReason(); return; }
           await callAdminApi('list_businesses', {});
         } else { throw e; }
       }

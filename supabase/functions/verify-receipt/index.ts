@@ -1,6 +1,6 @@
 // supabase/functions/verify-receipt/index.ts
 // PUBLIC (no login). Deploy with:  supabase functions deploy verify-receipt --no-verify-jwt
-// Anyone who scans a receipt's QR gets ONLY: the shop's public details (name, type, logo, address, phone, email - owner can hide the contact ones), receipt number, date, amount, status, times checked.
+// Anyone who scans a receipt's QR gets ONLY: the shop's public details (name, type, logo, address, phone, email - owner can hide the contact ones), receipt number, date, amount, paid so far, balance owed, status, times checked.
 // Never the buyer's name/phone, the items, or the staff name.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -44,6 +44,9 @@ Deno.serve(async (req: Request) => {
     else if (sale.status === "paid" || (total > 0 && paid >= total) || Number(sale.balance || 0) <= 0) status = "paid";
     else if (paid > 0) status = "part";
 
+    // what is still owed (the shop's own recorded balance is the truth; fall back to total minus paid)
+    const owed = status === "paid" || status === "voided" ? 0 : Math.max(0, Number(sale.balance || 0) > 0 ? Number(sale.balance) : total - paid);
+
     // times this receipt has been checked (best-effort: works once receipt-verify.sql has been run)
     let checks = 0;
     try {
@@ -64,6 +67,8 @@ Deno.serve(async (req: Request) => {
       receipt_no: String(sale.id).slice(-6).toUpperCase(),
       date: sale.sold_at || sale.date,
       amount: total,
+      paid: status === "voided" ? 0 : Math.min(paid, total || paid),
+      balance: owed,
       currency,
       status,
       checks,

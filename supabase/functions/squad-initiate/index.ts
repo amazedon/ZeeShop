@@ -9,7 +9,7 @@
 //
 // Two more actions open and show a business's Squad DEDICATED ACCOUNT (a permanent account number):
 //   va_status               → the account (if any) and live fee wording for the card
-//   create_virtual_account  → owner only: { bvn, dob (YYYY-MM-DD), first_name, last_name, phone, email, consent }
+//   create_virtual_account  → owner only: { bvn, dob (YYYY-MM-DD), first_name, middle_name?, last_name, gender (male|female), address, phone, email, consent }
 // Settlement is whatever is set as default on the Squad dashboard — nothing about it is hard-coded here.
 // If (and only if) Squad rejects creation for lack of a beneficiary account, set SQUAD_BENEFICIARY_ACCOUNT.
 // Needs squad-virtual-account.sql. The BVN and date of birth are forwarded to Squad and never stored or logged.
@@ -127,7 +127,7 @@ const IDENTITY_RE = /bvn|dob|date of birth|birth|name|match|verif|not found|inva
 const EXISTS_RE = /already|exist|duplicate/i;
 const VA_DAILY_REJECTIONS = 3;
 
-// "2000-01-31" → "31/01/2000"; null if it isn't a real date, is in the future, or the person is under 18 / over 110.
+// "2000-01-31" → "01/31/2000"; null if it isn't a real date, is in the future, or the person is under 18 / over 110.
 function dobToSquad(iso: string): { ok: true; value: string } | { ok: false; why: string } {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
   if (!m) return { ok: false, why: "Enter your date of birth." };
@@ -140,7 +140,7 @@ function dobToSquad(iso: string): { ok: true; value: string } | { ok: false; why
   if (now.getUTCMonth() < mo - 1 || (now.getUTCMonth() === mo - 1 && now.getUTCDate() < d)) age--;
   if (age < 18) return { ok: false, why: "You must be 18 or older to open a dedicated account." };
   if (age > 110) return { ok: false, why: "Please check the year of your date of birth." };
-  return { ok: true, value: `${m[3]}/${m[2]}/${m[1]}` };
+  return { ok: true, value: `${m[2]}/${m[3]}/${m[1]}` };   // Squad wants mm/dd/yyyy
 }
 
 function normalizePhone(raw: string): string | null {
@@ -298,6 +298,13 @@ Deno.serve(async (req: Request) => {
       const nameRe = /^[\p{L}][\p{L} '.-]{0,59}$/u;
       const firstName = String(body.first_name || "").trim(); const lastName = String(body.last_name || "").trim();
       if (!nameRe.test(firstName) || !nameRe.test(lastName)) return json({ error: "Enter your first and last name as they appear on your BVN." }, 400);
+      const middleName = String(body.middle_name || "").trim();
+      if (middleName && !nameRe.test(middleName)) return json({ error: "Enter your middle name as it appears on your BVN, or leave it empty." }, 400);
+      const genderIn = String(body.gender || "").toLowerCase();
+      const gender = genderIn === "male" || genderIn === "1" ? "1" : genderIn === "female" || genderIn === "2" ? "2" : "";
+      if (!gender) return json({ error: "Please choose your gender as it appears on your BVN." }, 400);
+      const address = String(body.address || "").replace(/\s+/g, " ").trim().slice(0, 200);
+      if (address.length < 5) return json({ error: "Please enter your home address." }, 400);
       const phone = normalizePhone(String(body.phone || ""));
       if (!phone) return json({ error: "Enter a valid Nigerian phone number." }, 400);
       const email = String(body.email || caller.email || callerData.user.email || "").trim();
@@ -339,7 +346,9 @@ Deno.serve(async (req: Request) => {
       const payload: Record<string, unknown> = {
         customer_identifier: identifier, first_name: firstName, last_name: lastName,
         mobile_num: phone, email, bvn, dob: (dob as { value: string }).value,
+        gender, address,
       };
+      if (middleName) payload.middle_name = middleName;
       if (SQUAD_BENEFICIARY_ACCOUNT) payload.beneficiary_account = SQUAD_BENEFICIARY_ACCOUNT;
 
       const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), 45000);
@@ -385,6 +394,14 @@ Deno.serve(async (req: Request) => {
       if (res.status >= 500) {
         await note("error", `${res.status} ${msg}`);
         return json({ error: "Our payment partner is having trouble right now. Nothing was saved. Please try again in a few minutes." }, 502);
+      }
+      // Our own request was missing/malformed (e.g. `"address" is required`): not the customer's bank details, so it doesn't use up their attempts.
+      const missing = /"?([a-z_]+)"?\s+is\s+(required|not allowed to be empty)/i.exec(msg);
+      if (res.status === 400 && (missing || /must be|fails to match/i.test(msg))) {
+        await note("error", `${res.status} ${msg}`);
+        const f = missing ? missing[1] : "";
+        const label: Record<string, string> = { address: "your home address", gender: "your gender", middle_name: "your middle name (as on your BVN)", dob: "your date of birth", mobile_num: "your phone number", email: "your email", first_name: "your first name", last_name: "your last name", bvn: "your BVN" };
+        return json({ error: f ? `Please provide ${label[f] || f.replace(/_/g, " ")} and try again.` : "One of the details isn't in the format the bank expects. Please check them and try again." }, 422);
       }
       if (IDENTITY_RE.test(msg)) {
         await note("rejected", `${res.status} ${msg}`);

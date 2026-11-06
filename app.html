@@ -12055,6 +12055,12 @@ function bpResetVaForm(){ billVaOpen = false; billVaBusy = false; billVaError = 
   .va-list li::before{content:"✓";color:#16A34A;font-weight:900;}
   .va-acct{border:1px solid #E5E7EB;border-radius:14px;padding:14px;text-align:center;margin:10px 0;background:#FAFAF7;}
   .va-acct .n{font-size:24px;font-weight:800;letter-spacing:1.5px;margin:6px 0;}
+  /* always-light card: force readable text/buttons even when the app theme is dark */
+  .va-acct, .va-acct .t1, .va-acct .n{color:#111827 !important;}
+  .va-acct .btn, .va-acct .btn-outline{background:#fff !important;color:#111827 !important;border:1.5px solid #9CA3AF !important;}
+  .va-sheet, .va-sheet label, .va-sheet .subtle, .va-sheet p, .va-sheet h3{color:#111827;}
+  .va-sheet .subtle{color:#4B5563;}
+  .va-sheet input:not([type=checkbox]), .va-sheet select{background:#fff !important;color:#111827 !important;border:1px solid #D1D5DB !important;}
   .va-overlay{position:fixed;inset:0;z-index:9100;background:rgba(6,5,20,.62);display:flex;align-items:flex-end;justify-content:center;}
   .va-sheet{width:100%;max-width:560px;max-height:92vh;overflow-y:auto;background:#fff;color:#111827;border-radius:22px 22px 0 0;padding:20px 18px 26px;box-shadow:0 -10px 40px rgba(0,0,0,.35);}
   .va-sheet h3{margin:0 0 4px;font-size:19px;}

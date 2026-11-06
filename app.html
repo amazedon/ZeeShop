@@ -2604,6 +2604,16 @@ function bindAuthEvents(){
   bindLanguageSwitcher();
   const go = (id,fn)=>{ const e=document.getElementById(id); if(e) e.addEventListener('click', fn); };
   go('google-auth-btn', handleGoogleSignIn);
+  // Signup form: remember what was typed, so an error never wipes the form.
+  if(document.getElementById('su-biz')){
+    ['su-biz','su-fn','su-ln','su-username','su-phone','su-email','su-pass','su-country','su-ccy'].forEach(id=>{
+      const el = document.getElementById(id); if(!el) return;
+      if(signupDraft[id] !== undefined && !el.disabled) el.value = signupDraft[id];
+      ['input','change'].forEach(ev=>el.addEventListener(ev, ()=>{ signupDraft[id] = el.value; }));
+    });
+    const cb = document.getElementById('su-consent');
+    if(cb){ if(signupDraft.consent) cb.checked = true; cb.addEventListener('change', ()=>{ signupDraft.consent = cb.checked; }); }
+  }
   // Coming back here right after Google auth, with no existing business
   // found for that account — lock the email (it's already verified by
   // Google, no need to ask again) and pre-fill the name from their profile.
@@ -2745,7 +2755,7 @@ function bindAuthEvents(){
       // entirely and goes straight to creating the business.
       try{
         await completeGoogleSignupAccount({ biz, country, ccy, fn, ln, username, phone, email }, pendingGoogleAuth.authUserId);
-        toast('Account created with Google ✅');
+        signupDraft = {}; toast('Account created with Google ✅');
       }catch(err){
         authError = err.message || "Couldn't create the account. Please try again.";
       }
@@ -2759,7 +2769,7 @@ function bindAuthEvents(){
       pendingSignupData = { biz, country, ccy, fn, ln, username, phone, email, pass };
       try{
         await completeSignupAccount(pendingSignupData);
-        toast('Account created (email verification temporarily skipped) ✅');
+        signupDraft = {}; toast('Account created (email verification temporarily skipped) ✅');
       }catch(err){
         authError = err.message || "Couldn't create the account. Please try again.";
       }
@@ -2821,6 +2831,7 @@ function bindSignupVerifyEvents(){
       const result = await verifySignupOtp(pendingSignupData.email, code);
       if(!result.verified){ signupOtpError = result.error || 'Incorrect code.'; render(); return; }
       await completeSignupAccount(pendingSignupData);
+      signupDraft = {};
     }catch(err){
       signupOtpError = err.message || "Couldn't verify right now. Check your internet connection.";
       render();
@@ -5157,6 +5168,7 @@ let saleCustomerId = null;
 let saleWalkInName = '';
 let saleWalkInPhone = '';
 let saleNote = '';
+var salePaid = '', saleDue = '', signupDraft = {};   // kept so the screen redrawing (adding items, changing buyer) doesn't wipe what was typed
 let saleDiscount = 0;
 let saleMode = 'cash'; // cash | credit
 let saleMethod = 'cash'; // how the customer paid: cash | transfer | pos
@@ -5202,8 +5214,8 @@ function screenNewSale(){
       </div>` : `<p class="subtle" style="margin-top:8px;">${t('sale_credit_disabled')}</p>`}
       <div id="credit-fields" class="${saleMode==='credit' && canDo('canSellCredit')?'':'hidden'}" style="margin-top:10px;">
         <div class="row2">
-          <div class="field"><label>Amount Paid Now</label><input id="ns-paid" type="number" min="0" value="0"></div>
-          <div class="field"><label>Due Date</label><input id="ns-due" type="date" value="${defaultDueDate()}"></div>
+          <div class="field"><label>Amount Paid Now</label><input id="ns-paid" type="number" min="0" value="${salePaid===''?0:escapeHtml(String(salePaid))}"></div>
+          <div class="field"><label>Due Date</label><input id="ns-due" type="date" value="${saleDue||defaultDueDate()}"></div>
         </div>
         <p class="subtle" style="margin-top:-6px;">Leave "Amount Paid Now" at 0 if they're taking everything on credit. Credit sales need a buyer selected above (not walk-in).</p>
         ${saleCustomerId ? `<label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin-top:8px;"><input type="checkbox" id="ns-hold" ${saleHold?'checked':''} style="margin-top:2px;"> Hold the items until fully paid (layaway)</label>` : ''}
@@ -5414,6 +5426,8 @@ function bindRouteEvents(){
     const ewb = document.getElementById('edit-walkin-btn');
     if(ewb) ewb.addEventListener('click', openWalkInModal);
     [['ns-job-ready','ready'],['ns-job-ref','ref'],['ns-job-detail','detail']].forEach(([id,k])=>{ const el=document.getElementById(id); if(el) el.addEventListener('input', ()=>{ saleJob[k]=el.value; }); });
+    const paidInput = document.getElementById('ns-paid'); if(paidInput) paidInput.addEventListener('input', e=>{ salePaid = e.target.value; });
+    const dueInput = document.getElementById('ns-due'); if(dueInput) dueInput.addEventListener('input', e=>{ saleDue = e.target.value; });
     const noteInput = document.getElementById('ns-note');
     if(noteInput) noteInput.addEventListener('input', e=>{ saleNote = e.target.value; });
     const discInput = document.getElementById('ns-discount');
@@ -5657,7 +5671,7 @@ function confirmSale(){
     if(v) enqueueSync('good_variants','update', { id: v.id, qty: v.qty });
   });
   logAudit('sale_created', `Sale ${fmtMoney(total)} (${status})`);
-  cart=[]; saleJob={ready:'',ref:'',detail:''}; saleCustomerId=null; saleMode='cash'; saleMethod='cash'; saleHold=false; saleWalkInName=''; saleWalkInPhone=''; saleNote=''; saleDiscount=0;
+  cart=[]; saleJob={ready:'',ref:'',detail:''}; saleCustomerId=null; saleMode='cash'; saleMethod='cash'; saleHold=false; saleWalkInName=''; saleWalkInPhone=''; saleNote=''; saleDiscount=0; salePaid=''; saleDue='';
   closeSheet();
   render(); // clears the completed sale off the New Sale screen so its button can't be tapped again
   toast('Sale saved ✅');

@@ -215,6 +215,7 @@ body.vf-on #vf{display:block;}
 #vf .vf-by{color:#6B7280;font-size:13px;margin-top:6px;} #vf .vf-shop{font-size:19px;font-weight:800;color:#12213B;margin:2px 0 14px;}
 #vf .vf-rows{text-align:left;border-top:1px solid #ECE8DF;} #vf .vf-row{display:flex;justify-content:space-between;gap:12px;padding:10px 2px;border-bottom:1px solid #ECE8DF;font-size:14px;color:#6B7280;}
 #vf .vf-row b{color:#12213B;text-align:right;}
+#vf .vf-owe,#vf .vf-owe b{color:#B8432F;font-weight:700;}
 #vf .vf-id{max-width:440px;margin:0 auto 14px;background:#fff;border:1px solid #ECE8DF;border-radius:16px;padding:16px;text-align:center;}
 #vf .vf-logo{width:64px;height:64px;object-fit:contain;border-radius:12px;margin:0 auto 8px;display:block;background:#fff;}
 #vf .vf-idname{font-size:20px;font-weight:800;color:#12213B;} #vf .vf-idtype{font-size:11px;font-weight:700;letter-spacing:.04em;color:#D98A12;text-transform:uppercase;margin-top:2px;}
@@ -414,22 +415,26 @@ function idCard(d){var c=el('div','vf-id');
  if(d.reg_no)c.appendChild(el('div','vf-idreg','Reg. No: '+d.reg_no));return c;}
 function ctaBlock(){var d=el('div','vf-cta');var a=el('a','vf-btn','Create a free account');a.href='app.html';d.appendChild(a);
  d.appendChild(el('div','vf-sub','Run a shop? Manage sales, stock and bills from your phone.'));
+ var pl=document.createElement('a');pl.className='play-btn';pl.href='https://play.google.com/store/apps/details?id=com.ememart.zeeshop';pl.target='_blank';pl.rel='noopener';pl.setAttribute('aria-label','Get ZeeShop on Google Play');pl.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 2.5v19a1 1 0 0 0 1.5.86l16-9.5a1 1 0 0 0 0-1.72l-16-9.5A1 1 0 0 0 4 2.5z"/></svg><span><small>Get it on</small><b>Google Play</b></span>';d.appendChild(pl);
  var o=el('a','vf-own','Shop owner? Log in');o.href='app.html?v='+m[1];d.appendChild(o);return d;}
 function show(tone,icon,head,sub,rows,note,who){
  box.textContent='';
  if(who)box.appendChild(idCard(who));var c=el('div','vf-card '+tone);c.appendChild(el('div','vf-ic',icon));c.appendChild(el('h2',null,head));
  if(sub){c.appendChild(el('div','vf-by',sub.by||''));if(sub.shop)c.appendChild(el('div','vf-shop',sub.shop));}
- if(rows&&rows.length){var r=el('div','vf-rows');rows.forEach(function(x){var q=el('div','vf-row');q.appendChild(el('span',null,x[0]));q.appendChild(el('b',null,x[1]));r.appendChild(q);});c.appendChild(r);}
+ if(rows&&rows.length){var r=el('div','vf-rows');rows.forEach(function(x){var q=el('div','vf-row'+(x[2]?' vf-owe':''));q.appendChild(el('span',null,x[0]));q.appendChild(el('b',null,x[1]));r.appendChild(q);});c.appendChild(r);}
  box.appendChild(c);if(note)box.appendChild(el('div','vf-note',note));box.appendChild(el('div','vf-powered','Receipts from '+((who&&who.shop)||'this shop')+' are verified by ZeeShop, the app the shop uses to run its business. The receipt belongs to the shop, not to ZeeShop.'));box.appendChild(ctaBlock());}
 if(kind==='B'){show('grey','i','Bill payment receipt',{by:'This kind of receipt can only be checked by the account owner.'},null,'If you were given this receipt, ask the account owner to check it inside their ZeeShop app.');return;}
 fetch('https://beypnkzrgqrkjttsxlju.supabase.co/functions/v1/verify-receipt',{method:'POST',headers:{'Content-Type':'application/json','apikey':'sb_publishable_m_MrYeKVF4HgUG5i5v_THg_LPbvmUK5'},body:JSON.stringify({id:id})})
 .then(function(r){return r.json();}).then(function(d){
  if(d.error){show('grey','!','Could not check right now',null,null,'Please check your internet and try scanning again.');return;}
  if(!d.found){show('red','✕','Receipt not found',{by:'We could not find this receipt.'},null,'Do not accept this receipt until the shop confirms it. It may be fake or altered.');return;}
- var amt;try{amt=new Intl.NumberFormat('en',{style:'currency',currency:d.currency||'NGN',currencyDisplay:'code',minimumFractionDigits:0,maximumFractionDigits:2}).format(d.amount);}catch(e){amt=(d.currency||'NGN')+' '+d.amount;}
+ function money(n){try{return new Intl.NumberFormat('en',{style:'currency',currency:d.currency||'NGN',currencyDisplay:'code',minimumFractionDigits:0,maximumFractionDigits:2}).format(n);}catch(e){return (d.currency||'NGN')+' '+n;}}
+ var amt=money(d.amount);
  var when='';try{when=new Date(d.date).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'numeric',minute:'2-digit',hour12:true});}catch(e){}
  var st={paid:'Paid',part:'Part paid',unpaid:'Not yet paid',voided:'Cancelled'}[d.status]||d.status;
- var rows=[['Receipt no.','#'+d.receipt_no],['Date',when],['Amount',amt],['Status',st]];
+ var rows=[['Receipt no.','#'+d.receipt_no],['Date',when],['Amount',amt]];
+ if((d.status==='part'||d.status==='unpaid')&&typeof d.balance==='number'){ if(d.status==='part')rows.push(['Paid so far',money(d.paid||0)]); rows.push(['Balance owed',money(d.balance),'owe']); }
+ rows.push(['Status',st]);
  var sub={by:'This receipt was issued by '+(d.shop||'the shop')+'.'};
  if(d.status==='voided'){show('red','✕','Receipt cancelled',sub,rows,'This sale was cancelled by the shop. Do not accept this receipt.',d);return;}
  var note='Check that these details match the receipt in your hand.'+(d.checks>0?' This receipt has been checked '+d.checks+(d.checks===1?' time.':' times.'):'');

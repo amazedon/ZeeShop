@@ -400,6 +400,10 @@ Deno.serve(async (req: Request) => {
       if (res.status === 400 && (missing || /must be|fails to match/i.test(msg))) {
         await note("error", `${res.status} ${msg}`);
         const f = missing ? missing[1] : "";
+        if (/account/.test(f) && !SQUAD_BENEFICIARY_ACCOUNT) {   // our own setup is incomplete, not something the customer can fix
+          console.error("Squad requires a beneficiary account: set the SQUAD_BENEFICIARY_ACCOUNT secret (10-digit GTBank number).");
+          return json({ error: "Account opening isn't available right now. Please contact support." }, 503);
+        }
         const label: Record<string, string> = { address: "your home address", gender: "your gender", middle_name: "your middle name (as on your BVN)", dob: "your date of birth", mobile_num: "your phone number", email: "your email", first_name: "your first name", last_name: "your last name", bvn: "your BVN" };
         return json({ error: f ? `Please provide ${label[f] || f.replace(/_/g, " ")} and try again.` : "One of the details isn't in the format the bank expects. Please check them and try again." }, 422);
       }

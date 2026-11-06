@@ -12039,8 +12039,8 @@ let billVaOpen = false;       // the verification modal
 let billVaBusy = false;
 let billVaError = '';
 // Typed-so-far values live in memory only (so a re-render can't wipe them). The BVN is never saved anywhere.
-let billVaDraft = { fn:null, ln:null, phone:null, email:null, dob:'', bvn:'', consent:false };
-function bpResetVaForm(){ billVaOpen = false; billVaBusy = false; billVaError = ''; billVaDraft = { fn:null, ln:null, phone:null, email:null, dob:'', bvn:'', consent:false }; }
+let billVaDraft = { fn:null, ln:null, mn:'', gender:'', address:null, phone:null, email:null, dob:'', bvn:'', consent:false };
+function bpResetVaForm(){ billVaOpen = false; billVaBusy = false; billVaError = ''; billVaDraft = { fn:null, ln:null, mn:'', gender:'', address:null, phone:null, email:null, dob:'', bvn:'', consent:false }; }
 
 (function(){
   const st = document.createElement('style');
@@ -12184,7 +12184,10 @@ function bpVaModalHtml(){
     <div class="field"><label>BVN (11 digits)</label><input id="bp-va-bvn" type="tel" inputmode="numeric" maxlength="11" autocomplete="off" placeholder="11 digits" value="${escAttr(d.bvn)}"></div>
     <div class="field"><label>Date of birth</label><input id="bp-va-dob" type="date" max="${maxDob}" autocomplete="off" value="${escAttr(d.dob)}"></div>
     <div class="field"><label>First name</label><input id="bp-va-fn" autocomplete="off" value="${val(d.fn, cu.firstName)}"></div>
+    <div class="field"><label>Middle name <span class="subtle">(only if it is on your BVN)</span></label><input id="bp-va-mn" autocomplete="off" value="${escAttr(d.mn)}"></div>
     <div class="field"><label>Last name</label><input id="bp-va-ln" autocomplete="off" value="${val(d.ln, cu.lastName)}"></div>
+    <div class="field"><label>Gender (as on your BVN)</label><select id="bp-va-gender"><option value="">Choose…</option><option value="male" ${d.gender==='male'?'selected':''}>Male</option><option value="female" ${d.gender==='female'?'selected':''}>Female</option></select></div>
+    <div class="field"><label>Home address</label><input id="bp-va-address" autocomplete="off" placeholder="House number, street, town" value="${val(d.address, (typeof currentShop==='function' && currentShop() && currentShop().address) || '')}"></div>
     <div class="field"><label>Phone number</label><input id="bp-va-phone" type="tel" inputmode="tel" autocomplete="off" value="${val(d.phone, cu.phone)}"></div>
     <div class="field"><label>Email</label><input id="bp-va-email" type="email" autocomplete="off" value="${val(d.email, cu.email)}"></div>
     <div class="zs-note zs-note-info" style="margin:8px 0;font-size:12.5px;">Sent securely to our payment partner to verify with bank records. We do not store your BVN.</div>
@@ -12374,7 +12377,7 @@ function bindBillTopupEvents(){
       const h = ()=>{ billVaDraft[key] = isCheck ? el.checked : el.value; };
       el.addEventListener('input', h); el.addEventListener('change', h);
     };
-    track('bp-va-bvn','bvn'); track('bp-va-dob','dob'); track('bp-va-fn','fn'); track('bp-va-ln','ln');
+    track('bp-va-bvn','bvn'); track('bp-va-dob','dob'); track('bp-va-fn','fn'); track('bp-va-ln','ln'); track('bp-va-mn','mn'); track('bp-va-gender','gender'); track('bp-va-address','address');
     track('bp-va-phone','phone'); track('bp-va-email','email'); track('bp-va-consent','consent', true);
 
     const cancel = document.getElementById('bp-va-cancel');
@@ -12389,6 +12392,7 @@ function bindBillTopupEvents(){
       const bvn = get('bp-va-bvn','bvn','').replace(/\s/g,'');
       const dob = get('bp-va-dob','dob','');
       const fn = get('bp-va-fn','fn',cu.firstName).trim(), ln = get('bp-va-ln','ln',cu.lastName).trim();
+      const mn = get('bp-va-mn','mn','').trim(), gender = get('bp-va-gender','gender',''), address = get('bp-va-address','address',(typeof currentShop==='function' && currentShop() && currentShop().address) || '').trim();
       const phone = get('bp-va-phone','phone',cu.phone).trim(), email = get('bp-va-email','email',cu.email).trim();
       const consentEl = document.getElementById('bp-va-consent'); const consent = consentEl ? consentEl.checked : !!d.consent;
       if(!/^\d{11}$/.test(bvn)) return showErr('Your BVN must be exactly 11 digits.');
@@ -12396,13 +12400,15 @@ function bindBillTopupEvents(){
       const dobDate = new Date(dob + 'T00:00:00'); const cutoff = new Date(); cutoff.setFullYear(cutoff.getFullYear()-18);
       if(isNaN(dobDate) || dobDate > cutoff) return showErr('You must be 18 or older to open a dedicated account.');
       if(!fn || !ln) return showErr('Please enter your first and last name as on your BVN.');
+      if(gender!=='male' && gender!=='female') return showErr('Please choose your gender as it appears on your BVN.');
+      if(address.length < 5) return showErr('Please enter your home address.');
       if(!/^\+?\d[\d\s-]{8,17}$/.test(phone)) return showErr('Please enter a valid phone number.');
       if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return showErr('Please enter a valid email address.');
       if(!consent) return showErr('Please tick the box to agree before continuing.');
       showErr('');
       billVaBusy = true; billVaError = ''; refreshMain();
       try{
-        const r = await callSquad('create_virtual_account', { bvn, dob, first_name: fn, last_name: ln, phone, email, consent: true }, 60000);
+        const r = await callSquad('create_virtual_account', { bvn, dob, first_name: fn, middle_name: mn, last_name: ln, gender, address, phone, email, consent: true }, 60000);
         billVa = Object.assign({}, billVa || {}, { account: r.account });
         billAcc = 'squad';                                 // show the new account number straight away
         bpResetVaForm();                                   // clears the BVN/DOB from memory

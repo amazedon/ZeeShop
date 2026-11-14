@@ -1810,11 +1810,20 @@ document.addEventListener('toggle', e=>{
   } else staffOpen.delete(k);
 }, true);
 let freshConnectCode = null;   // a Staff Connect Code is only shown on the visit it was generated in
+let freshConnectExpires = 0;   // when that connect code stops working (ms)
+function fmtCountdown(ms){ const t=Math.max(0,Math.ceil(ms/1000)); return Math.floor(t/60)+':'+String(t%60).padStart(2,'0'); }
+// One shared timer: ticks every code countdown on the Staff page; when a code runs out it is removed.
+setInterval(()=>{
+  const els=document.querySelectorAll('[data-code-expires]'); if(!els.length) return;
+  let expired=false;
+  els.forEach(el=>{ const left=Number(el.dataset.codeExpires)-Date.now(); if(left<=0) expired=true; else el.textContent='Expires in '+fmtCountdown(left); });
+  if(expired){ if(state.joinCode && Date.now()>=state.joinCode.expiresAt) state.joinCode=null; if(freshConnectCode && Date.now()>=freshConnectExpires){ freshConnectCode=null; freshConnectExpires=0; } try{ toast('Code expired. Generate a new one.'); }catch(_e){} render(); }
+}, 1000);
 function render(){
   try{ zxKick(); }catch(_e){}
   try{ zvCheckPending(); }catch(_e){}
   if(route !== 'privacy' && privOpen) privOpen = '';
-  if(route !== 'staff'){ staffOpen = new Set(); freshConnectCode = null; if(state.joinCode) state.joinCode = null; }   // codes vanish when you leave the Staff page
+  if(route !== 'staff'){ staffOpen = new Set(); freshConnectCode = null; freshConnectExpires = 0; if(state.joinCode) state.joinCode = null; }   // codes vanish when you leave the Staff page
   if(!state.sessionUserId && route === 'note-view') route = 'notes';   // never leave a note open on the lock screen
   if(route !== 'note-view') noteMenuOpen = false;
   if(route !== 'goods'){ goodsFilter = 'all'; goodsTab = 'active'; }    // filters apply only while you are on Goods
@@ -8207,7 +8216,11 @@ function screenStaff(){
       <p class="t2" style="margin-bottom:12px;"><b>One person, one code:</b> it works once and expires after 10 minutes. It disappears when you leave this page, so generate a fresh one for each person.</p>
       ${codeActive? `
         <div class="code-display">${state.joinCode.code}</div>
-        <p class="subtle" style="text-align:center;">Valid for ${Math.ceil((state.joinCode.expiresAt-Date.now())/60000)} more minutes · works for one person only.</p>
+        <p class="subtle" style="text-align:center;margin-top:8px;"><b data-code-expires="${state.joinCode.expiresAt}">Expires in ${fmtCountdown(state.joinCode.expiresAt-Date.now())}</b> · works for one person only.</p>
+        <div style="display:flex;gap:8px;margin-top:10px;">
+          <button class="btn btn-outline btn-sm" id="copy-join-code" style="flex:1;">Copy</button>
+          <button class="btn btn-outline btn-sm" id="gen-code" style="flex:1;">New Code</button>
+        </div>
       ` : `<button class="btn btn-primary" id="gen-code" style="width:100%;">Generate Join Code</button>`}`;
   const connectBody = `
       <p class="t2" style="margin-bottom:10px;">Use this when a staff member who already has an account gets a new phone or wants to sign in on another phone. Nobody is added twice.</p>
@@ -8219,6 +8232,7 @@ function screenStaff(){
       <p class="t2" style="margin-bottom:12px;"><b>One person, one code:</b> it works once and expires after 10 minutes. It disappears when you leave this page, so generate a new one each time. Never share it publicly.</p>
       ${freshConnectCode ? `
         <div class="code-display" style="text-align:center;padding:14px;">${freshConnectCode.replace(/(\d{4})(\d{4})/,'$1 $2')}</div>
+        <p class="subtle" style="text-align:center;margin-top:8px;"><b data-code-expires="${freshConnectExpires}">Expires in ${fmtCountdown(freshConnectExpires-Date.now())}</b> · works for one person only.</p>
         <div style="display:flex;gap:8px;margin-top:10px;">
           <button class="btn btn-outline btn-sm" id="copy-connect-code" style="flex:1;">Copy</button>
           <button class="btn btn-outline btn-sm" id="reset-connect-code" style="flex:1;">New Code</button>
@@ -9430,6 +9444,11 @@ function bindStaffEvents(){
     try{ await navigator.clipboard.writeText(freshConnectCode); toast('Code copied ✅'); }
     catch(e){ toast('Could not copy — code is '+freshConnectCode); }
   });
+  const copyJoin = document.getElementById('copy-join-code');
+  if(copyJoin) copyJoin.addEventListener('click', async ()=>{
+    try{ await navigator.clipboard.writeText(state.joinCode.code); toast('Code copied ✅'); }
+    catch(e){ toast('Could not copy — code is '+state.joinCode.code); }
+  });
   const resetCode = document.getElementById('reset-connect-code');
   if(resetCode) resetCode.addEventListener('click', async ()=>{
     const isReset = !!freshConnectCode;
@@ -9446,6 +9465,7 @@ function bindStaffEvents(){
       const result = await res.json();
       if(!res.ok || result.error){ toast(result.error || 'Could not generate a code.'); return; }
       freshConnectCode = String(result.connect_code || '');
+      freshConnectExpires = result.expires_at ? new Date(result.expires_at).getTime() : Date.now()+10*60*1000;
       business().connectCode = null;
       logAudit('connect_code_reset', 'Generated a new staff connect code');
       toast(isReset ? 'New code generated ✅' : 'Connect code created ✅');
@@ -9511,7 +9531,7 @@ function bindStaffEvents(){
     }catch(e){
       toast('Could not generate a join code — check your connection and try again.');
     }finally{
-      gen.disabled = false; gen.textContent = 'Generate Join Code';
+      gen.disabled = false; gen.textContent = state.joinCode ? 'New Code' : 'Generate Join Code';
     }
   });
   const offerBtn = document.getElementById('offer-letter-btn');
